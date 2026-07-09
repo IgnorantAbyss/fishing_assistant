@@ -1,0 +1,27 @@
+state_thresholds:
+  min_confidence: 0.65
+  unknown_below: 0.55
+  stable_frames_required: 2
+
+detectors:
+  idle:
+    min_confidence: 0.65
+  waiting:
+    min_confidence: 0.65
+  ready:
+    min_confidence: 0.65
+  hook:
+    min_confidence: 0.65
+  press:
+    min_confidence: 0.65
+  get:
+    min_confidence: 0.65
+
+debug:
+  save_debug_images: true
+  save_on_state_change: true
+  save_on_low_confidence: true
+  save_on_unknown: true
+  max_debug_images: 200
+  max_debug_size_mb: 500
+  max_debug_age_days: 2

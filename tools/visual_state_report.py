@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.state_detector import StateDetector, expected_reference_images  # noqa: E402
 from src.debug_overlay import save_debug_overlay  # noqa: E402
+from src.config_loader import DEFAULT_ROI_CONFIG_PATH, DEFAULT_THRESHOLDS_CONFIG_PATH  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +34,18 @@ def parse_args() -> argparse.Namespace:
         default=PROJECT_ROOT / "logs" / "static_reports",
         help="Directory for annotated debug screenshots",
     )
+    parser.add_argument(
+        "--roi-config",
+        type=Path,
+        default=DEFAULT_ROI_CONFIG_PATH,
+        help="Normalized ROI YAML; missing files use built-in defaults",
+    )
+    parser.add_argument(
+        "--thresholds-config",
+        type=Path,
+        default=DEFAULT_THRESHOLDS_CONFIG_PATH,
+        help="Detection threshold YAML; missing files use built-in defaults",
+    )
     return parser.parse_args()
 
 
@@ -52,11 +65,15 @@ def emit(path: Path, result: dict[str, object], debug_image_path: Path, as_json:
 
 def main() -> int:
     args = parse_args()
-    detector = StateDetector(args.reference_dir)
+    detector = StateDetector(
+        args.reference_dir,
+        roi_config_path=args.roi_config,
+        thresholds_config_path=args.thresholds_config,
+    )
     images = [args.image] if args.image else [path for path, _ in expected_reference_images(args.reference_dir)]
     for path in images:
         result = detector.detect(path)
-        debug_image_path = save_debug_overlay(path, result, args.debug_dir)
+        debug_image_path = save_debug_overlay(path, result, args.debug_dir, roi_config=detector.roi_config)
         emit(path, result.to_dict(), debug_image_path, args.json)
     return 0
 

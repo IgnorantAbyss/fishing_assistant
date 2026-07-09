@@ -1,16 +1,14 @@
 # Fishing Assistant
 
-This project is a local, screenshot-only helper for recognising the fishing mini-game UI. It does not read game memory, inspect packets, inject into a process, or bypass anti-cheat measures.
+This project is a local, screenshot-only helper for recognising a fishing mini-game UI. It does not read game memory, inspect packets, inject into a process, or bypass anti-cheat measures.
 
-## Phase 1: static-image detection
+## Scope
 
-Phase 1 is intentionally detection-only. It reads the supplied images in `assets/reference/`, compares fixed UI regions with OpenCV, and reports a state with evidence. It contains no screen capture or keyboard automation.
+The project currently performs offline detection on existing image files only. It contains no live screen capture, assist mode, or keyboard input code.
 
-The currently recognised states are `IDLE`, `WAITING`, `READY`, `HOOK`, `PRESS`, and `GET`. Unknown screenshots are not yet assigned the `UNKNOWN` state; that confidence policy belongs to the later live-detection/FSM phase.
+## Setup
 
-### Set up the virtual environment
-
-Python 3.10–3.12 is preferred. If none is installed, use the available Python version as a temporary development fallback.
+Python 3.10 to 3.12 is preferred. If none is installed, the available Python version can be used as a temporary development fallback.
 
 ```powershell
 py -0p
@@ -20,33 +18,58 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Place the labelled PNG files in `assets/reference/` using the names listed in `src/state_detector.py`.
+Place the labelled PNG files in `assets/reference/` using the names defined by `src/state_detector.py`.
 
-### Run a report
+## Phase 1: static-image detection
 
-```powershell
-python tools/visual_state_report.py --image assets/reference/idle.png
-python tools/visual_state_report.py --all
-python tools/visual_state_report.py --all --json
-```
-
-Each result includes `state`, `confidence`, `matched_features`, and a debug-image-path field. The report saves annotated static-image overlays in `logs/static_reports/`. ROI calibration, live `detect-only`, and `assist` mode are intentionally not implemented in this phase.
-
-### Run the static tests
+The static detector compares UI-only image regions with the supplied references and reports `IDLE`, `WAITING`, `READY`, `HOOK`, `PRESS`, or `GET` with confidence and debug evidence. It also returns `UNKNOWN` when the result is unsafe to classify, including a black or uniform image.
 
 ```powershell
+python tools\visual_state_report.py --image assets\reference\idle.png
+python tools\visual_state_report.py --all
+python tools\visual_state_report.py --all --json
 python -m pytest -q
 ```
 
-## Planned later phases
+Static-report overlays are written to `logs/static_reports/` and never replace the source images.
 
-- Calibratable normalized ROI settings and a calibration tool.
+## Phase 2: configurable ROI and safety thresholds
+
+`config/roi.yaml` defines normalized (`0.0` to `1.0`) UI rectangles. `screen_reference` documents the source capture size; every ROI is converted to the actual image dimensions at runtime. If the file is unavailable, safe built-in ROI defaults are used.
+
+`config/thresholds.yaml` controls the confidence floor, the `UNKNOWN` cutoff, a future FSM stability value, and debug-file retention. A low-confidence state never falls back to `IDLE`.
+
+Preview configured rectangles without modifying an input image:
+
+```powershell
+python tools\roi_preview.py --image assets\reference\ready.png
+python tools\roi_preview.py --all
+```
+
+Preview copies are written to `logs/roi_preview/`. To calibrate a single ROI from a static screenshot with the OpenCV mouse selector:
+
+```powershell
+python tools\calibrate_roi.py --image assets\reference\ready.png --roi top_prompt
+```
+
+`src/debug_saver.py` is event-driven. It saves only state changes, low-confidence results, `UNKNOWN`, exceptions, or an explicit `save_all=True` request. Count, size, and age retention limits are read from `thresholds.yaml`.
+
+Run the full offline health check:
+
+```powershell
+python tools\agent_check.py
+```
+
+It checks reference files and configuration, runs the static report and pytest, then writes `reports/agent_check_latest.md`.
+
+## Future phases
+
 - Per-state detectors for hook-bar progress and WASD sequences.
 - Screen-capture-only `detect-only` mode with saved debug screenshots.
 - A guarded FSM and, only after detection validation, optional keyboard assistance with a safe pause/stop mechanism.
 
-## Troubleshooting (for later phases)
+## Troubleshooting
 
-- Different resolution or UI scale: recalibrate normalized ROI values and recollect UI-only templates.
-- State accuracy issues: save debug crops and compare them with the reference UI areas.
-- `pydirectinput` input issues: the future input layer will provide a `pyautogui` fallback; neither package is used in Phase 1.
+- Different UI scale or resolution: calibrate normalized ROI values and recollect UI-only templates.
+- Detection inaccuracies: inspect the static-report overlays and raw state scores.
+- Future input support: `pydirectinput` will have a `pyautogui` fallback, but neither is used in the current phases.

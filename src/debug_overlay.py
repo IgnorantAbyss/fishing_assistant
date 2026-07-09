@@ -6,11 +6,16 @@ from pathlib import Path
 
 import cv2
 
-from src.state_detector import DetectionResult, ROI_BY_STATE
+from src.config_loader import ROIConfig, load_roi_config, normalized_to_pixel_roi
+from src.state_detector import DetectionResult, FEATURE_NAMES_BY_STATE, ROI_NAMES_BY_STATE
 
 
 def save_debug_overlay(
-    image_path: str | Path, result: DetectionResult, output_dir: str | Path
+    image_path: str | Path,
+    result: DetectionResult,
+    output_dir: str | Path,
+    *,
+    roi_config: ROIConfig | None = None,
 ) -> Path:
     """Save an annotated screenshot showing the exact UI regions that matched."""
     source = Path(image_path)
@@ -18,22 +23,28 @@ def save_debug_overlay(
     if frame is None:
         raise FileNotFoundError(f"Could not read image for debug overlay: {source}")
 
+    active_config = roi_config or load_roi_config()
     height, width = frame.shape[:2]
-    for index, (x1, y1, x2, y2) in enumerate(ROI_BY_STATE[result.state]):
-        left, top = round(x1 * width), round(y1 * height)
-        right, bottom = round(x2 * width), round(y2 * height)
-        cv2.rectangle(frame, (left, top), (right, bottom), (30, 220, 30), 2)
-        label = result.matched_features[index] if index < len(result.matched_features) else "matched_roi"
-        cv2.putText(
-            frame,
-            label,
-            (left, max(24, top - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (30, 220, 30),
-            2,
-            cv2.LINE_AA,
-        )
+    states = (result.state,) if result.state in ROI_NAMES_BY_STATE else tuple(ROI_NAMES_BY_STATE)
+    seen_roi_names: set[str] = set()
+    for state in states:
+        for index, roi_name in enumerate(ROI_NAMES_BY_STATE[state]):
+            if roi_name in seen_roi_names:
+                continue
+            seen_roi_names.add(roi_name)
+            left, top, right, bottom = normalized_to_pixel_roi(active_config.rois[roi_name], width, height)
+            label = FEATURE_NAMES_BY_STATE[state][index]
+            cv2.rectangle(frame, (left, top), (right, bottom), (30, 220, 30), 2)
+            cv2.putText(
+                frame,
+                label,
+                (left, max(24, top - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (30, 220, 30),
+                2,
+                cv2.LINE_AA,
+            )
 
     banner = f"{result.state}  confidence={result.confidence:.2%}"
     cv2.rectangle(frame, (12, height - 52), (min(width - 12, 520), height - 12), (0, 0, 0), -1)

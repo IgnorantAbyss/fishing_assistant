@@ -1,0 +1,36 @@
+screen_reference:
+  width: 2048
+  height: 1151
+
+# Every coordinate is normalized to the source image width or height.
+rois:
+  top_prompt:
+    x1: 0.30
+    y1: 0.02
+    x2: 0.70
+    y2: 0.10
+  center_space:
+    x1: 0.38
+    y1: 0.10
+    x2: 0.58
+    y2: 0.25
+  hook_bar:
+    x1: 0.38
+    y1: 0.23
+    x2: 0.62
+    y2: 0.36
+  press_sequence:
+    x1: 0.38
+    y1: 0.17
+    x2: 0.62
+    y2: 0.31
+  get_window:
+    x1: 0.75
+    y1: 0.55
+    x2: 0.94
+    y2: 0.84
+  right_quest_area:
+    x1: 0.82
+    y1: 0.20
+    x2: 0.99
+    y2: 0.75
