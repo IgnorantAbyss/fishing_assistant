@@ -62,6 +62,24 @@ python tools\agent_check.py
 
 It checks reference files and configuration, runs the static report and pytest, then writes `reports/agent_check_latest.md`.
 
+## Phase 3: offline HOOK and PRESS components
+
+The HOOK detector measures the configured `hook_bar` ROI, reporting the coloured fill ratio and an optional bright divider line. It always returns `should_press_space: false`; this project phase contains no input behaviour.
+
+```powershell
+python tools\hook_report.py --image assets\reference\hook.png
+python tools\hook_report.py --image assets\reference\hook2.png
+```
+
+The PRESS detector finds the purple key-cell glyphs inside `press_sequence` and uses image templates dynamically extracted from the supplied canonical `press.png`; it does not use general OCR.
+
+```powershell
+python tools\press_report.py --image assets\reference\press.png
+python tools\press_report.py --image assets\reference\press2.png
+```
+
+These report overlays are written to `logs/hook_reports/` and `logs/press_reports/`, which are ignored by Git.
+
 ## Future phases
 
 - Per-state detectors for hook-bar progress and WASD sequences.
