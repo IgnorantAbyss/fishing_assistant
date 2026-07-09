@@ -1,8 +1,10 @@
 from pathlib import Path
 
 from src.config_loader import (
+    DEFAULT_CAPTURE_CONFIG_PATH,
     DEFAULT_ROI_CONFIG_PATH,
     DEFAULT_THRESHOLDS_CONFIG_PATH,
+    load_capture_config,
     load_roi_config,
     load_thresholds_config,
     normalized_to_pixel_roi,
@@ -31,3 +33,11 @@ def test_thresholds_yaml_loads() -> None:
     assert thresholds.stable_frames_required == 2
     assert thresholds.min_confidence_for("READY") == 0.65
     assert thresholds.debug.max_debug_images == 200
+
+
+def test_capture_yaml_loads() -> None:
+    capture = load_capture_config(DEFAULT_CAPTURE_CONFIG_PATH)
+
+    assert capture.capture.image_format == "jpg"
+    assert capture.capture.interval_sec == 0.2
+    assert capture.retention.max_sessions == 10

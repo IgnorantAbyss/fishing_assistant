@@ -9,3 +9,6 @@ reports/debug/
 tmp/
 captures/
 assets/replay/raw/
+assets/replay/sessions/
+*.mp4
+*.avi

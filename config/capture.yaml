@@ -1,0 +1,18 @@
+capture:
+  interval_sec: 0.2
+  duration_sec: 120
+  image_format: "jpg"
+  jpg_quality: 92
+  save_full_frame: true
+  save_roi_crops: false
+  max_frames_per_session: 800
+  max_session_size_mb: 1000
+
+retention:
+  max_sessions: 10
+  max_total_size_mb: 5000
+  max_age_days: 7
+
+hotkeys:
+  stop: "F9"
+  mark_event: "F8"

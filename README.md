@@ -80,6 +80,25 @@ python tools\press_report.py --image assets\reference\press2.png
 
 These report overlays are written to `logs/hook_reports/` and `logs/press_reports/`, which are ignored by Git.
 
+## Phase 4: capture-only and replay
+
+Capture is opt-in through `collect_screenshot.py`. It uses `mss` only after the command starts, saves JPEG frames to an ignored replay-session directory, and can be stopped safely with `Ctrl+C`. It does not send or listen for any game input.
+
+```powershell
+python tools\collect_screenshot.py --list-monitors
+python tools\collect_screenshot.py --duration 120 --interval 0.2 --monitor 1
+```
+
+Run detectors offline over an existing saved session:
+
+```powershell
+python tools\replay_detector.py --session assets\replay\sessions\session_YYYYMMDD_HHMMSS
+python tools\replay_detector.py --latest
+python tools\replay_summary.py --session assets\replay\sessions\session_YYYYMMDD_HHMMSS
+```
+
+Each replay session contains a `manifest.json`, `frames/`, `replay_results.csv`, and `replay_report.md`. Replay sessions and raw captures are ignored by Git; only the implementation and tests are tracked.
+
 ## Future phases
 
 - Per-state detectors for hook-bar progress and WASD sequences.

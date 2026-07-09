@@ -1,11 +1,12 @@
 # Fishing Assistant Agent Check
 
-- Generated (UTC): 2026-07-09 18:52:16
+- Generated (UTC): 2026-07-09 19:18:31
 - Python: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
 - OS: Windows-11-10.0.26200-SP0
 - Reference image count: 11
 - ROI config: OK (D:\project\fishing_assistant\config\roi.yaml)
 - Threshold config: OK (D:\project\fishing_assistant\config\thresholds.yaml)
+- Capture config: OK (D:\project\fishing_assistant\config\capture.yaml)
 
 ## Static state report
 
@@ -27,17 +28,25 @@
 
 - `visual_state_report.py --all --json`: exit code 0
 - `pytest -q`: exit code 0
+- replay session/detector tests: exit code 0
 
 ## Pytest output
 
 ```text
-....................                                                     [100%]
-20 passed in 2.54s
+........................                                                 [100%]
+24 passed in 6.78s
 ```
 
 ## Failure summary
 
 - None
+
+## Replay session/detector test output
+
+```text
+...                                                                      [100%]
+3 passed in 4.14s
+```
 
 ## Debug output paths
 

@@ -13,6 +13,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ROI_CONFIG_PATH = PROJECT_ROOT / "config" / "roi.yaml"
 DEFAULT_THRESHOLDS_CONFIG_PATH = PROJECT_ROOT / "config" / "thresholds.yaml"
+DEFAULT_CAPTURE_CONFIG_PATH = PROJECT_ROOT / "config" / "capture.yaml"
 
 NormalizedROI: TypeAlias = tuple[float, float, float, float]
 PixelROI: TypeAlias = tuple[int, int, int, int]
@@ -58,6 +59,21 @@ DEFAULT_THRESHOLDS_DATA: dict[str, Any] = {
     },
 }
 
+DEFAULT_CAPTURE_DATA: dict[str, Any] = {
+    "capture": {
+        "interval_sec": 0.2,
+        "duration_sec": 120,
+        "image_format": "jpg",
+        "jpg_quality": 92,
+        "save_full_frame": True,
+        "save_roi_crops": False,
+        "max_frames_per_session": 800,
+        "max_session_size_mb": 1000,
+    },
+    "retention": {"max_sessions": 10, "max_total_size_mb": 5000, "max_age_days": 7},
+    "hotkeys": {"stop": "F9", "mark_event": "F8"},
+}
+
 
 @dataclass(frozen=True)
 class ROIConfig:
@@ -96,6 +112,34 @@ class ThresholdConfig:
 
     def min_confidence_for(self, state: str) -> float:
         return self.detector_min_confidence.get(state.lower(), self.min_confidence)
+
+
+@dataclass(frozen=True)
+class CaptureSettings:
+    interval_sec: float
+    duration_sec: float
+    image_format: str
+    jpg_quality: int
+    save_full_frame: bool
+    save_roi_crops: bool
+    max_frames_per_session: int
+    max_session_size_mb: int
+
+
+@dataclass(frozen=True)
+class ReplayRetentionSettings:
+    max_sessions: int
+    max_total_size_mb: int
+    max_age_days: int
+
+
+@dataclass(frozen=True)
+class CaptureConfig:
+    capture: CaptureSettings
+    retention: ReplayRetentionSettings
+    stop_hotkey: str
+    mark_event_hotkey: str
+    source: Path | None
 
 
 def _read_yaml_or_default(path: Path, default: dict[str, Any]) -> tuple[dict[str, Any], Path | None]:
@@ -246,5 +290,60 @@ def load_thresholds_config(path: str | Path | None = None) -> ThresholdConfig:
         stable_frames_required=stable_frames_required,
         detector_min_confidence=detector_thresholds,
         debug=debug_settings,
+        source=source,
+    )
+
+
+def load_capture_config(path: str | Path | None = None) -> CaptureConfig:
+    """Read capture-only settings, falling back to safe built-in defaults."""
+    config_path = Path(path) if path is not None else DEFAULT_CAPTURE_CONFIG_PATH
+    data, source = _read_yaml_or_default(config_path, DEFAULT_CAPTURE_DATA)
+    capture = data.get("capture")
+    retention = data.get("retention")
+    hotkeys = data.get("hotkeys")
+    if not isinstance(capture, dict) or not isinstance(retention, dict) or not isinstance(hotkeys, dict):
+        raise ValueError("Capture configuration requires capture, retention, and hotkeys mappings")
+    try:
+        interval_sec = _as_float(capture["interval_sec"], "capture.interval_sec")
+        duration_sec = _as_float(capture["duration_sec"], "capture.duration_sec")
+        image_format = capture["image_format"]
+        jpg_quality = _as_positive_int(capture["jpg_quality"], "capture.jpg_quality")
+        save_full_frame = _as_bool(capture["save_full_frame"], "capture.save_full_frame")
+        save_roi_crops = _as_bool(capture["save_roi_crops"], "capture.save_roi_crops")
+        max_frames_per_session = _as_positive_int(capture["max_frames_per_session"], "capture.max_frames_per_session")
+        max_session_size_mb = _as_positive_int(capture["max_session_size_mb"], "capture.max_session_size_mb")
+        max_sessions = _as_positive_int(retention["max_sessions"], "retention.max_sessions", allow_zero=True)
+        max_total_size_mb = _as_positive_int(retention["max_total_size_mb"], "retention.max_total_size_mb", allow_zero=True)
+        max_age_days = _as_positive_int(retention["max_age_days"], "retention.max_age_days", allow_zero=True)
+        stop_hotkey = hotkeys["stop"]
+        mark_event_hotkey = hotkeys["mark_event"]
+    except KeyError as exc:
+        raise ValueError(f"Capture configuration is missing {exc.args[0]}") from exc
+    if interval_sec <= 0 or duration_sec <= 0:
+        raise ValueError("capture.interval_sec and capture.duration_sec must be greater than 0")
+    if image_format not in {"jpg", "png"}:
+        raise ValueError("capture.image_format must be 'jpg' or 'png'")
+    if not 1 <= jpg_quality <= 100:
+        raise ValueError("capture.jpg_quality must be between 1 and 100")
+    if not isinstance(stop_hotkey, str) or not isinstance(mark_event_hotkey, str):
+        raise ValueError("hotkey values must be strings")
+    return CaptureConfig(
+        capture=CaptureSettings(
+            interval_sec=interval_sec,
+            duration_sec=duration_sec,
+            image_format=image_format,
+            jpg_quality=jpg_quality,
+            save_full_frame=save_full_frame,
+            save_roi_crops=save_roi_crops,
+            max_frames_per_session=max_frames_per_session,
+            max_session_size_mb=max_session_size_mb,
+        ),
+        retention=ReplayRetentionSettings(
+            max_sessions=max_sessions,
+            max_total_size_mb=max_total_size_mb,
+            max_age_days=max_age_days,
+        ),
+        stop_hotkey=stop_hotkey,
+        mark_event_hotkey=mark_event_hotkey,
         source=source,
     )

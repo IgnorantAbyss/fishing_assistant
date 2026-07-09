@@ -13,7 +13,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config_loader import DEFAULT_ROI_CONFIG_PATH, DEFAULT_THRESHOLDS_CONFIG_PATH, load_roi_config, load_thresholds_config  # noqa: E402
+from src.config_loader import (  # noqa: E402
+    DEFAULT_CAPTURE_CONFIG_PATH,
+    DEFAULT_ROI_CONFIG_PATH,
+    DEFAULT_THRESHOLDS_CONFIG_PATH,
+    load_capture_config,
+    load_roi_config,
+    load_thresholds_config,
+)
 from src.state_detector import STATE_BY_FILENAME  # noqa: E402
 
 
@@ -42,9 +49,11 @@ def build_report(
     references: list[tuple[str, str]],
     roi_status: str,
     thresholds_status: str,
+    capture_status: str,
     visual: subprocess.CompletedProcess[str],
     detections: list[dict[str, object]],
     tests: subprocess.CompletedProcess[str],
+    replay_tests: subprocess.CompletedProcess[str],
     failures: list[str],
 ) -> str:
     detected_by_name = {Path(str(item["image"])).name: item for item in detections}
@@ -57,6 +66,7 @@ def build_report(
         f"- Reference image count: {len(references)}",
         f"- ROI config: {roi_status}",
         f"- Threshold config: {thresholds_status}",
+        f"- Capture config: {capture_status}",
         "",
         "## Static state report",
         "",
@@ -83,6 +93,7 @@ def build_report(
             "",
             f"- `visual_state_report.py --all --json`: exit code {visual.returncode}",
             f"- `pytest -q`: exit code {tests.returncode}",
+            f"- replay session/detector tests: exit code {replay_tests.returncode}",
             "",
             "## Pytest output",
             "",
@@ -92,9 +103,19 @@ def build_report(
             "",
             "## Failure summary",
             "",
-        ]
+    ]
     )
     lines.extend([f"- {failure}" for failure in failures] or ["- None"])
+    lines.extend(
+        [
+            "",
+            "## Replay session/detector test output",
+            "",
+            "```text",
+            (replay_tests.stdout + replay_tests.stderr).strip() or "(no output)",
+            "```",
+        ]
+    )
     lines.extend(["", "## Debug output paths", ""])
     lines.extend([f"- {path}" for path in debug_paths] or ["- None"])
     return "\n".join(lines) + "\n"
@@ -119,6 +140,12 @@ def main() -> int:
     except Exception as exc:
         thresholds_status = f"FAILED: {exc}"
         failures.append(f"Threshold configuration: {exc}")
+    try:
+        load_capture_config(DEFAULT_CAPTURE_CONFIG_PATH)
+        capture_status = f"OK ({DEFAULT_CAPTURE_CONFIG_PATH})"
+    except Exception as exc:
+        capture_status = f"FAILED: {exc}"
+        failures.append(f"Capture configuration: {exc}")
 
     visual = run_command([sys.executable, "tools/visual_state_report.py", "--all", "--json"])
     detections = parse_visual_report(visual.stdout)
@@ -135,6 +162,11 @@ def main() -> int:
     tests = run_command([sys.executable, "-m", "pytest", "-q"])
     if tests.returncode != 0:
         failures.append(f"pytest failed (exit {tests.returncode})")
+    replay_tests = run_command(
+        [sys.executable, "-m", "pytest", "tests/test_replay_session.py", "tests/test_replay_detector.py", "-q"]
+    )
+    if replay_tests.returncode != 0:
+        failures.append(f"replay session/detector tests failed (exit {replay_tests.returncode})")
 
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(
@@ -142,9 +174,11 @@ def main() -> int:
             references=references,
             roi_status=roi_status,
             thresholds_status=thresholds_status,
+            capture_status=capture_status,
             visual=visual,
             detections=detections,
             tests=tests,
+            replay_tests=replay_tests,
             failures=failures,
         ),
         encoding="utf-8",
