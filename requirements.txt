@@ -1,0 +1,8 @@
+opencv-python>=4.10,<5
+numpy>=2.0
+mss>=10.0
+pydirectinput>=1.0
+pyautogui>=0.9
+PyYAML>=6.0
+pytest>=8.0
+Pillow>=10.0
