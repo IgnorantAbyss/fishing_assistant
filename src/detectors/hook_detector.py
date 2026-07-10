@@ -18,6 +18,7 @@ from src.config_loader import ROIConfig, ThresholdConfig, load_roi_config, load_
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEBUG_DIR = PROJECT_ROOT / "logs" / "hook_reports"
+LIVE_HOOK_TEMPLATE = PROJECT_ROOT / "assets" / "templates" / "live" / "hook" / "frame_459_hook_bar.png"
 
 
 def _load_image(image: np.ndarray | str | Path) -> tuple[np.ndarray, Path | None]:
@@ -106,6 +107,23 @@ def _find_divider(hsv: np.ndarray, bar: tuple[int, int, int, int], fill: tuple[i
     return min(centres, key=lambda position: abs(position - expected))
 
 
+def _image_similarity(image_a: np.ndarray, image_b: np.ndarray) -> float:
+    """Small local template score for validating hook context, not full frames."""
+    size = (180, 56)
+    gray_a = cv2.GaussianBlur(cv2.resize(cv2.cvtColor(image_a, cv2.COLOR_BGR2GRAY), size), (3, 3), 0)
+    gray_b = cv2.GaussianBlur(cv2.resize(cv2.cvtColor(image_b, cv2.COLOR_BGR2GRAY), size), (3, 3), 0)
+    template = (float(cv2.matchTemplate(gray_a, gray_b, cv2.TM_CCOEFF_NORMED)[0, 0]) + 1.0) / 2.0
+    edges_a = cv2.Canny(gray_a, 50, 150)
+    edges_b = cv2.Canny(gray_b, 50, 150)
+    overlap = np.count_nonzero((edges_a > 0) & (edges_b > 0)) / max(1, np.count_nonzero((edges_a > 0) | (edges_b > 0)))
+    return float(np.clip(0.75 * template + 0.25 * overlap, 0.0, 1.0))
+
+
+def _live_context_score(crop: np.ndarray) -> float | None:
+    template = cv2.imread(str(LIVE_HOOK_TEMPLATE), cv2.IMREAD_COLOR)
+    return _image_similarity(crop, template) if template is not None else None
+
+
 def _save_debug_image(
     frame: np.ndarray,
     roi: tuple[int, int, int, int],
@@ -136,6 +154,8 @@ def detect_hook_bar(
     image: np.ndarray | str | Path,
     roi_config: ROIConfig | None = None,
     thresholds: ThresholdConfig | None = None,
+    *,
+    save_debug: bool = True,
 ) -> dict[str, Any]:
     """Detect a coloured hook bar, fill ratio, and optional divider line.
 
@@ -151,7 +171,7 @@ def detect_hook_bar(
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     local_bar, local_fill, red_mask, cyan_mask = _find_coloured_bar(hsv)
     if local_bar is None:
-        debug_path = _save_debug_image(frame, roi, None, None, None, source)
+        debug_path = _save_debug_image(frame, roi, None, None, None, source) if save_debug else None
         return {
             "detected": False,
             "confidence": 0.0,
@@ -164,6 +184,49 @@ def detect_hook_bar(
             "debug": {"roi_name": "hook_bar", "raw_values": {"colour_pixels": 0}, "debug_image_path": debug_path},
         }
 
+    bar_width = local_bar[2] - local_bar[0]
+    bar_height = local_bar[3] - local_bar[1]
+    # Actual hook bars are wide, shallow, lower-ROI structures.  This rejects
+    # short coloured fish icons and water highlights that caused live false hits.
+    minimum_width = max(180, int(crop.shape[1] * 0.28))
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    dark_ratio = float(np.mean(gray[local_bar[1]:local_bar[3], local_bar[0]:local_bar[2]] < 105))
+    context_score = _live_context_score(crop)
+    # The bar fill changes during the mini-game, so late valid bar frames can
+    # differ materially from calibration frame 459.  Geometry remains strict;
+    # a modest context floor only rejects unrelated colourful UI.
+    context_ok = context_score is None or context_score >= 0.45
+    geometry_ok = (
+        bar_width >= minimum_width
+        and 12 <= bar_height <= int(crop.shape[0] * 0.36)
+        and local_bar[1] >= int(crop.shape[0] * 0.60)
+        and dark_ratio >= 0.08
+        and context_ok
+    )
+    if not geometry_ok:
+        debug_path = _save_debug_image(frame, roi, None, None, None, source) if save_debug else None
+        return {
+            "detected": False,
+            "confidence": round(min(0.59, 0.25 + bar_width / max(1, crop.shape[1]) * 0.35), 4),
+            "bar_bbox": None,
+            "fill_ratio": None,
+            "divider_ratio": None,
+            "perfect_zone_ratio": 0.95,
+            "should_press_space": False,
+            "matched_features": [],
+            "debug": {
+                "roi_name": "hook_bar",
+                "raw_values": {
+                    "candidate_width_px": bar_width,
+                    "candidate_height_px": bar_height,
+                    "minimum_width_px": minimum_width,
+                    "dark_ratio": round(dark_ratio, 4),
+                    "live_context_score": round(context_score, 4) if context_score is not None else None,
+                },
+                "debug_image_path": debug_path,
+            },
+        }
+
     bar = (left + local_bar[0], top + local_bar[1], left + local_bar[2], top + local_bar[3])
     fill = (
         (left + local_fill[0], top + local_fill[1], left + local_fill[2], top + local_fill[3])
@@ -172,7 +235,7 @@ def detect_hook_bar(
     )
     local_divider = _find_divider(hsv, local_bar, local_fill)
     divider_x = left + local_divider if local_divider is not None else None
-    bar_width = max(1, local_bar[2] - local_bar[0])
+    bar_width = max(1, bar_width)
     fill_ratio = (local_fill[2] - local_bar[0]) / bar_width if local_fill is not None else 0.0
     divider_ratio = (local_divider - local_bar[0]) / bar_width if local_divider is not None else None
     features = ["hook_bar_rect"]
@@ -184,7 +247,7 @@ def detect_hook_bar(
     confidence += 0.10 if local_fill is not None else 0.0
     confidence += 0.10 if local_divider is not None else 0.0
     confidence = round(min(1.0, confidence), 4)
-    debug_path = _save_debug_image(frame, roi, bar, fill, divider_x, source)
+    debug_path = _save_debug_image(frame, roi, bar, fill, divider_x, source) if save_debug else None
     return {
         "detected": True,
         "confidence": confidence,
@@ -198,6 +261,9 @@ def detect_hook_bar(
             "roi_name": "hook_bar",
             "raw_values": {
                 "bar_width_px": bar_width,
+                "bar_height_px": bar_height,
+                "dark_ratio": round(dark_ratio, 4),
+                "live_context_score": round(context_score, 4) if context_score is not None else None,
                 "red_pixels": int(np.count_nonzero(red_mask)),
                 "cyan_pixels": int(np.count_nonzero(cyan_mask)),
                 "detector_min_confidence": active_thresholds.min_confidence_for("HOOK"),

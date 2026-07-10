@@ -1,6 +1,6 @@
 # Fishing Assistant Agent Check
 
-- Generated (UTC): 2026-07-09 19:18:31
+- Generated (UTC): 2026-07-10 02:27:10
 - Python: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
 - OS: Windows-11-10.0.26200-SP0
 - Reference image count: 11
@@ -12,17 +12,17 @@
 
 | Image | Expected state | Detected state | Confidence |
 | --- | --- | --- | ---: |
-| idle.png | IDLE | IDLE | 95.27% |
-| idle2.png | IDLE | IDLE | 95.57% |
+| idle.png | IDLE | IDLE | 98.18% |
+| idle2.png | IDLE | IDLE | 98.18% |
 | waiting.png | WAITING | WAITING | 100.00% |
-| ready.png | READY | READY | 94.75% |
-| ready2.png | READY | READY | 94.75% |
+| ready.png | READY | READY | 97.62% |
+| ready2.png | READY | READY | 97.62% |
 | hook.png | HOOK | HOOK | 100.00% |
 | hook2.png | HOOK | HOOK | 100.00% |
 | press.png | PRESS | PRESS | 100.00% |
 | press2.png | PRESS | PRESS | 100.00% |
-| get.png | GET | GET | 100.00% |
-| get2.png | GET | GET | 100.00% |
+| get.png | GET | GET | 97.52% |
+| get2.png | GET | GET | 97.52% |
 
 ## Command results
 
@@ -33,8 +33,8 @@
 ## Pytest output
 
 ```text
-........................                                                 [100%]
-24 passed in 6.78s
+..........................                                               [100%]
+26 passed in 7.43s
 ```
 
 ## Failure summary
@@ -45,7 +45,7 @@
 
 ```text
 ...                                                                      [100%]
-3 passed in 4.14s
+3 passed in 4.62s
 ```
 
 ## Debug output paths
