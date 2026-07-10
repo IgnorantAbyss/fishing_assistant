@@ -1,0 +1,35 @@
+dataset:
+  output_dir: datasets/fishing_v2
+  crop_format: jpg
+  crop_jpg_quality: 90
+  sample_every_n_frames: 2
+  materialize_crops: true
+
+sampling:
+  per_session:
+    IDLE:
+      max_samples: 120
+      strategy: uniform
+    WAITING:
+      max_samples: 150
+      strategy: uniform
+    READY:
+      max_samples: null
+      strategy: all
+    HOOK:
+      max_samples: null
+      strategy: all
+    PRESS:
+      max_samples: null
+      strategy: all
+    GET:
+      max_samples: null
+      strategy: all
+    IGNORE:
+      max_samples: 0
+      strategy: exclude
+
+boundary_sampling:
+  enabled: true
+  frames_before: 3
+  frames_after: 3

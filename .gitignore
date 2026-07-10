@@ -10,5 +10,9 @@ tmp/
 captures/
 assets/replay/raw/
 assets/replay/sessions/
+datasets/fishing_v2/
+models/
+*.pt
+*.pth
 *.mp4
 *.avi

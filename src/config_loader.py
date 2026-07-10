@@ -81,7 +81,7 @@ DEFAULT_CAPTURE_DATA: dict[str, Any] = {
         "interval_sec": 0.2,
         "duration_sec": 120,
         "image_format": "jpg",
-        "jpg_quality": 92,
+        "jpg_quality": 80,
         "save_full_frame": True,
         "save_roi_crops": False,
         "max_frames_per_session": 800,

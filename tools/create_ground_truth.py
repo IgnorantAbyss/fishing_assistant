@@ -6,21 +6,11 @@ import argparse
 import sys
 from pathlib import Path
 
-import yaml
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.replay_session import DEFAULT_SESSION_ROOT, ReplaySession, latest_session  # noqa: E402
-from src.replay_ground_truth import GROUND_TRUTH_STATES, validate_segments  # noqa: E402
-
-
-class _IndentedSafeDumper(yaml.SafeDumper):
-    """Keep sequence items indented under ``segments`` for readable reviews."""
-
-    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
-        return super().increase_indent(flow, False)
+from src.replay_ground_truth import GROUND_TRUTH_STATES, validate_segments, write_ground_truth  # noqa: E402
 
 
 def _parse_range(value: str) -> dict[str, int | str]:
@@ -54,14 +44,7 @@ def main() -> int:
     session = ReplaySession.load(session_path)
     segments = validate_segments(args.ranges, int(session.manifest["frame_count"]))
     destination = session.path / "ground_truth.yaml"
-    with destination.open("w", encoding="utf-8", newline="\n") as file:
-        yaml.dump(
-            {"segments": segments},
-            file,
-            Dumper=_IndentedSafeDumper,
-            allow_unicode=True,
-            sort_keys=False,
-        )
+    write_ground_truth(destination, segments, int(session.manifest["frame_count"]))
     print(destination)
     return 0
 

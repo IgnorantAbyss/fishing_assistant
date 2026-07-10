@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture monitor frames into a replay session without input automation.")
     parser.add_argument("--duration", type=float, help="Capture duration in seconds")
     parser.add_argument("--interval", type=float, help="Seconds between frames")
+    parser.add_argument("--jpg-quality", type=int, help="JPEG quality override (1-100)")
     parser.add_argument("--monitor", type=int, default=1, help="One-based physical mss monitor index")
     parser.add_argument("--notes", default="", help="Optional manifest note")
     parser.add_argument("--list-monitors", action="store_true", help="List mss monitor indexes and exit")
@@ -43,15 +44,22 @@ def main() -> int:
     config = load_capture_config(args.capture_config)
     duration = args.duration if args.duration is not None else config.capture.duration_sec
     interval = args.interval if args.interval is not None else config.capture.interval_sec
+    jpg_quality = args.jpg_quality if args.jpg_quality is not None else config.capture.jpg_quality
     if duration <= 0 or interval <= 0:
         raise ValueError("--duration and --interval must be greater than 0")
+    if not 1 <= jpg_quality <= 100:
+        raise ValueError("--jpg-quality must be between 1 and 100")
     monitors = get_monitors()
     monitor = next((item for item in monitors if item["index"] == args.monitor), None)
     if monitor is None:
         raise ValueError(f"Monitor {args.monitor} is unavailable; use --list-monitors")
     frame_limit = min(math.ceil(duration / interval), config.capture.max_frames_per_session)
-    estimated_bytes = int(monitor["width"] * monitor["height"] * 3 * 0.12 * frame_limit)
-    print(f"Capture-only session: up to {frame_limit} frame(s), estimated {_format_size(estimated_bytes)}")
+    bytes_per_pixel = 0.14 * max(0.35, jpg_quality / 80.0) if config.capture.image_format == "jpg" else 1.2
+    estimated_bytes = int(monitor["width"] * monitor["height"] * bytes_per_pixel * frame_limit)
+    print(f"Estimated frames: {frame_limit}")
+    print(f"Estimated capacity: {_format_size(estimated_bytes)}")
+    print(f"Image format: {config.capture.image_format}")
+    print(f"JPEG quality: {jpg_quality if config.capture.image_format == 'jpg' else 'N/A'}")
     print(f"Monitor {args.monitor}: {monitor['width']}x{monitor['height']}; Ctrl+C safely stops collection.")
 
     session = ReplaySession.create(
@@ -69,7 +77,7 @@ def main() -> int:
         while session.manifest["frame_count"] < frame_limit and time.monotonic() - started < duration:
             frame_started = time.monotonic()
             frame = capture_screen(args.monitor)
-            session.save_frame(frame, jpg_quality=config.capture.jpg_quality)
+            session.save_frame(frame, jpg_quality=jpg_quality)
             size_bytes = session.size_bytes()
             elapsed = time.monotonic() - started
             print(f"elapsed={elapsed:6.1f}s frames={session.manifest['frame_count']}/{frame_limit} size={_format_size(size_bytes)}")

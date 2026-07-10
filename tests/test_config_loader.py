@@ -42,4 +42,5 @@ def test_capture_yaml_loads() -> None:
 
     assert capture.capture.image_format == "jpg"
     assert capture.capture.interval_sec == 0.2
+    assert capture.capture.jpg_quality == 80
     assert capture.retention.max_sessions == 10

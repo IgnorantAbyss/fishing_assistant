@@ -13,6 +13,11 @@ IGNORE_STATE = "IGNORE"
 GROUND_TRUTH_STATES = (*EVALUATED_STATES, IGNORE_STATE)
 
 
+class _IndentedSafeDumper(yaml.SafeDumper):
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
+        return super().increase_indent(flow, False)
+
+
 def validate_segments(
     segments: Iterable[Mapping[str, Any]], frame_count: int
 ) -> list[dict[str, int | str]]:
@@ -66,6 +71,23 @@ def load_ground_truth(path: str | Path, frame_count: int) -> dict[int, str]:
         for segment in segments
         for frame_index in range(int(segment["start"]), int(segment["end"]) + 1)
     }
+
+
+def write_ground_truth(
+    path: str | Path, segments: Iterable[Mapping[str, Any]], frame_count: int
+) -> Path:
+    destination = Path(path)
+    normalized = validate_segments(segments, frame_count)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8", newline="\n") as file:
+        yaml.dump(
+            {"segments": normalized},
+            file,
+            Dumper=_IndentedSafeDumper,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+    return destination
 
 
 def load_annotations(path: str | Path, frame_count: int) -> dict[str, Any]:
