@@ -13,7 +13,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.replay_session import DEFAULT_SESSION_ROOT, ReplaySession, latest_session  # noqa: E402
-from src.state_detector import ROI_NAMES_BY_STATE  # noqa: E402
+from src.replay_ground_truth import GROUND_TRUTH_STATES, validate_segments  # noqa: E402
+
+
+class _IndentedSafeDumper(yaml.SafeDumper):
+    """Keep sequence items indented under ``segments`` for readable reviews."""
+
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
+        return super().increase_indent(flow, False)
 
 
 def _parse_range(value: str) -> dict[str, int | str]:
@@ -26,7 +33,7 @@ def _parse_range(value: str) -> dict[str, int | str]:
     state = state.upper()
     if start < 1 or end < start:
         raise argparse.ArgumentTypeError(f"Invalid frame range '{value}'")
-    if state not in ROI_NAMES_BY_STATE:
+    if state not in GROUND_TRUTH_STATES:
         raise argparse.ArgumentTypeError(f"Unsupported state '{state}'")
     return {"start": start, "end": end, "state": state}
 
@@ -45,18 +52,16 @@ def main() -> int:
     args = parse_args()
     session_path = args.session if args.session else latest_session(args.session_root)
     session = ReplaySession.load(session_path)
-    segments = sorted(args.ranges, key=lambda segment: int(segment["start"]))
-    previous_end = 0
-    for segment in segments:
-        start, end = int(segment["start"]), int(segment["end"])
-        if start <= previous_end:
-            raise ValueError("Ground-truth ranges must not overlap")
-        if end > int(session.manifest["frame_count"]):
-            raise ValueError(f"Range {start}-{end} exceeds session frame_count {session.manifest['frame_count']}")
-        previous_end = end
+    segments = validate_segments(args.ranges, int(session.manifest["frame_count"]))
     destination = session.path / "ground_truth.yaml"
     with destination.open("w", encoding="utf-8", newline="\n") as file:
-        yaml.safe_dump({"segments": segments}, file, allow_unicode=True, sort_keys=False)
+        yaml.dump(
+            {"segments": segments},
+            file,
+            Dumper=_IndentedSafeDumper,
+            allow_unicode=True,
+            sort_keys=False,
+        )
     print(destination)
     return 0
 

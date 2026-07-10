@@ -19,7 +19,6 @@ from typing import Any
 
 import cv2
 import numpy as np
-import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -30,11 +29,17 @@ from src.detectors.hook_detector import detect_hook_bar  # noqa: E402
 from src.detectors.press_detector import detect_press_sequence  # noqa: E402
 from src.detectors.get_detector import detect_get_window  # noqa: E402
 from src.replay_session import DEFAULT_SESSION_ROOT, ReplaySession, latest_session  # noqa: E402
+from src.replay_ground_truth import (  # noqa: E402
+    EVALUATED_STATES,
+    IGNORE_STATE,
+    load_annotations,
+    load_ground_truth,
+)
 from src.state_smoother import StateSmoother  # noqa: E402
-from src.state_detector import ROI_NAMES_BY_STATE, StateDetector  # noqa: E402
+from src.state_detector import StateDetector  # noqa: E402
 
 
-STATES = (*ROI_NAMES_BY_STATE, "UNKNOWN")
+PREDICTED_STATES = (*EVALUATED_STATES, "UNKNOWN")
 
 
 @dataclass(frozen=True)
@@ -42,36 +47,38 @@ class EvaluationSummary:
     session_path: Path
     results_path: Path
     report_path: Path
+    total_frames: int
+    evaluated_frames: int
+    ignored_frames: int
     raw_accuracy: float
     smoothed_accuracy: float
     unknown_ratio: float
-    state_recalls: dict[str, float]
+    state_recalls: dict[str, float | None]
     hook_detected_count: int
     press_detected_count: int
     get_detected_count: int
+    hook_bar_range: tuple[int, int] | None
+    press_range: tuple[int, int] | None
 
 
 def _load_ground_truth(path: Path, frame_count: int) -> dict[int, str]:
-    if not path.is_file():
-        raise FileNotFoundError(f"Ground truth not found: {path}; run tools/create_ground_truth.py first")
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
-        raise ValueError(f"Ground truth must contain a segments list: {path}")
-    labels: dict[int, str] = {}
-    for segment in data["segments"]:
-        if not isinstance(segment, dict):
-            raise ValueError("Every ground-truth segment must be a mapping")
-        start, end, state = segment.get("start"), segment.get("end"), segment.get("state")
-        if not isinstance(start, int) or not isinstance(end, int) or not isinstance(state, str):
-            raise ValueError("Ground-truth segments require integer start/end and string state")
-        state = state.upper()
-        if state not in ROI_NAMES_BY_STATE or start < 1 or end < start or end > frame_count:
-            raise ValueError(f"Invalid ground-truth segment: {segment}")
-        for frame_index in range(start, end + 1):
-            if frame_index in labels:
-                raise ValueError(f"Overlapping ground-truth label at frame {frame_index}")
-            labels[frame_index] = state
-    return labels
+    return load_ground_truth(path, frame_count)
+
+
+def _frame_range_for_state(labels: dict[int, str], state: str) -> tuple[int, int] | None:
+    frames = [frame_index for frame_index, expected in labels.items() if expected == state]
+    return (min(frames), max(frames)) if frames else None
+
+
+def _event_range(
+    annotations: dict[str, Any], name: str, fallback: tuple[int, int] | None
+) -> tuple[int, int] | None:
+    event = annotations.get("events", {}).get(name)
+    return (int(event["start"]), int(event["end"])) if isinstance(event, dict) else fallback
+
+
+def _in_range(frame_index: int, frame_range: tuple[int, int] | None) -> bool:
+    return frame_range is not None and frame_range[0] <= frame_index <= frame_range[1]
 
 
 def _get_window_probe(frame: np.ndarray, detector: StateDetector) -> tuple[bool, float]:
@@ -87,6 +94,8 @@ def _get_window_probe(frame: np.ndarray, detector: StateDetector) -> tuple[bool,
 
 
 def _hard_example_category(expected: str, detected: str) -> str | None:
+    if expected == IGNORE_STATE:
+        return None
     if detected == "UNKNOWN":
         return f"expected_{expected.lower()}_but_unknown"
     if expected != detected and detected in {"GET", "PRESS", "READY", "HOOK"}:
@@ -127,9 +136,39 @@ def _save_roi_montage(frame: np.ndarray, detector: StateDetector, destination: P
 def _write_confusion(path: Path, matrix: dict[str, Counter[str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["expected_state", *STATES])
-        for expected in STATES:
-            writer.writerow([expected, *(matrix[expected].get(detected, 0) for detected in STATES)])
+        writer.writerow(["expected_state", *PREDICTED_STATES])
+        for expected in EVALUATED_STATES:
+            writer.writerow(
+                [expected, *(matrix[expected].get(detected, 0) for detected in PREDICTED_STATES)]
+            )
+
+
+def _state_metrics(rows: list[dict[str, Any]], detected_key: str) -> dict[str, dict[str, float | int | None]]:
+    metrics: dict[str, dict[str, float | int | None]] = {}
+    for state in EVALUATED_STATES:
+        support = sum(row["expected_state"] == state for row in rows)
+        predicted = sum(row[detected_key] == state for row in rows)
+        true_positive = sum(
+            row["expected_state"] == state and row[detected_key] == state for row in rows
+        )
+        precision = true_positive / predicted if predicted else None
+        recall = true_positive / support if support else None
+        f1 = (
+            2.0 * precision * recall / (precision + recall)
+            if precision is not None and recall is not None and precision + recall > 0.0
+            else None
+        )
+        metrics[state] = {
+            "support": support,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+    return metrics
+
+
+def _format_metric(value: float | int | None) -> str:
+    return "N/A" if value is None else f"{float(value):.2%}"
 
 
 def _write_segments(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -154,42 +193,85 @@ def _write_segments(path: Path, rows: list[dict[str, Any]]) -> None:
 def _write_report(
     session: ReplaySession,
     rows: list[dict[str, Any]],
-    matrix: dict[str, Counter[str]],
-    raw_recalls: dict[str, float],
-    smoothed_recalls: dict[str, float],
+    evaluated_rows: list[dict[str, Any]],
+    raw_metrics: dict[str, dict[str, float | int | None]],
+    smoothed_metrics: dict[str, dict[str, float | int | None]],
     hard_counts: Counter[str],
+    annotations: dict[str, Any],
+    hook_state_range: tuple[int, int] | None,
+    hook_bar_range: tuple[int, int] | None,
+    press_range: tuple[int, int] | None,
 ) -> Path:
-    raw_accuracy = sum(bool(row["is_correct_raw"]) for row in rows) / len(rows) if rows else 0.0
-    smoothed_accuracy = sum(bool(row["is_correct_smoothed"]) for row in rows) / len(rows) if rows else 0.0
-    unknown_ratio = sum(row["detected_state"] == "UNKNOWN" for row in rows) / len(rows) if rows else 0.0
-    hook_rows = [row for row in rows if row["expected_state"] == "HOOK"]
-    press_rows = [row for row in rows if row["expected_state"] == "PRESS"]
-    get_rows = [row for row in rows if row["expected_state"] == "GET"]
+    evaluated_count = len(evaluated_rows)
+    ignored_count = len(rows) - evaluated_count
+    raw_accuracy = (
+        sum(bool(row["is_correct_raw"]) for row in evaluated_rows) / evaluated_count
+        if evaluated_count
+        else 0.0
+    )
+    smoothed_accuracy = (
+        sum(bool(row["is_correct_smoothed"]) for row in evaluated_rows) / evaluated_count
+        if evaluated_count
+        else 0.0
+    )
+    unknown_ratio = (
+        sum(row["detected_state"] == "UNKNOWN" for row in evaluated_rows) / evaluated_count
+        if evaluated_count
+        else 0.0
+    )
+    hook_rows = [row for row in evaluated_rows if row["expected_state"] == "HOOK"]
+    hook_bar_rows = [
+        row for row in rows if _in_range(int(row["frame_index"]), hook_bar_range)
+    ]
+    press_rows = [row for row in rows if _in_range(int(row["frame_index"]), press_range)]
+    get_rows = [row for row in evaluated_rows if row["expected_state"] == "GET"]
+    hook_state_label = (
+        f"{hook_state_range[0]}-{hook_state_range[1]}" if hook_state_range else "N/A"
+    )
+    hook_bar_label = f"{hook_bar_range[0]}-{hook_bar_range[1]}" if hook_bar_range else "N/A"
+    press_label = f"{press_range[0]}-{press_range[1]}" if press_range else "N/A"
     lines = [
         "# Replay Evaluation Report",
         "",
         f"- Session: `{session.path.name}`",
-        f"- Evaluated frames: {len(rows)}",
+        f"- Total frames: {len(rows)}",
+        f"- Evaluated frames: {evaluated_count}",
+        f"- Ignored frames: {ignored_count}",
+        f"- Overall accuracy: {smoothed_accuracy:.2%}",
         f"- Raw accuracy: {raw_accuracy:.2%}",
         f"- Smoothed accuracy: {smoothed_accuracy:.2%}",
         f"- UNKNOWN ratio: {unknown_ratio:.2%}",
         "",
-        "## Per-state recall (raw / smoothed)",
+        "## Per-state metrics",
         "",
+        "| State | Support | Raw precision | Raw recall | Raw F1 | Smoothed precision | Smoothed recall | Smoothed F1 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    lines.extend([f"- {state}: {raw_recalls.get(state, 0.0):.2%} / {smoothed_recalls.get(state, 0.0):.2%}" for state in ROI_NAMES_BY_STATE])
+    for state in EVALUATED_STATES:
+        raw = raw_metrics[state]
+        smoothed = smoothed_metrics[state]
+        lines.append(
+            f"| {state} | {raw['support']} | {_format_metric(raw['precision'])} | "
+            f"{_format_metric(raw['recall'])} | {_format_metric(raw['f1'])} | "
+            f"{_format_metric(smoothed['precision'])} | {_format_metric(smoothed['recall'])} | "
+            f"{_format_metric(smoothed['f1'])} |"
+        )
     lines.extend(
         [
             "",
             "## Diagnostic components",
             "",
-            f"- HOOK expected frames: {len(hook_rows)}; hook bar detected: {sum(bool(row['hook_detected']) for row in hook_rows)}",
-            f"- HOOK bar-required frames 459-471: {sum(bool(row['hook_detected']) for row in hook_rows if 459 <= int(row['frame_index']) <= 471)}",
-            f"- PRESS expected frames: {len(press_rows)}; press detected: {sum(bool(row['press_detected']) for row in press_rows)}",
+            f"- Top-level HOOK state {hook_state_label}: {len(hook_rows)} expected; "
+            f"raw HOOK {sum(row['detected_state'] == 'HOOK' for row in hook_rows)}; "
+            f"smoothed HOOK {sum(row['smoothed_state'] == 'HOOK' for row in hook_rows)}",
+            f"- HOOK bar-required frames {hook_bar_label}: {len(hook_bar_rows)}; "
+            f"hook bar detected: {sum(bool(row['hook_detected']) for row in hook_bar_rows)}",
+            f"- PRESS event {press_label}: {len(press_rows)}; press detected: "
+            f"{sum(bool(row['press_detected']) for row in press_rows)}",
             f"- GET expected frames: {len(get_rows)}; get window detected: {sum(bool(row['get_detected']) for row in get_rows)}",
-            f"- False GET: {sum(row['expected_state'] != 'GET' and row['detected_state'] == 'GET' for row in rows)}",
-            f"- False PRESS: {sum(row['expected_state'] != 'PRESS' and row['detected_state'] == 'PRESS' for row in rows)}",
-            f"- False HOOK: {sum(row['expected_state'] != 'HOOK' and row['detected_state'] == 'HOOK' for row in rows)}",
+            f"- False GET: {sum(row['expected_state'] != 'GET' and row['detected_state'] == 'GET' for row in evaluated_rows)}",
+            f"- False PRESS: {sum(row['expected_state'] != 'PRESS' and row['detected_state'] == 'PRESS' for row in evaluated_rows)}",
+            f"- False HOOK: {sum(row['expected_state'] != 'HOOK' and row['detected_state'] == 'HOOK' for row in evaluated_rows)}",
             "",
             "## Hard examples exported",
             "",
@@ -199,8 +281,12 @@ def _write_report(
     lines.extend(["", "## Possible problems", ""])
     if unknown_ratio > 0.25:
         lines.append("- UNKNOWN ratio exceeds the repair target; compare hard examples and ROI crops before adjusting thresholds.")
-    if smoothed_recalls.get("WAITING", 0.0) < 0.50:
+    waiting_recall = smoothed_metrics["WAITING"]["recall"]
+    if waiting_recall is not None and waiting_recall < 0.50:
         lines.append("- WAITING recall is low; top_prompt matching likely does not generalize from reference captures.")
+    if annotations.get("notes", {}).get("get_skipped"):
+        reason = annotations.get("notes", {}).get("reason", "GET was skipped in this session")
+        lines.append(f"- GET skipped by annotation: {reason}")
     if not any(lines[-1].startswith("-") for _ in [0]):
         lines.append("- None")
     destination = session.path / "replay_eval_report.md"
@@ -212,6 +298,12 @@ def evaluate_session(session_path: str | Path, *, export_debug: bool = True) -> 
     session = ReplaySession.load(session_path)
     frames = session.frame_paths()
     labels = _load_ground_truth(session.path / "ground_truth.yaml", len(frames))
+    annotations = load_annotations(session.path / "annotations.yaml", len(frames))
+    hook_state_range = _event_range(
+        annotations, "hook_state", _frame_range_for_state(labels, "HOOK")
+    )
+    hook_bar_range = _event_range(annotations, "hook_bar_visible", hook_state_range)
+    press_range = _event_range(annotations, "press", _frame_range_for_state(labels, "PRESS"))
     detector = StateDetector(PROJECT_ROOT / "assets" / "reference")
     output_root = session.path / "debug"
     hard_dir, crops_dir, montage_dir = output_root / "hard_examples", output_root / "roi_crops", output_root / "montage"
@@ -223,22 +315,21 @@ def evaluate_session(session_path: str | Path, *, export_debug: bool = True) -> 
 
     rows: list[dict[str, Any]] = []
     matrix: dict[str, Counter[str]] = defaultdict(Counter)
-    totals: Counter[str] = Counter()
-    correct: Counter[str] = Counter()
     hard_counts: Counter[str] = Counter()
     hard_paths: list[Path] = []
     for frame_index, frame_path in enumerate(frames, start=1):
         frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
         if frame is None:
             raise FileNotFoundError(f"Cannot read replay frame: {frame_path}")
-        expected = labels.get(frame_index, "UNLABELED")
+        expected = labels[frame_index]
+        is_evaluated = expected != IGNORE_STATE
         result = detector.detect_state(frame)
         hook = detect_hook_bar(frame, detector.roi_config, detector.thresholds, save_debug=False)
         press = detect_press_sequence(frame, detector.roi_config, detector.thresholds, save_debug=False)
         get = detect_get_window(frame, detector.roi_config, detector.thresholds)
         get_detected, get_confidence = get["detected"], get["confidence"]
         detected = result.state
-        raw_correct = expected != "UNLABELED" and detected == expected
+        raw_correct: bool | str = detected == expected if is_evaluated else ""
         row = {
             "frame_index": frame_index,
             "filename": frame_path.name,
@@ -247,6 +338,7 @@ def evaluate_session(session_path: str | Path, *, export_debug: bool = True) -> 
             "raw_detected_state": detected,
             "smoothed_state": "",
             "confidence": result.confidence,
+            "is_evaluated": is_evaluated,
             "is_correct_raw": raw_correct,
             "is_correct_smoothed": "",
             "raw_scores": json.dumps(result.debug.get("raw_scores", {}), ensure_ascii=False, sort_keys=True),
@@ -262,11 +354,9 @@ def evaluate_session(session_path: str | Path, *, export_debug: bool = True) -> 
             "matched_features": "|".join(result.matched_features),
         }
         rows.append(row)
-        if expected != "UNLABELED":
-            totals[expected] += 1
-            correct[expected] += int(raw_correct)
+        if is_evaluated:
             matrix[expected][detected] += 1
-        category = _hard_example_category(expected, detected) if expected != "UNLABELED" else None
+        category = _hard_example_category(expected, detected) if is_evaluated else None
         if export_debug and category is not None and hard_counts[category] < 10:
             hard_counts[category] += 1
             annotated = _annotate_frame(frame, detector, row)
@@ -291,10 +381,12 @@ def evaluate_session(session_path: str | Path, *, export_debug: bool = True) -> 
     smoothed_states = StateSmoother().smooth([str(row["detected_state"]) for row in rows], [float(row["confidence"]) for row in rows])
     for row, smoothed_state in zip(rows, smoothed_states, strict=True):
         row["smoothed_state"] = smoothed_state
-        row["is_correct_smoothed"] = row["expected_state"] != "UNLABELED" and smoothed_state == row["expected_state"]
+        row["is_correct_smoothed"] = (
+            smoothed_state == row["expected_state"] if row["is_evaluated"] else ""
+        )
 
     fields = list(rows[0]) if rows else [
-        "frame_index", "filename", "expected_state", "detected_state", "raw_detected_state", "smoothed_state", "confidence",
+        "frame_index", "filename", "expected_state", "detected_state", "raw_detected_state", "smoothed_state", "confidence", "is_evaluated",
         "is_correct_raw", "is_correct_smoothed", "raw_scores", "hook_detected", "hook_confidence", "hook_fill_ratio",
         "hook_divider_ratio", "press_detected", "press_confidence", "press_sequence_text", "get_detected", "get_confidence", "matched_features",
     ]
@@ -305,27 +397,73 @@ def evaluate_session(session_path: str | Path, *, export_debug: bool = True) -> 
         writer.writerows(rows)
     _write_confusion(session.path / "confusion_matrix.csv", matrix)
     _write_segments(session.path / "state_segments_predicted.csv", rows)
-    raw_recalls = {state: correct[state] / totals[state] if totals[state] else 0.0 for state in ROI_NAMES_BY_STATE}
-    smoothed_correct: Counter[str] = Counter()
-    for row in rows:
-        if row["expected_state"] != "UNLABELED":
-            smoothed_correct[str(row["expected_state"])] += int(bool(row["is_correct_smoothed"]))
-    smoothed_recalls = {state: smoothed_correct[state] / totals[state] if totals[state] else 0.0 for state in ROI_NAMES_BY_STATE}
-    report_path = _write_report(session, rows, matrix, raw_recalls, smoothed_recalls, hard_counts)
-    raw_accuracy = sum(bool(row["is_correct_raw"]) for row in rows) / len(rows) if rows else 0.0
-    smoothed_accuracy = sum(bool(row["is_correct_smoothed"]) for row in rows) / len(rows) if rows else 0.0
-    unknown_ratio = sum(row["detected_state"] == "UNKNOWN" for row in rows) / len(rows) if rows else 0.0
+    evaluated_rows = [row for row in rows if row["is_evaluated"]]
+    raw_metrics = _state_metrics(evaluated_rows, "detected_state")
+    smoothed_metrics = _state_metrics(evaluated_rows, "smoothed_state")
+    report_path = _write_report(
+        session,
+        rows,
+        evaluated_rows,
+        raw_metrics,
+        smoothed_metrics,
+        hard_counts,
+        annotations,
+        hook_state_range,
+        hook_bar_range,
+        press_range,
+    )
+    evaluated_count = len(evaluated_rows)
+    raw_accuracy = (
+        sum(bool(row["is_correct_raw"]) for row in evaluated_rows) / evaluated_count
+        if evaluated_count
+        else 0.0
+    )
+    smoothed_accuracy = (
+        sum(bool(row["is_correct_smoothed"]) for row in evaluated_rows) / evaluated_count
+        if evaluated_count
+        else 0.0
+    )
+    unknown_ratio = (
+        sum(row["detected_state"] == "UNKNOWN" for row in evaluated_rows) / evaluated_count
+        if evaluated_count
+        else 0.0
+    )
+    state_recalls = {
+        state: (
+            float(smoothed_metrics[state]["recall"])
+            if smoothed_metrics[state]["recall"] is not None
+            else None
+        )
+        for state in EVALUATED_STATES
+    }
     return EvaluationSummary(
-        session.path,
-        results_path,
-        report_path,
-        raw_accuracy,
-        smoothed_accuracy,
-        unknown_ratio,
-        smoothed_recalls,
-        sum(bool(row["hook_detected"]) for row in rows if 459 <= int(row["frame_index"]) <= 471),
-        sum(bool(row["press_detected"]) for row in rows if 472 <= int(row["frame_index"]) <= 483),
-        sum(bool(row["get_detected"]) for row in rows if 484 <= int(row["frame_index"]) <= 499),
+        session_path=session.path,
+        results_path=results_path,
+        report_path=report_path,
+        total_frames=len(rows),
+        evaluated_frames=evaluated_count,
+        ignored_frames=len(rows) - evaluated_count,
+        raw_accuracy=raw_accuracy,
+        smoothed_accuracy=smoothed_accuracy,
+        unknown_ratio=unknown_ratio,
+        state_recalls=state_recalls,
+        hook_detected_count=sum(
+            bool(row["hook_detected"])
+            for row in rows
+            if _in_range(int(row["frame_index"]), hook_bar_range)
+        ),
+        press_detected_count=sum(
+            bool(row["press_detected"])
+            for row in rows
+            if _in_range(int(row["frame_index"]), press_range)
+        ),
+        get_detected_count=sum(
+            bool(row["get_detected"])
+            for row in evaluated_rows
+            if row["expected_state"] == "GET"
+        ),
+        hook_bar_range=hook_bar_range,
+        press_range=press_range,
     )
 
 
@@ -344,13 +482,26 @@ def main() -> int:
     session_path = args.session if args.session else latest_session(args.session_root)
     summary = evaluate_session(session_path, export_debug=not args.no_debug_export)
     print(f"session: {summary.session_path}")
+    print(f"total_frames: {summary.total_frames}")
+    print(f"evaluated_frames: {summary.evaluated_frames}")
+    print(f"ignored_frames: {summary.ignored_frames}")
     print(f"raw_accuracy: {summary.raw_accuracy:.2%}")
     print(f"smoothed_accuracy: {summary.smoothed_accuracy:.2%}")
     print(f"unknown_ratio: {summary.unknown_ratio:.2%}")
     print(f"state_recalls: {summary.state_recalls}")
-    print(f"hook_detected_459_471: {summary.hook_detected_count}")
-    print(f"press_detected_472_483: {summary.press_detected_count}")
-    print(f"get_detected_484_499: {summary.get_detected_count}")
+    hook_range = (
+        f"{summary.hook_bar_range[0]}_{summary.hook_bar_range[1]}"
+        if summary.hook_bar_range
+        else "not_annotated"
+    )
+    press_range = (
+        f"{summary.press_range[0]}_{summary.press_range[1]}"
+        if summary.press_range
+        else "not_annotated"
+    )
+    print(f"hook_detected_{hook_range}: {summary.hook_detected_count}")
+    print(f"press_detected_{press_range}: {summary.press_detected_count}")
+    print(f"get_detected_expected_frames: {summary.get_detected_count}")
     print(f"results: {summary.results_path}")
     print(f"report: {summary.report_path}")
     return 0
