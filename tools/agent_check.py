@@ -6,6 +6,7 @@ import json
 import platform
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,7 +27,7 @@ from src.state_detector import STATE_BY_FILENAME  # noqa: E402
 
 REPORT_PATH = PROJECT_ROOT / "reports" / "agent_check_latest.md"
 REFERENCE_DIR = PROJECT_ROOT / "assets" / "reference"
-PYTEST_TEMP_ROOT = PROJECT_ROOT / "tmp" / "agent_check_pytest"
+PYTEST_TEMP_ROOT = PROJECT_ROOT / "tmp" / f"agent_check_pytest_{uuid.uuid4().hex}"
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:

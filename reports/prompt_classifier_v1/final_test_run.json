@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-07-10T15:40:43.729381+00:00",
+  "model_sha256": "d0d9f1c5bd8b888e69da8d9c1216c911d7df9184a50eafb36645fb26a695df9f",
+  "threshold": 0.55,
+  "dataset_manifest_sha256": "96fbbb0f3ef504c84a4a27b71a9a8ff8282946188b3b7177cf04a2dfc94e1c14",
+  "session_split_sha256": "7807d5d0ab907db3f487fb3ee487218319ab2360846bc8c96b42bfbded8e4a1a",
+  "run_count": 1,
+  "repeat_notice": "First recorded final-test evaluation."
+}

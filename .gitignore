@@ -14,5 +14,9 @@ datasets/fishing_v2/
 models/
 *.pt
 *.pth
+reports/prompt_classifier_v1/contact_sheets/
+reports/prompt_classifier_v1/validation_errors/
+reports/prompt_classifier_v1/final_test_errors/
+reports/prompt_classifier_v1/*.png
 *.mp4
 *.avi
