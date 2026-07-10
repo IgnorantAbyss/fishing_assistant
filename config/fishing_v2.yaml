@@ -1,0 +1,43 @@
+data:
+  session_root: assets/replay/sessions
+  legacy_dataset_root: datasets/fishing_v2
+  prompt_dataset_root: datasets/prompt_observation_v1
+  dataset_version: prompt_observation_v1
+  development_sessions:
+    - session_20260710_130308
+    - session_20260710_131254
+  final_test:
+    status: not_collected
+    sessions: []
+
+prompt:
+  observer: unimplemented
+  roi_status: unapproved
+  roi: null
+
+fusion:
+  hook_strong_threshold: 0.85
+  press_strong_threshold: 0.85
+  get_strong_threshold: 0.85
+  prompt_min_confidence: 0.80
+  conflict_timeout_sec: 2.0
+
+fsm:
+  stable_frames: 2
+  cast_pending_timeout_sec: 4.0
+  hook_pending_timeout_sec: 3.0
+  post_catch_timeout_sec: 5.0
+  collect_pending_timeout_sec: 4.0
+  sync_lost_timeout_sec: 2.0
+
+sync:
+  observation_frames: 10
+  minimum_consensus_ratio: 0.7
+  minimum_confidence: 0.8
+  timeout_sec: 5.0
+
+safety:
+  enabled: true
+  emit_actions: false
+  minimum_evidence_confidence: 0.8
+  cooldown_sec: 0.25

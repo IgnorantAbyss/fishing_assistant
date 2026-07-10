@@ -1,0 +1,18 @@
+from enum import Enum
+
+
+class RuntimeState(str, Enum):
+    SYNCING = "SYNCING"
+    SYNC_REQUIRED = "SYNC_REQUIRED"
+    IDLE = "IDLE"
+    CAST_PENDING = "CAST_PENDING"
+    WAITING = "WAITING"
+    READY = "READY"
+    HOOK_PENDING = "HOOK_PENDING"
+    HOOK = "HOOK"
+    PRESS = "PRESS"
+    POST_CATCH = "POST_CATCH"
+    GET = "GET"
+    COLLECT_PENDING = "COLLECT_PENDING"
+    PAUSED = "PAUSED"
+    STOPPED = "STOPPED"

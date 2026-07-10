@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+from src.detectors.press_detector import detect_press_sequence
+from src.fishing_v2.domain.frame_context import FrameContext
+from src.fishing_v2.domain.observations import PressObservation
+
+
+class LegacyPressDetectorAdapter:
+    def __init__(self, detector: Callable[..., dict[str, Any]] = detect_press_sequence) -> None:
+        self.detector = detector
+
+    def observe(self, frame: Any, context: FrameContext) -> PressObservation:
+        try:
+            result = self.detector(frame, save_debug=False)
+            return PressObservation(
+                detected=bool(result.get("detected", False)),
+                confidence=float(result.get("confidence", 0.0)),
+                frame_index=context.frame_index,
+                timestamp=context.timestamp,
+                sequence=tuple(str(item) for item in result.get("sequence", [])),
+                evidence={
+                    "sequence_text": str(result.get("sequence_text", "")),
+                    "key_boxes": list(result.get("key_boxes", [])),
+                    "matched_features": list(result.get("matched_features", [])),
+                    "legacy_debug": dict(result.get("debug", {})),
+                    "adapter": "legacy_press_detector",
+                },
+            )
+        except Exception as exc:
+            return PressObservation(
+                False, 0.0, context.frame_index, context.timestamp,
+                evidence={"adapter": "legacy_press_detector", "exception": f"{type(exc).__name__}: {exc}"},
+            )
