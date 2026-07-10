@@ -21,6 +21,19 @@ PixelROI: TypeAlias = tuple[int, int, int, int]
 ROI_NAMES = (
     "top_prompt",
     "center_space",
+    "space_button",
+    "fish_filter_panel",
+    "hook_bar",
+    "hook_prompt",
+    "hook_bar_precise",
+    "press_sequence",
+    "get_window",
+    "right_quest_area",
+)
+
+REQUIRED_ROI_NAMES = (
+    "top_prompt",
+    "center_space",
     "hook_bar",
     "press_sequence",
     "get_window",
@@ -34,7 +47,11 @@ DEFAULT_ROI_DATA: dict[str, Any] = {
     "rois": {
         "top_prompt": {"x1": 0.30, "y1": 0.02, "x2": 0.70, "y2": 0.10},
         "center_space": {"x1": 0.38, "y1": 0.10, "x2": 0.58, "y2": 0.25},
+        "space_button": {"x1": 0.39, "y1": 0.20, "x2": 0.57, "y2": 0.30},
+        "fish_filter_panel": {"x1": 0.38, "y1": 0.10, "x2": 0.58, "y2": 0.25},
         "hook_bar": {"x1": 0.38, "y1": 0.23, "x2": 0.62, "y2": 0.36},
+        "hook_prompt": {"x1": 0.37, "y1": 0.29, "x2": 0.63, "y2": 0.335},
+        "hook_bar_precise": {"x1": 0.38, "y1": 0.325, "x2": 0.62, "y2": 0.365},
         "press_sequence": {"x1": 0.38, "y1": 0.17, "x2": 0.62, "y2": 0.31},
         "get_window": {"x1": 0.75, "y1": 0.55, "x2": 0.94, "y2": 0.84},
         "right_quest_area": {"x1": 0.82, "y1": 0.20, "x2": 0.99, "y2": 0.75},
@@ -214,12 +231,12 @@ def load_roi_config(path: str | Path | None = None) -> ROIConfig:
         )
     except KeyError as exc:
         raise ValueError(f"screen_reference is missing {exc.args[0]}") from exc
-    missing = [name for name in ROI_NAMES if name not in raw_rois]
+    missing = [name for name in REQUIRED_ROI_NAMES if name not in raw_rois]
     if missing:
         raise ValueError(f"ROI configuration is missing: {', '.join(missing)}")
     return ROIConfig(
         screen_reference=screen_reference,
-        rois={name: _read_normalized_roi(name, raw_rois[name]) for name in ROI_NAMES},
+        rois={name: _read_normalized_roi(name, raw_rois[name]) for name in ROI_NAMES if name in raw_rois},
         source=source,
     )
 
@@ -232,10 +249,11 @@ def save_roi_config(path: str | Path, config: ROIConfig) -> None:
         "rois": {
             name: dict(zip(("x1", "y1", "x2", "y2"), config.rois[name], strict=True))
             for name in ROI_NAMES
+            if name in config.rois
         },
     }
     # Validate before writing so a malformed calibration can never replace a config.
-    for name in ROI_NAMES:
+    for name in data["rois"]:
         _read_normalized_roi(name, data["rois"][name])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", newline="\n") as file:

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from src.config_loader import ROIConfig, load_roi_config
 from src.detectors.hook_detector import detect_hook_bar
 
 
@@ -21,3 +22,18 @@ def test_hook_bar_is_detected_from_static_references(filename: str) -> None:
     debug_path = result["debug"]["debug_image_path"]
     assert debug_path is None or Path(debug_path).is_file()
     assert result["should_press_space"] is False
+
+
+def test_hook_detector_falls_back_to_legacy_hook_roi() -> None:
+    config = load_roi_config()
+    legacy = ROIConfig(
+        screen_reference=config.screen_reference,
+        rois={name: roi for name, roi in config.rois.items() if name not in {"hook_prompt", "hook_bar_precise"}},
+        source=config.source,
+    )
+
+    result = detect_hook_bar(REFERENCE_DIR / "hook.png", roi_config=legacy, save_debug=False)
+
+    assert result["detected"] is True
+    assert result["debug"]["roi_name"] == "hook_bar"
+    assert result["debug"]["prompt_roi_name"] == "hook_bar"

@@ -17,6 +17,8 @@ def test_roi_yaml_loads_and_converts_to_reference_pixels() -> None:
     assert config.source == DEFAULT_ROI_CONFIG_PATH
     assert config.screen_reference == (2048, 1151)
     assert config.pixel_roi("top_prompt", 2048, 1151) == (614, 23, 1434, 115)
+    assert config.pixel_roi("hook_prompt", 2048, 1151) == (758, 334, 1290, 386)
+    assert config.pixel_roi("hook_bar_precise", 2048, 1151) == (778, 374, 1270, 420)
     assert normalized_to_pixel_roi(config.rois["get_window"], 1024, 576) == (768, 317, 963, 484)
 
 

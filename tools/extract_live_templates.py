@@ -42,6 +42,8 @@ TEMPLATE_SPECS = (
     TemplateSpec("ready", 443, "top_prompt"),
     TemplateSpec("ready", 443, "center_space"),
     TemplateSpec("hook", 459, "hook_bar"),
+    TemplateSpec("hook", 459, "hook_prompt"),
+    TemplateSpec("hook", 459, "hook_bar_precise"),
     TemplateSpec("press", 472, "press_sequence"),
     TemplateSpec("get", 485, "get_window"),
 )

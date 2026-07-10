@@ -11,7 +11,17 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LIVE_TEMPLATE_ROOT = PROJECT_ROOT / "assets" / "templates" / "live"
-ROI_NAMES = ("top_prompt", "center_space", "hook_bar", "press_sequence", "get_window")
+ROI_NAMES = (
+    "top_prompt",
+    "center_space",
+    "space_button",
+    "fish_filter_panel",
+    "hook_bar",
+    "hook_prompt",
+    "hook_bar_precise",
+    "press_sequence",
+    "get_window",
+)
 
 
 @dataclass(frozen=True)

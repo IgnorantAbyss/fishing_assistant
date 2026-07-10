@@ -35,6 +35,8 @@ def save_preview(image_path: Path, output_dir: Path, *, roi_config_path: Path) -
     height, width = frame.shape[:2]
     colours = ((40, 220, 40), (40, 180, 255), (255, 120, 40), (220, 60, 220), (60, 220, 220), (255, 255, 255))
     for index, name in enumerate(ROI_NAMES):
+        if name not in config.rois:
+            continue
         left, top, right, bottom = normalized_to_pixel_roi(config.rois[name], width, height)
         colour = colours[index % len(colours)]
         cv2.rectangle(frame, (left, top), (right, bottom), colour, 2)

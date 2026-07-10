@@ -129,11 +129,30 @@ class StateDetector:
     def _prompt_text_similarity(image_a: np.ndarray, image_b: np.ndarray) -> float:
         """Compare bright prompt glyph structure while de-emphasising moving scenery."""
         size = (240, 80)
-        gray_a = cv2.resize(cv2.cvtColor(image_a, cv2.COLOR_BGR2GRAY), size)
-        gray_b = cv2.resize(cv2.cvtColor(image_b, cv2.COLOR_BGR2GRAY), size)
-        binary_a = ((gray_a > 150) * 255).astype(np.uint8)
-        binary_b = ((gray_b > 150) * 255).astype(np.uint8)
-        return max(0.0, float(cv2.matchTemplate(binary_a, binary_b, cv2.TM_CCOEFF_NORMED)[0, 0]))
+        band_a = StateDetector._prompt_band(image_a)
+        band_b = StateDetector._prompt_band(image_b)
+        gray_a = cv2.resize(cv2.cvtColor(band_a, cv2.COLOR_BGR2GRAY), size)
+        gray_b = cv2.resize(cv2.cvtColor(band_b, cv2.COLOR_BGR2GRAY), size)
+        binary_a = cv2.threshold(gray_a, 155, 255, cv2.THRESH_BINARY)[1]
+        binary_b = cv2.threshold(gray_b, 155, 255, cv2.THRESH_BINARY)[1]
+        correlation = max(0.0, float(cv2.matchTemplate(binary_a, binary_b, cv2.TM_CCOEFF_NORMED)[0, 0]))
+        edges_a = cv2.Canny(gray_a, 70, 170) > 0
+        edges_b = cv2.Canny(gray_b, 70, 170) > 0
+        edge_overlap = np.count_nonzero(edges_a & edges_b) / max(1, np.count_nonzero(edges_a | edges_b))
+        return float(np.clip(0.75 * correlation + 0.25 * edge_overlap, 0.0, 1.0))
+
+    @staticmethod
+    def _prompt_band(image: np.ndarray) -> np.ndarray:
+        """Keep the central prompt text band so the translucent scene is secondary."""
+        height, width = image.shape[:2]
+        return image[
+            int(height * 0.12):max(int(height * 0.88), 1),
+            int(width * 0.05):max(int(width * 0.95), 1),
+        ]
+
+    @classmethod
+    def _prompt_image_similarity(cls, image_a: np.ndarray, image_b: np.ndarray) -> float:
+        return cls._roi_similarity(cls._prompt_band(image_a), cls._prompt_band(image_b))
 
     def _score_reference(self, image: np.ndarray, reference: _Reference) -> tuple[float, list[float]]:
         scores = [self._roi_similarity(self._crop(image, self.roi_config.rois[name]), self._crop(reference.image, self.roi_config.rois[name])) for name in ROI_NAMES_BY_STATE[reference.state]]
@@ -157,9 +176,9 @@ class StateDetector:
             templates = [template.image for template in self.live_templates.templates if template.state == state and template.roi_name == "top_prompt"]
             if not templates:
                 continue
-            image_score = max(self._roi_similarity(prompt_crop, template) for template in templates)
+            image_score = max(self._prompt_image_similarity(prompt_crop, template) for template in templates)
             text_score = max(self._prompt_text_similarity(prompt_crop, template) for template in templates)
-            scores[state] = 0.45 * image_score + 0.55 * text_score
+            scores[state] = 0.30 * image_score + 0.70 * text_score
             details[state] = {"top_prompt_image": image_score, "top_prompt_text": text_score, "combined": scores[state]}
         for state, roi_name in (("HOOK", "hook_bar"), ("PRESS", "press_sequence"), ("GET", "get_window")):
             crop = self._crop(frame, self.roi_config.rois[roi_name])
@@ -168,6 +187,50 @@ class StateDetector:
                 scores[state] = score
                 details[state] = {roi_name: score}
         return scores, details
+
+    @staticmethod
+    def _prompt_debug(
+        live_scores: dict[str, float], live_details: dict[str, dict[str, float]]
+    ) -> dict[str, Any]:
+        order = sorted(PROMPT_STATES, key=lambda state: live_scores[state], reverse=True)
+        selected, runner = order[0], order[1]
+        selected_details = live_details.get(selected, {})
+        return {
+            "selected_prompt_state": selected,
+            "prompt_score": live_scores[selected],
+            "prompt_margin": live_scores[selected] - live_scores[runner],
+            "top_prompt_text_score": selected_details.get("top_prompt_text", 0.0),
+            "top_prompt_image_score": selected_details.get("top_prompt_image", 0.0),
+        }
+
+    @staticmethod
+    def _hook_fusion_gate(hook: dict[str, Any], best_prompt_score: float) -> dict[str, Any]:
+        features = set(hook.get("matched_features", []))
+        confidence = float(hook.get("confidence", 0.0))
+        has_bar = "hook_bar_rect" in features
+        has_fill = "bar_fill" in features
+        has_strong_context = "divider_line" in features or "hook_prompt_match" in features
+        strong = bool(hook.get("detected")) and confidence >= 0.75 and has_bar and has_strong_context
+        weak_evidence = (
+            bool(hook.get("detected"))
+            and confidence >= 0.88
+            and has_bar
+            and has_fill
+            and not has_strong_context
+            and confidence - best_prompt_score >= 0.07
+        )
+        if strong:
+            decision = "strong_hook_evidence"
+        elif weak_evidence:
+            decision = "weak_hook_requires_temporal_support"
+        else:
+            decision = "hook_evidence_rejected"
+        return {
+            "decision": decision,
+            "strong": strong,
+            "weak_candidate": weak_evidence,
+            "hook_minus_prompt": round(confidence - best_prompt_score, 4),
+        }
 
     @staticmethod
     def _is_blank(frame: np.ndarray) -> bool:
@@ -184,6 +247,8 @@ class StateDetector:
         baseline: dict[str, float],
         live: dict[str, dict[str, float]],
         components: dict[str, Any],
+        prompt_debug: dict[str, Any] | None = None,
+        decision_reason: str = "undetermined",
         reason: str | None = None,
     ) -> DetectionResult:
         debug: dict[str, Any] = {
@@ -196,6 +261,11 @@ class StateDetector:
             "roi_config": str(self.roi_config.source) if self.roi_config.source else "built-in-default",
             "thresholds_config": str(self.thresholds.source) if self.thresholds.source else "built-in-default",
             "missing_references": self.missing_references,
+            "top_prompt_text_score": round(float((prompt_debug or {}).get("top_prompt_text_score", 0.0)), 4),
+            "top_prompt_image_score": round(float((prompt_debug or {}).get("top_prompt_image_score", 0.0)), 4),
+            "prompt_margin": round(float((prompt_debug or {}).get("prompt_margin", 0.0)), 4),
+            "selected_prompt_state": (prompt_debug or {}).get("selected_prompt_state"),
+            "decision_reason": decision_reason,
         }
         if reason is not None:
             debug["unknown_reason"] = reason
@@ -211,45 +281,47 @@ class StateDetector:
             frame, input_path = image, None
         if self._is_blank(frame):
             zeros = {state: 0.0 for state in ROI_NAMES_BY_STATE}
-            return self._result(state="UNKNOWN", confidence=0.0, matched_features=["blank_frame"], raw_scores=zeros, input_path=input_path, baseline=zeros, live={}, components={}, reason="blank_frame")
+            return self._result(state="UNKNOWN", confidence=0.0, matched_features=["blank_frame"], raw_scores=zeros, input_path=input_path, baseline=zeros, live={}, components={}, decision_reason="blank_frame", reason="blank_frame")
 
         baseline, scored = self._baseline_scores(frame)
         live_scores, live_details = self._live_scores(frame)
+        prompt_debug = self._prompt_debug(live_scores, live_details)
         raw_scores = {state: max(baseline[state], live_scores[state]) for state in ROI_NAMES_BY_STATE}
         press = detect_press_sequence(frame, self.roi_config, self.thresholds, save_debug=False)
         hook = detect_hook_bar(frame, self.roi_config, self.thresholds, save_debug=False)
         get = detect_get_window(frame, self.roi_config, self.thresholds)
-        components = {"press": press, "hook": hook, "get": get}
+        hook_gate = self._hook_fusion_gate(hook, float(prompt_debug["prompt_score"]))
+        components = {"press": press, "hook": hook, "hook_fusion_gate": hook_gate, "get": get}
         if press["detected"] and press["confidence"] >= 0.68 and len(press["sequence_text"]) >= 4:
             raw_scores["PRESS"] = max(raw_scores["PRESS"], float(press["confidence"]))
-            return self._result(state="PRESS", confidence=press["confidence"], matched_features=["press_panel", "key_cells", "letter_templates"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components)
-        if hook["detected"] and hook["confidence"] >= 0.75:
+            return self._result(state="PRESS", confidence=press["confidence"], matched_features=["press_panel", "key_cells", "letter_templates"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, prompt_debug=prompt_debug, decision_reason="press_component_gate")
+        if hook_gate["strong"]:
             raw_scores["HOOK"] = max(raw_scores["HOOK"], float(hook["confidence"]))
-            return self._result(state="HOOK", confidence=hook["confidence"], matched_features=hook["matched_features"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components)
+            return self._result(state="HOOK", confidence=hook["confidence"], matched_features=hook["matched_features"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, prompt_debug=prompt_debug, decision_reason="strong_hook_fusion_gate")
         if get["detected"] and get["confidence"] >= 0.72:
             raw_scores["GET"] = max(raw_scores["GET"], float(get["confidence"]))
-            return self._result(state="GET", confidence=get["confidence"], matched_features=get["matched_features"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components)
+            return self._result(state="GET", confidence=get["confidence"], matched_features=get["matched_features"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, prompt_debug=prompt_debug, decision_reason="get_component_gate")
 
         baseline_best = max(baseline, key=baseline.get)
         if baseline[baseline_best] >= 0.92:
             best = next(item for item in scored if item[1].state == baseline_best and item[0] == max(value[0] for value in scored if value[1].state == baseline_best))
             features = [FEATURE_NAMES_BY_STATE[baseline_best][index] for index, score in enumerate(best[2]) if score >= self.thresholds.unknown_below] or ["static_reference_match"]
-            return self._result(state=baseline_best, confidence=baseline[baseline_best], matched_features=features, raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components)
+            return self._result(state=baseline_best, confidence=baseline[baseline_best], matched_features=features, raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, prompt_debug=prompt_debug, decision_reason="high_confidence_static_reference")
 
-        prompt_order = sorted(PROMPT_STATES, key=lambda state: live_scores[state], reverse=True)
-        prompt_state, runner = prompt_order[0], prompt_order[1]
-        prompt_score, prompt_margin = live_scores[prompt_state], live_scores[prompt_state] - live_scores[runner]
+        prompt_state = str(prompt_debug["selected_prompt_state"])
+        prompt_score = float(prompt_debug["prompt_score"])
+        prompt_margin = float(prompt_debug["prompt_margin"])
         # A very strong text-template match is evidence in its own right when
         # translucent prompt backgrounds make the runner-up margin unstable.
         # This is intentionally limited to prompt states, not a global threshold.
-        if prompt_score >= 0.75 or (prompt_score >= 0.62 and prompt_margin >= 0.025):
+        if prompt_score >= 0.75 or (prompt_score >= 0.55 and prompt_margin >= 0.06):
             raw_scores[prompt_state] = max(raw_scores[prompt_state], prompt_score)
-            return self._result(state=prompt_state, confidence=prompt_score, matched_features=["live_top_prompt_template", "prompt_margin"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components)
+            return self._result(state=prompt_state, confidence=prompt_score, matched_features=["live_top_prompt_template", "prompt_margin"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, prompt_debug=prompt_debug, decision_reason="live_top_prompt_classifier")
 
         best_state = max(raw_scores, key=raw_scores.get)
-        if baseline[best_state] >= self.thresholds.min_confidence_for(best_state):
-            return self._result(state=best_state, confidence=baseline[best_state], matched_features=["static_reference_match"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components)
-        return self._result(state="UNKNOWN", confidence=raw_scores[best_state], matched_features=["insufficient_live_or_static_evidence"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, reason="insufficient_live_or_static_evidence")
+        if baseline[baseline_best] >= self.thresholds.min_confidence_for(baseline_best):
+            return self._result(state=baseline_best, confidence=baseline[baseline_best], matched_features=["static_reference_match"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, prompt_debug=prompt_debug, decision_reason="minimum_static_reference_gate")
+        return self._result(state="UNKNOWN", confidence=raw_scores[best_state], matched_features=["insufficient_live_or_static_evidence"], raw_scores=raw_scores, input_path=input_path, baseline=baseline, live=live_details, components=components, prompt_debug=prompt_debug, decision_reason="insufficient_live_or_static_evidence", reason="insufficient_live_or_static_evidence")
 
     def detect_state(self, image: np.ndarray | str | Path) -> DetectionResult:
         return self.detect(image)

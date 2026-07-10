@@ -26,6 +26,7 @@ from src.state_detector import STATE_BY_FILENAME  # noqa: E402
 
 REPORT_PATH = PROJECT_ROOT / "reports" / "agent_check_latest.md"
 REFERENCE_DIR = PROJECT_ROOT / "assets" / "reference"
+PYTEST_TEMP_ROOT = PROJECT_ROOT / "tmp" / "agent_check_pytest"
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -159,11 +160,23 @@ def main() -> int:
         elif result.get("state") != expected:
             failures.append(f"{filename}: expected {expected}, detected {result.get('state')}")
 
-    tests = run_command([sys.executable, "-m", "pytest", "-q"])
+    PYTEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+    tests = run_command(
+        [sys.executable, "-m", "pytest", "-q", "--basetemp", str(PYTEST_TEMP_ROOT / "all")]
+    )
     if tests.returncode != 0:
         failures.append(f"pytest failed (exit {tests.returncode})")
     replay_tests = run_command(
-        [sys.executable, "-m", "pytest", "tests/test_replay_session.py", "tests/test_replay_detector.py", "-q"]
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_replay_session.py",
+            "tests/test_replay_detector.py",
+            "-q",
+            "--basetemp",
+            str(PYTEST_TEMP_ROOT / "replay"),
+        ]
     )
     if replay_tests.returncode != 0:
         failures.append(f"replay session/detector tests failed (exit {replay_tests.returncode})")

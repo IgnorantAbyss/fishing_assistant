@@ -1,6 +1,6 @@
 # Fishing Assistant Agent Check
 
-- Generated (UTC): 2026-07-10 02:27:10
+- Generated (UTC): 2026-07-10 03:52:34
 - Python: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
 - OS: Windows-11-10.0.26200-SP0
 - Reference image count: 11
@@ -33,8 +33,14 @@
 ## Pytest output
 
 ```text
-..........................                                               [100%]
-26 passed in 7.43s
+............................                                             [100%]
+============================== warnings summary ===============================
+.venv\Lib\site-packages\_pytest\cacheprovider.py:469
+  D:\project\fishing_assistant\.venv\Lib\site-packages\_pytest\cacheprovider.py:469: PytestCacheWarning: could not create cache path D:\project\fishing_assistant\.pytest_cache\v\cache\nodeids: [WinError 183] 當檔案已存在時，無法建立該檔案。: 'D:\\project\\fishing_assistant\\.pytest_cache\\v\\cache'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+28 passed, 1 warning in 6.62s
 ```
 
 ## Failure summary
@@ -45,7 +51,13 @@
 
 ```text
 ...                                                                      [100%]
-3 passed in 4.62s
+============================== warnings summary ===============================
+.venv\Lib\site-packages\_pytest\cacheprovider.py:469
+  D:\project\fishing_assistant\.venv\Lib\site-packages\_pytest\cacheprovider.py:469: PytestCacheWarning: could not create cache path D:\project\fishing_assistant\.pytest_cache\v\cache\nodeids: [WinError 183] 當檔案已存在時，無法建立該檔案。: 'D:\\project\\fishing_assistant\\.pytest_cache\\v\\cache'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3 passed, 1 warning in 4.01s
 ```
 
 ## Debug output paths

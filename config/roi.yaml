@@ -14,11 +14,31 @@ rois:
     y1: 0.10
     x2: 0.58
     y2: 0.25
+  space_button:
+    x1: 0.39
+    y1: 0.20
+    x2: 0.57
+    y2: 0.30
+  fish_filter_panel:
+    x1: 0.38
+    y1: 0.10
+    x2: 0.58
+    y2: 0.25
   hook_bar:
     x1: 0.38
     y1: 0.23
     x2: 0.62
     y2: 0.36
+  hook_prompt:
+    x1: 0.37
+    y1: 0.29
+    x2: 0.63
+    y2: 0.335
+  hook_bar_precise:
+    x1: 0.38
+    y1: 0.325
+    x2: 0.62
+    y2: 0.365
   press_sequence:
     x1: 0.38
     y1: 0.17

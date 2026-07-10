@@ -1,7 +1,8 @@
-"""Offline detector for the fishing hook timing bar.
+"""Offline detector for the fishing hook prompt and timing bar.
 
-The detector uses only the configured ``hook_bar`` ROI in an image supplied by
-the caller.  It does not capture the screen or send input events.
+The detector prefers the narrow live-calibrated hook ROIs and falls back to the
+original ``hook_bar`` ROI when an older configuration is supplied.  It does not
+capture the screen or send input events.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from src.config_loader import ROIConfig, ThresholdConfig, load_roi_config, load_
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEBUG_DIR = PROJECT_ROOT / "logs" / "hook_reports"
 LIVE_HOOK_TEMPLATE = PROJECT_ROOT / "assets" / "templates" / "live" / "hook" / "frame_459_hook_bar.png"
+LIVE_HOOK_PROMPT_TEMPLATE = PROJECT_ROOT / "assets" / "templates" / "live" / "hook" / "frame_459_hook_prompt.png"
+LIVE_HOOK_BAR_PRECISE_TEMPLATE = PROJECT_ROOT / "assets" / "templates" / "live" / "hook" / "frame_459_hook_bar_precise.png"
 
 
 def _load_image(image: np.ndarray | str | Path) -> tuple[np.ndarray, Path | None]:
@@ -42,7 +45,9 @@ def _components(mask: np.ndarray, *, min_width: int = 8, min_height: int = 5) ->
     ]
 
 
-def _find_coloured_bar(hsv: np.ndarray) -> tuple[tuple[int, int, int, int] | None, tuple[int, int, int, int] | None, np.ndarray, np.ndarray]:
+def _find_coloured_bar(
+    hsv: np.ndarray, *, candidate_y_fraction: float = 0.60
+) -> tuple[tuple[int, int, int, int] | None, tuple[int, int, int, int] | None, np.ndarray, np.ndarray]:
     """Find the lower-ROI red fill and adjacent cyan timing area."""
     height, width = hsv.shape[:2]
     saturation = hsv[:, :, 1]
@@ -53,7 +58,7 @@ def _find_coloured_bar(hsv: np.ndarray) -> tuple[tuple[int, int, int, int] | Non
 
     # The configured ROI includes the prompt above the bar.  Limiting candidates
     # to its lower part excludes unrelated red UI text in hook2.png.
-    lower_y = int(height * 0.60)
+    lower_y = int(height * candidate_y_fraction)
     candidates: list[tuple[int, int, int, int]] = []
     for x, y, component_width, component_height, _ in _components(red_mask) + _components(cyan_mask):
         if y < lower_y or component_width < max(20, width // 30):
@@ -119,9 +124,34 @@ def _image_similarity(image_a: np.ndarray, image_b: np.ndarray) -> float:
     return float(np.clip(0.75 * template + 0.25 * overlap, 0.0, 1.0))
 
 
-def _live_context_score(crop: np.ndarray) -> float | None:
-    template = cv2.imread(str(LIVE_HOOK_TEMPLATE), cv2.IMREAD_COLOR)
+def _live_context_score(crop: np.ndarray, *, precise: bool) -> float | None:
+    template_path = LIVE_HOOK_BAR_PRECISE_TEMPLATE if precise else LIVE_HOOK_TEMPLATE
+    template = cv2.imread(str(template_path), cv2.IMREAD_COLOR)
     return _image_similarity(crop, template) if template is not None else None
+
+
+def _prompt_similarity(image_a: np.ndarray, image_b: np.ndarray) -> float:
+    """Compare bright glyph and edge structure without OCR or scene colour."""
+    size = (260, 54)
+    gray_a = cv2.resize(cv2.cvtColor(image_a, cv2.COLOR_BGR2GRAY), size)
+    gray_b = cv2.resize(cv2.cvtColor(image_b, cv2.COLOR_BGR2GRAY), size)
+    binary_a = cv2.threshold(gray_a, 165, 255, cv2.THRESH_BINARY)[1]
+    binary_b = cv2.threshold(gray_b, 165, 255, cv2.THRESH_BINARY)[1]
+    correlation = max(0.0, float(cv2.matchTemplate(binary_a, binary_b, cv2.TM_CCOEFF_NORMED)[0, 0]))
+    edges_a = cv2.Canny(gray_a, 80, 180)
+    edges_b = cv2.Canny(gray_b, 80, 180)
+    bright_a = cv2.dilate(binary_a, np.ones((3, 3), dtype=np.uint8)) > 0
+    bright_b = cv2.dilate(binary_b, np.ones((3, 3), dtype=np.uint8)) > 0
+    edges_a = (edges_a > 0) & bright_a
+    edges_b = (edges_b > 0) & bright_b
+    overlap = np.count_nonzero(edges_a & edges_b) / max(1, np.count_nonzero(edges_a | edges_b))
+    return float(np.clip(0.72 * correlation + 0.28 * overlap, 0.0, 1.0))
+
+
+def _hook_prompt_score(crop: np.ndarray) -> float | None:
+    template_path = LIVE_HOOK_PROMPT_TEMPLATE if LIVE_HOOK_PROMPT_TEMPLATE.exists() else LIVE_HOOK_TEMPLATE
+    template = cv2.imread(str(template_path), cv2.IMREAD_COLOR)
+    return _prompt_similarity(crop, template) if template is not None else None
 
 
 def _save_debug_image(
@@ -165,11 +195,21 @@ def detect_hook_bar(
     frame, source = _load_image(image)
     active_roi = roi_config or load_roi_config()
     active_thresholds = thresholds or load_thresholds_config()
-    roi = normalized_to_pixel_roi(active_roi.rois["hook_bar"], frame.shape[1], frame.shape[0])
+    bar_roi_name = "hook_bar_precise" if "hook_bar_precise" in active_roi.rois else "hook_bar"
+    prompt_roi_name = "hook_prompt" if "hook_prompt" in active_roi.rois else "hook_bar"
+    precise_bar = bar_roi_name == "hook_bar_precise"
+    roi = normalized_to_pixel_roi(active_roi.rois[bar_roi_name], frame.shape[1], frame.shape[0])
+    prompt_roi = normalized_to_pixel_roi(active_roi.rois[prompt_roi_name], frame.shape[1], frame.shape[0])
     left, top, right, bottom = roi
     crop = frame[top:bottom, left:right]
+    prompt_left, prompt_top, prompt_right, prompt_bottom = prompt_roi
+    prompt_crop = frame[prompt_top:prompt_bottom, prompt_left:prompt_right]
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    local_bar, local_fill, red_mask, cyan_mask = _find_coloured_bar(hsv)
+    local_bar, local_fill, red_mask, cyan_mask = _find_coloured_bar(
+        hsv, candidate_y_fraction=0.0 if precise_bar else 0.60
+    )
+    prompt_score = _hook_prompt_score(prompt_crop)
+    prompt_match = prompt_score is not None and prompt_score >= 0.52
     if local_bar is None:
         debug_path = _save_debug_image(frame, roi, None, None, None, source) if save_debug else None
         return {
@@ -181,25 +221,36 @@ def detect_hook_bar(
             "perfect_zone_ratio": 0.95,
             "should_press_space": False,
             "matched_features": [],
-            "debug": {"roi_name": "hook_bar", "raw_values": {"colour_pixels": 0}, "debug_image_path": debug_path},
+            "debug": {
+                "roi_name": bar_roi_name,
+                "prompt_roi_name": prompt_roi_name,
+                "raw_values": {
+                    "colour_pixels": 0,
+                    "hook_prompt_score": round(prompt_score, 4) if prompt_score is not None else None,
+                },
+                "debug_image_path": debug_path,
+            },
         }
 
     bar_width = local_bar[2] - local_bar[0]
     bar_height = local_bar[3] - local_bar[1]
     # Actual hook bars are wide, shallow, lower-ROI structures.  This rejects
     # short coloured fish icons and water highlights that caused live false hits.
-    minimum_width = max(180, int(crop.shape[1] * 0.28))
+    minimum_width = max(200 if precise_bar else 180, int(crop.shape[1] * 0.28))
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     dark_ratio = float(np.mean(gray[local_bar[1]:local_bar[3], local_bar[0]:local_bar[2]] < 105))
-    context_score = _live_context_score(crop)
+    context_score = _live_context_score(crop, precise=precise_bar)
     # The bar fill changes during the mini-game, so late valid bar frames can
     # differ materially from calibration frame 459.  Geometry remains strict;
     # a modest context floor only rejects unrelated colourful UI.
-    context_ok = context_score is None or context_score >= 0.45
+    context_floor = 0.36 if precise_bar else 0.45
+    context_ok = context_score is None or context_score >= context_floor
     geometry_ok = (
         bar_width >= minimum_width
-        and 12 <= bar_height <= int(crop.shape[0] * 0.36)
-        and local_bar[1] >= int(crop.shape[0] * 0.60)
+        and (10 if precise_bar else 12) <= bar_height <= (
+            max(64, int(crop.shape[0] * 0.68)) if precise_bar else int(crop.shape[0] * 0.36)
+        )
+        and local_bar[1] >= (0 if precise_bar else int(crop.shape[0] * 0.60))
         and dark_ratio >= 0.08
         and context_ok
     )
@@ -215,13 +266,15 @@ def detect_hook_bar(
             "should_press_space": False,
             "matched_features": [],
             "debug": {
-                "roi_name": "hook_bar",
+                "roi_name": bar_roi_name,
+                "prompt_roi_name": prompt_roi_name,
                 "raw_values": {
                     "candidate_width_px": bar_width,
                     "candidate_height_px": bar_height,
                     "minimum_width_px": minimum_width,
                     "dark_ratio": round(dark_ratio, 4),
                     "live_context_score": round(context_score, 4) if context_score is not None else None,
+                    "hook_prompt_score": round(prompt_score, 4) if prompt_score is not None else None,
                 },
                 "debug_image_path": debug_path,
             },
@@ -243,6 +296,8 @@ def detect_hook_bar(
         features.append("bar_fill")
     if local_divider is not None:
         features.append("divider_line")
+    if prompt_match:
+        features.append("hook_prompt_match")
     confidence = 0.60 + 0.20 * min(1.0, bar_width / max(1, crop.shape[1] * 0.40))
     confidence += 0.10 if local_fill is not None else 0.0
     confidence += 0.10 if local_divider is not None else 0.0
@@ -258,12 +313,14 @@ def detect_hook_bar(
         "should_press_space": False,
         "matched_features": features,
         "debug": {
-            "roi_name": "hook_bar",
+            "roi_name": bar_roi_name,
+            "prompt_roi_name": prompt_roi_name,
             "raw_values": {
                 "bar_width_px": bar_width,
                 "bar_height_px": bar_height,
                 "dark_ratio": round(dark_ratio, 4),
                 "live_context_score": round(context_score, 4) if context_score is not None else None,
+                "hook_prompt_score": round(prompt_score, 4) if prompt_score is not None else None,
                 "red_pixels": int(np.count_nonzero(red_mask)),
                 "cyan_pixels": int(np.count_nonzero(cyan_mask)),
                 "detector_min_confidence": active_thresholds.min_confidence_for("HOOK"),

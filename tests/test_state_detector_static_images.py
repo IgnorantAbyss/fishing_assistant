@@ -26,6 +26,15 @@ def test_reference_images_are_classified_to_the_expected_state(
     assert result.matched_features
     assert result.debug["best_reference"]
     assert set(result.debug["raw_scores"]) == {"IDLE", "WAITING", "READY", "HOOK", "PRESS", "GET"}
+    assert set(
+        (
+            "top_prompt_text_score",
+            "top_prompt_image_score",
+            "prompt_margin",
+            "selected_prompt_state",
+            "decision_reason",
+        )
+    ).issubset(result.debug)
 
 
 def test_black_synthetic_image_is_unknown(detector: StateDetector) -> None:
@@ -41,3 +50,28 @@ def test_black_synthetic_image_is_unknown(detector: StateDetector) -> None:
         "PRESS": 0.0,
         "GET": 0.0,
     }
+    assert result.debug["decision_reason"] == "blank_frame"
+
+
+def test_hook_fusion_requires_divider_or_prompt_for_single_frame_override() -> None:
+    strong = StateDetector._hook_fusion_gate(
+        {"detected": True, "confidence": 0.80, "matched_features": ["hook_bar_rect", "bar_fill", "divider_line"]},
+        0.74,
+    )
+    weak = StateDetector._hook_fusion_gate(
+        {"detected": True, "confidence": 0.90, "matched_features": ["hook_bar_rect", "bar_fill"]},
+        0.80,
+    )
+    prompt_wins = StateDetector._hook_fusion_gate(
+        {"detected": True, "confidence": 0.90, "matched_features": ["hook_bar_rect", "bar_fill"]},
+        0.85,
+    )
+
+    assert strong["strong"] is True
+    assert weak == {
+        "decision": "weak_hook_requires_temporal_support",
+        "strong": False,
+        "weak_candidate": True,
+        "hook_minus_prompt": 0.1,
+    }
+    assert prompt_wins["decision"] == "hook_evidence_rejected"
