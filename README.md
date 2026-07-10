@@ -86,7 +86,7 @@ Capture is opt-in through `collect_screenshot.py`. It uses `mss` only after the 
 
 ```powershell
 python tools\collect_screenshot.py --list-monitors
-python tools\collect_screenshot.py --duration 120 --interval 0.2 --monitor 1
+python tools\collect_screenshot.py --duration 120 --interval 0.2 --jpg-quality 80 --monitor 1
 ```
 
 Run detectors offline over an existing saved session:
@@ -98,6 +98,39 @@ python tools\replay_summary.py --session assets\replay\sessions\session_YYYYMMDD
 ```
 
 Each replay session contains a `manifest.json`, `frames/`, `replay_results.csv`, and `replay_report.md`. Replay sessions and raw captures are ignored by Git; only the implementation and tests are tracked.
+
+## Replay labelling and dataset preparation
+
+The primary Ground Truth workflow uses the original, unobstructed screenshots. Detector predictions are never converted into labels automatically.
+
+```powershell
+# 1. 擷取素材
+python tools\collect_screenshot.py --duration 120 --interval 0.2 --jpg-quality 80
+
+# 2. 在 frames/ 查看原圖，找出狀態切換幀
+
+# 3. 一次建立 Ground Truth（PowerShell 反引號必須位於每行最後）
+python tools\create_ground_truth.py --latest `
+  --range 1-451:WAITING `
+  --range 452-479:READY `
+  --range 480-506:HOOK `
+  --range 507-517:PRESS `
+  --range 518-529:IGNORE `
+  --range 530-558:IDLE `
+  --range 559-600:WAITING
+
+# 4. 所有 session 標註完成後，統一準備資料集
+python tools\prepare_training_dataset.py --seed 42 --rebuild
+
+# 5. 查看資料報告
+python tools\dataset_report.py
+```
+
+`create_ground_truth.py` accepts `--latest` or `--session session_xxx`, one or more `--range START-END:STATE` arguments, and `--force` for an intentional replacement. Valid states are `IDLE`, `WAITING`, `READY`, `HOOK`, `PRESS`, `GET`, and `IGNORE`; a session does not need a `GET` segment. Ranges must cover frame 1 through the final frame exactly once, without gaps or overlaps. The command previews the complete coverage and refuses a non-interactive overwrite unless `--force` is supplied.
+
+`tools/annotate_ground_truth.py` remains available only as an optional experimental overlay tool. Because its overlay can obscure UI details, it is not part of the recommended quick-start labelling flow.
+
+The fixed dataset split is session-based: four train sessions, one validation session, and two held-out test sessions. Only train rows are balanced. Validation and test preserve every non-`IGNORE` frame and are marked `evaluation_only` in the manifests. This stage prepares crops and manifests only; it does not train a model.
 
 ## Future phases
 

@@ -15,6 +15,9 @@ MANIFEST_FIELDS = (
     "crop_path",
     "label",
     "original_state",
+    "split",
+    "selected_for_training",
+    "excluded_reason",
     "is_boundary",
     "width",
     "height",
@@ -34,6 +37,9 @@ class ManifestRow:
     crop_path: str
     label: str
     original_state: str
+    split: str
+    selected_for_training: bool
+    excluded_reason: str
     is_boundary: bool
     width: int
     height: int
@@ -42,6 +48,7 @@ class ManifestRow:
     def to_csv(self) -> dict[str, str | int]:
         data = asdict(self)
         data["is_boundary"] = "true" if self.is_boundary else "false"
+        data["selected_for_training"] = "true" if self.selected_for_training else "false"
         return data
 
 
@@ -61,6 +68,9 @@ def read_manifest(path: str | Path) -> list[ManifestRow]:
                 crop_path=row["crop_path"],
                 label=row["label"],
                 original_state=row["original_state"],
+                split=row["split"],
+                selected_for_training=row["selected_for_training"].lower() == "true",
+                excluded_reason=row["excluded_reason"],
                 is_boundary=row["is_boundary"].lower() == "true",
                 width=int(row["width"]),
                 height=int(row["height"]),

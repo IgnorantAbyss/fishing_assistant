@@ -166,7 +166,13 @@ def annotate_session(session_path: str | Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Offline transition-marker editor for replay ground truth.")
+    parser = argparse.ArgumentParser(
+        description="Optional experimental overlay editor for replay ground truth.",
+        epilog=(
+            "This tool displays an overlay. The recommended workflow is to inspect original frames "
+            "and use tools/create_ground_truth.py --range."
+        ),
+    )
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--session", type=Path)
     selection.add_argument("--latest", action="store_true")

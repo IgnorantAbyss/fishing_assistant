@@ -143,6 +143,7 @@ def _process_crop(
     config: DatasetConfig,
     index: ManifestIndex,
     dry_run: bool,
+    split_name: str,
 ) -> tuple[str, int]:
     encoded = encode_crop(
         image, config.dataset.crop_format, config.dataset.crop_jpg_quality
@@ -162,6 +163,9 @@ def _process_crop(
         crop_path=relative_crop.as_posix(),
         label=label,
         original_state=sample.original_state,
+        split=split_name,
+        selected_for_training=split_name in {"train", "unassigned"},
+        excluded_reason="" if split_name in {"train", "unassigned"} else "evaluation_only",
         is_boundary=sample.is_boundary,
         width=int(image.shape[1]),
         height=int(image.shape[0]),
@@ -259,6 +263,7 @@ def build_dataset(
                     config=config,
                     index=index,
                     dry_run=dry_run,
+                    split_name=split.split_for(session.session_id),
                 )
                 if classification == "duplicate_crop":
                     duplicate_images += 1

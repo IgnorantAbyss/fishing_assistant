@@ -30,6 +30,20 @@ class ScannedSession:
     source_size_bytes: int
 
 
+@dataclass(frozen=True)
+class SessionScanStatus:
+    session_id: str
+    is_trial: bool
+    frames_exists: bool
+    manifest_exists: bool
+    ground_truth_exists: bool
+    frame_count: int
+    ground_truth_valid: bool
+    eligible: bool
+    excluded_reason: str
+    session: ScannedSession | None
+
+
 def scan_session(path: str | Path) -> ScannedSession:
     session_path = Path(path)
     required = (session_path / "frames", session_path / "manifest.json", session_path / "ground_truth.yaml")
@@ -98,3 +112,90 @@ def scan_sessions(
             continue
         scanned.append(scan_session(path))
     return scanned
+
+
+def scan_session_statuses(
+    root: str | Path = DEFAULT_SESSION_ROOT, *, trial_session_ids: set[str] | None = None
+) -> list[SessionScanStatus]:
+    root_path = Path(root)
+    trial_ids = trial_session_ids or set()
+    statuses: list[SessionScanStatus] = []
+    for path in sorted(item for item in root_path.glob("session_*") if item.is_dir()):
+        frames_exists = (path / "frames").is_dir()
+        manifest_exists = (path / "manifest.json").is_file()
+        ground_truth_exists = (path / "ground_truth.yaml").is_file()
+        is_trial = path.name in trial_ids
+        if is_trial:
+            statuses.append(
+                SessionScanStatus(
+                    path.name,
+                    True,
+                    frames_exists,
+                    manifest_exists,
+                    ground_truth_exists,
+                    0,
+                    False,
+                    False,
+                    "trial_session",
+                    None,
+                )
+            )
+            continue
+        missing = [
+            name
+            for name, exists in (
+                ("frames", frames_exists),
+                ("manifest.json", manifest_exists),
+                ("ground_truth.yaml", ground_truth_exists),
+            )
+            if not exists
+        ]
+        if missing:
+            statuses.append(
+                SessionScanStatus(
+                    path.name,
+                    False,
+                    frames_exists,
+                    manifest_exists,
+                    ground_truth_exists,
+                    0,
+                    False,
+                    False,
+                    "missing: " + ", ".join(missing),
+                    None,
+                )
+            )
+            continue
+        try:
+            session = scan_session(path)
+        except SessionScanError as exc:
+            statuses.append(
+                SessionScanStatus(
+                    path.name,
+                    False,
+                    frames_exists,
+                    manifest_exists,
+                    ground_truth_exists,
+                    0,
+                    False,
+                    False,
+                    str(exc),
+                    None,
+                )
+            )
+            continue
+        statuses.append(
+            SessionScanStatus(
+                path.name,
+                False,
+                True,
+                True,
+                True,
+                session.frame_count,
+                True,
+                True,
+                "",
+                session,
+            )
+        )
+    return statuses

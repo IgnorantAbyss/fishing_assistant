@@ -79,7 +79,8 @@ def write_ground_truth(
     destination = Path(path)
     normalized = validate_segments(segments, frame_count)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("w", encoding="utf-8", newline="\n") as file:
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="\n") as file:
         yaml.dump(
             {"segments": normalized},
             file,
@@ -87,6 +88,7 @@ def write_ground_truth(
             allow_unicode=True,
             sort_keys=False,
         )
+    temporary.replace(destination)
     return destination
 
 

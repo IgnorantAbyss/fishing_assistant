@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Callable, Hashable, Mapping, Sequence
 
 from src.dataset import BoundarySampling, SamplingRule
 from src.replay_ground_truth import IGNORE_STATE
@@ -14,6 +15,29 @@ class SampledFrame:
     frame_index: int
     original_state: str
     is_boundary: bool
+
+
+@dataclass(frozen=True)
+class BalanceCandidate:
+    session_id: str
+    frame_index: int
+    original_state: str
+    label: str
+    split: str
+    is_boundary: bool
+
+    @property
+    def key(self) -> tuple[str, int, str]:
+        return self.session_id, self.frame_index, self.label
+
+
+@dataclass(frozen=True)
+class BalanceSelection:
+    selected_keys: frozenset[tuple[str, int, str]]
+    requested_cap: int
+    effective_cap: int
+    boundary_kept: int
+    boundary_overflow: int
 
 
 def boundary_frame_indexes(
@@ -46,6 +70,68 @@ def uniform_indexes(indexes: Sequence[int], count: int) -> list[int]:
         return [ordered[len(ordered) // 2]]
     positions = [round(position * (len(ordered) - 1) / (count - 1)) for position in range(count)]
     return [ordered[position] for position in positions]
+
+
+def _uniform_candidates(
+    candidates: Sequence[BalanceCandidate], count: int
+) -> list[BalanceCandidate]:
+    ordered = sorted(candidates, key=lambda item: (item.session_id, item.frame_index, item.label))
+    if count <= 0 or not ordered:
+        return []
+    if count >= len(ordered):
+        return ordered
+    positions = uniform_indexes(list(range(len(ordered))), count)
+    return [ordered[position] for position in positions]
+
+
+def select_balanced_candidates(
+    candidates: Sequence[BalanceCandidate],
+    cap: int,
+    *,
+    group_key: Callable[[BalanceCandidate], Hashable],
+) -> BalanceSelection:
+    """Select a deterministic, boundary-first sample distributed across groups."""
+    unique = {
+        candidate.key: candidate for candidate in candidates
+    }
+    ordered = sorted(unique.values(), key=lambda item: (item.session_id, item.frame_index, item.label))
+    boundary = [candidate for candidate in ordered if candidate.is_boundary]
+    effective_cap = max(cap, len(boundary))
+    if len(ordered) <= effective_cap:
+        return BalanceSelection(
+            frozenset(candidate.key for candidate in ordered),
+            cap,
+            effective_cap,
+            len(boundary),
+            max(0, len(boundary) - cap),
+        )
+
+    selected = {candidate.key: candidate for candidate in boundary}
+    groups: dict[Hashable, list[BalanceCandidate]] = defaultdict(list)
+    for candidate in ordered:
+        if candidate.key not in selected:
+            groups[group_key(candidate)].append(candidate)
+    group_names = sorted(groups, key=str)
+    remaining_slots = effective_cap - len(selected)
+    if group_names and remaining_slots > 0:
+        quota, extra = divmod(remaining_slots, len(group_names))
+        for index, name in enumerate(group_names):
+            amount = quota + (1 if index < extra else 0)
+            for candidate in _uniform_candidates(groups[name], amount):
+                selected[candidate.key] = candidate
+
+    remaining_slots = effective_cap - len(selected)
+    if remaining_slots > 0:
+        pool = [candidate for candidate in ordered if candidate.key not in selected]
+        for candidate in _uniform_candidates(pool, remaining_slots):
+            selected[candidate.key] = candidate
+    return BalanceSelection(
+        frozenset(selected),
+        cap,
+        effective_cap,
+        len(boundary),
+        max(0, len(boundary) - cap),
+    )
 
 
 def _sample_state(

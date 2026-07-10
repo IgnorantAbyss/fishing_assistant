@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from src.dataset.roi_exporter import PROMPT_LABEL_MAP, SPECIAL_LABEL_MAP
-from src.dataset.session_scanner import SessionScanError, scan_session
+from src.dataset.session_scanner import SessionScanError, scan_session, scan_session_statuses
 from src.dataset.validation import validate_dataset
 from src.replay_ground_truth import write_ground_truth
 from src.replay_session import ReplaySession
@@ -141,3 +141,15 @@ def test_incremental_builder_materializes_unique_crops_and_valid_manifest(tmp_pa
     assert validation.valid is True
     assert len(validation.prompt_rows) == 1
     assert len(validation.special_rows) == 1
+
+
+def test_trial_session_is_excluded_without_becoming_validation_error(tmp_path: Path) -> None:
+    trial = tmp_path / "session_trial"
+    trial.mkdir()
+
+    statuses = scan_session_statuses(tmp_path, trial_session_ids={"session_trial"})
+
+    assert len(statuses) == 1
+    assert statuses[0].is_trial is True
+    assert statuses[0].eligible is False
+    assert statuses[0].excluded_reason == "trial_session"

@@ -18,14 +18,27 @@ SPLIT_NAMES = ("train", "validation", "test")
 
 
 @dataclass(frozen=True)
+class ExcludedSession:
+    session_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class SessionSplit:
     train: tuple[str, ...]
     validation: tuple[str, ...]
     test: tuple[str, ...]
     unassigned: tuple[str, ...]
+    seed: int | None = None
+    excluded: tuple[ExcludedSession, ...] = ()
 
-    def as_dict(self) -> dict[str, list[str]]:
+    def as_dict(self) -> dict[str, object]:
         return {
+            "seed": self.seed,
+            "excluded": [
+                {"session_id": item.session_id, "reason": item.reason}
+                for item in self.excluded
+            ],
             "train": list(self.train),
             "validation": list(self.validation),
             "test": list(self.test),
@@ -33,6 +46,8 @@ class SessionSplit:
         }
 
     def split_for(self, session_id: str) -> str:
+        if any(item.session_id == session_id for item in self.excluded):
+            return "excluded"
         for name in (*SPLIT_NAMES, "unassigned"):
             if session_id in getattr(self, name):
                 return name
@@ -61,6 +76,12 @@ def validate_session_split(split: SessionSplit) -> None:
                     f"Session {session_id} appears in both {previous} and {name} splits"
                 )
             seen[session_id] = name
+    for item in split.excluded:
+        if item.session_id in seen:
+            raise ValueError(
+                f"Excluded session {item.session_id} also appears in {seen[item.session_id]} split"
+            )
+        seen[item.session_id] = "excluded"
 
 
 def load_session_split(path: str | Path, session_ids: Iterable[str]) -> SessionSplit:
@@ -78,10 +99,33 @@ def load_session_split(path: str | Path, session_ids: Iterable[str]) -> SessionS
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise ValueError(f"session_split.{name} must be a list of session ids")
         parsed[name] = tuple(value)
+    seed = data.get("seed")
+    if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
+        raise ValueError("session_split.seed must be an integer")
+    raw_excluded = data.get("excluded", [])
+    if not isinstance(raw_excluded, list):
+        raise ValueError("session_split.excluded must be a list")
+    excluded: list[ExcludedSession] = []
+    for item in raw_excluded:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("session_id"), str)
+            or not isinstance(item.get("reason"), str)
+        ):
+            raise ValueError("Each excluded session requires session_id and reason")
+        excluded.append(ExcludedSession(item["session_id"], item["reason"]))
     assigned = set().union(*(set(parsed[name]) for name in SPLIT_NAMES))
-    parsed["unassigned"] = tuple(sorted((set(parsed["unassigned"]) | set(known)) - assigned))
+    excluded_ids = {item.session_id for item in excluded}
+    parsed["unassigned"] = tuple(
+        sorted(((set(parsed["unassigned"]) | set(known)) - assigned) - excluded_ids)
+    )
     split = SessionSplit(
-        parsed["train"], parsed["validation"], parsed["test"], parsed["unassigned"]
+        parsed["train"],
+        parsed["validation"],
+        parsed["test"],
+        parsed["unassigned"],
+        seed,
+        tuple(excluded),
     )
     validate_session_split(split)
     return split
@@ -109,6 +153,18 @@ def _validate_rows(
         source_keys.add(key)
         if row.label not in valid_labels:
             errors.append(f"{dataset_name}: invalid label {row.label}")
+        if row.split not in {"train", "validation", "test", "unassigned"}:
+            errors.append(f"{dataset_name}: invalid split {row.split}")
+        if row.split in {"validation", "test"} and (
+            row.selected_for_training or row.excluded_reason != "evaluation_only"
+        ):
+            errors.append(
+                f"{dataset_name}: evaluation row must be excluded from training {key}"
+            )
+        if row.split == "train" and not row.selected_for_training and row.excluded_reason != "majority_downsample":
+            errors.append(f"{dataset_name}: invalid train exclusion reason {key}")
+        if row.selected_for_training and row.excluded_reason:
+            errors.append(f"{dataset_name}: selected row has exclusion reason {key}")
         labels = hash_labels.setdefault(row.sha256, set())
         labels.add(row.label)
         if len(labels) > 1:
@@ -160,6 +216,13 @@ def validate_dataset(
         for name in SPLIT_NAMES:
             if not getattr(split, name):
                 warnings.append(f"{name} has no assigned sessions")
+        for dataset_name, rows in (("prompt", prompt_rows), ("special", special_rows)):
+            for row in rows:
+                expected_split = split.split_for(row.session_id)
+                if row.split != expected_split:
+                    errors.append(
+                        f"{dataset_name}: {row.session_id} manifest split={row.split}, expected={expected_split}"
+                    )
     except ValueError as exc:
         errors.append(str(exc))
     for dataset_name, rows, labels in (

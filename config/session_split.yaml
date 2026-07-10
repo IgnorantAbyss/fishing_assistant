@@ -1,0 +1,18 @@
+seed: 42
+
+excluded:
+  - session_id: session_20260709_192231
+    reason: trial_session
+
+train:
+  - session_20260709_192315
+  - session_20260710_061220
+  - session_20260710_123210
+  - session_20260710_124419
+
+validation:
+  - session_20260710_125441
+
+test:
+  - session_20260710_130308
+  - session_20260710_131254
