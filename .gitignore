@@ -18,5 +18,8 @@ reports/prompt_classifier_v1/contact_sheets/
 reports/prompt_classifier_v1/validation_errors/
 reports/prompt_classifier_v1/final_test_errors/
 reports/prompt_classifier_v1/*.png
+reports/prompt_classifier_v1/failure_contact_sheets/
+reports/prompt_classifier_v1/saliency/
+reports/prompt_classifier_v1/cross_label_near_duplicates.jpg
 *.mp4
 *.avi

@@ -137,7 +137,7 @@ def latest_session(root: str | Path = DEFAULT_SESSION_ROOT) -> Path:
     sessions = [path for path in root_path.glob("session_*") if path.is_dir()]
     if not sessions:
         raise FileNotFoundError(f"No replay sessions found in {root_path}")
-    return max(sessions, key=lambda path: path.stat().st_mtime)
+    return max(sessions, key=_session_created_at)
 
 
 def _session_created_at(path: Path) -> datetime:
