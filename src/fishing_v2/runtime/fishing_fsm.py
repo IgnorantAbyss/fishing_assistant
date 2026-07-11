@@ -1,4 +1,4 @@
-"""Action-aware hybrid fishing FSM with specialized-panel confirmation."""
+"""Action-aware hybrid fishing FSM with explicit propose/apply causality."""
 
 from __future__ import annotations
 
@@ -43,6 +43,15 @@ class FSMResult:
     transition_reason: str
     changed: bool
     telemetry: tuple[str, ...] = ()
+    visual_acknowledgement: str | None = None
+
+
+@dataclass(frozen=True)
+class ActionCommitResult:
+    action_applied: bool
+    previous_state: RuntimeState
+    next_state: RuntimeState
+    reason: str
 
 
 class FishingFSM:
@@ -59,20 +68,33 @@ class FishingFSM:
         self._candidate: RuntimeState | None = None
         self._candidate_frames = 0
         self._conflict_since: float | None = None
-        self._actions_sent: set[tuple[RuntimeState, ActionIntent]] = set()
-        self._press_action_proposed = False
+        self._actions_applied: set[tuple[RuntimeState, ActionIntent]] = set()
+        self._pending_request: ActionRequest | None = None
         self._press_waiting_for_clear = False
         self._get_started_at: float | None = initial_timestamp if initial_state == RuntimeState.GET else None
-        self._get_last_attempt_at: float | None = None
+        self._get_last_applied_at: float | None = None
         self._get_attempts = 0
         self.policy = TransitionPolicy()
+
+    @property
+    def actions_applied(self) -> frozenset[tuple[RuntimeState, ActionIntent]]:
+        return frozenset(self._actions_applied)
 
     @staticmethod
     def _none(reason: str = "no_action") -> ActionRequest:
         return ActionRequest(ActionIntent.NONE, 0.0, reason)
 
-    def _held(self, previous: RuntimeState, reason: str, telemetry: tuple[str, ...] = ()) -> FSMResult:
-        return FSMResult(previous, previous, self._none(reason), reason, False, telemetry)
+    def _held(
+        self,
+        previous: RuntimeState,
+        reason: str,
+        telemetry: tuple[str, ...] = (),
+        visual_acknowledgement: str | None = None,
+    ) -> FSMResult:
+        return FSMResult(
+            previous, previous, self._none(reason), reason, False,
+            telemetry, visual_acknowledgement,
+        )
 
     def force_state(self, state: RuntimeState, timestamp: float, reason: str = "explicit_override") -> FSMResult:
         previous = self.state
@@ -81,11 +103,19 @@ class FishingFSM:
         self._candidate = None
         self._candidate_frames = 0
         self._conflict_since = None
+        self._pending_request = None
         if state == RuntimeState.GET:
             self._reset_get_retry(timestamp)
         return FSMResult(previous, state, self._none(), reason, previous != state)
 
-    def _transition(self, target: RuntimeState, timestamp: float, reason: str) -> FSMResult:
+    def _transition(
+        self,
+        target: RuntimeState,
+        timestamp: float,
+        reason: str,
+        *,
+        visual_acknowledgement: str | None = None,
+    ) -> FSMResult:
         previous = self.state
         self.policy.require_legal(previous, target)
         self.state = target
@@ -96,12 +126,14 @@ class FishingFSM:
         if target == RuntimeState.GET:
             self._reset_get_retry(timestamp)
         if target == RuntimeState.IDLE and previous != RuntimeState.IDLE:
-            self._actions_sent.clear()
-            self._press_action_proposed = False
+            self._actions_applied.clear()
             self._press_waiting_for_clear = False
-        return FSMResult(previous, target, self._none(), reason, previous != target)
+        return FSMResult(
+            previous, target, self._none(), reason, previous != target,
+            visual_acknowledgement=visual_acknowledgement,
+        )
 
-    def _emit_once(
+    def _propose(
         self,
         intent: ActionIntent,
         confidence: float,
@@ -110,17 +142,48 @@ class FishingFSM:
         payload: dict | None = None,
     ) -> ActionRequest:
         key = (self.state, intent)
-        if key in self._actions_sent:
-            return self._none("action_already_proposed_in_state")
-        self._actions_sent.add(key)
-        return ActionRequest(intent, confidence, reason, payload or {})
+        if key in self._actions_applied and intent != ActionIntent.COLLECT:
+            return self._none("action_already_applied_in_state")
+        request = ActionRequest(intent, confidence, reason, payload or {})
+        self._pending_request = request
+        return request
+
+    def discard_proposal(self) -> None:
+        self._pending_request = None
+
+    def commit_action(self, request: ActionRequest, timestamp: float) -> ActionCommitResult:
+        previous = self.state
+        if request.intent == ActionIntent.NONE or self._pending_request != request:
+            return ActionCommitResult(False, previous, previous, "no_matching_proposed_action")
+        key = (self.state, request.intent)
+        if key in self._actions_applied and request.intent != ActionIntent.COLLECT:
+            self._pending_request = None
+            return ActionCommitResult(False, previous, previous, "action_already_applied_in_state")
+        self._actions_applied.add(key)
+        self._pending_request = None
+        target = {
+            ActionIntent.CAST: RuntimeState.CAST_PENDING,
+            ActionIntent.START_HOOK: RuntimeState.HOOK_PENDING,
+            ActionIntent.HOOK_ACTION: RuntimeState.RESULT_PENDING,
+            ActionIntent.PRESS_SEQUENCE: RuntimeState.RESULT_PENDING,
+        }.get(request.intent)
+        if request.intent == ActionIntent.COLLECT:
+            self._get_attempts += 1
+            self._get_last_applied_at = float(timestamp)
+            return ActionCommitResult(True, previous, previous, "collect_action_applied")
+        if target is None or not self.policy.is_legal(self.state, target):
+            return ActionCommitResult(False, previous, previous, "action_not_applicable_in_current_state")
+        if request.intent == ActionIntent.PRESS_SEQUENCE:
+            self._press_waiting_for_clear = True
+        moved = self._transition(target, timestamp, f"{request.intent.value.lower()}_action_applied")
+        return ActionCommitResult(True, previous, moved.next_state, moved.transition_reason)
 
     def _timeout(self, timestamp: float) -> float:
         return float(timestamp) - self.state_since
 
     def _reset_get_retry(self, timestamp: float) -> None:
         self._get_started_at = float(timestamp)
-        self._get_last_attempt_at = None
+        self._get_last_applied_at = None
         self._get_attempts = 0
 
     @staticmethod
@@ -129,15 +192,23 @@ class FishingFSM:
 
     @staticmethod
     def _specialized_confirmed(target: RuntimeState, bundle: ObservationBundle | None) -> bool:
-        if target == RuntimeState.HOOK:
-            return bool(bundle and bundle.hook and bundle.hook.detected)
-        if target == RuntimeState.PRESS:
-            return bool(bundle and bundle.press and bundle.press.detected)
-        if target == RuntimeState.GET:
-            return bool(bundle and bundle.get and bundle.get.detected)
-        return True
+        observation = {
+            RuntimeState.HOOK: bundle.hook if bundle else None,
+            RuntimeState.PRESS: bundle.press if bundle else None,
+            RuntimeState.GET: bundle.get if bundle else None,
+        }.get(target)
+        return bool(observation and observation.detected) if target in {
+            RuntimeState.HOOK, RuntimeState.PRESS, RuntimeState.GET,
+        } else True
 
-    def _stable_transition(self, target: RuntimeState, timestamp: float, reason: str) -> FSMResult | None:
+    def _stable_transition(
+        self,
+        target: RuntimeState,
+        timestamp: float,
+        reason: str,
+        *,
+        visual_acknowledgement: str | None = None,
+    ) -> FSMResult | None:
         if target == self._candidate:
             self._candidate_frames += 1
         else:
@@ -145,54 +216,114 @@ class FishingFSM:
             self._candidate_frames = 1
         if self._candidate_frames < max(1, self.config.stable_frames):
             return None
-        return self._transition(target, timestamp, reason)
+        return self._transition(
+            target, timestamp, reason,
+            visual_acknowledgement=visual_acknowledgement,
+        )
 
     def _advance_get(
-        self, evidence: StateEvidence, timestamp: float, bundle: ObservationBundle | None
+        self,
+        evidence: StateEvidence,
+        timestamp: float,
+        bundle: ObservationBundle | None,
+        *,
+        recorded_observation: bool,
     ) -> FSMResult:
         previous = self.state
         panel = bundle.get if bundle else None
         if panel is not None and not panel.detected:
-            return self._transition(RuntimeState.COLLECT_PENDING, timestamp, "get_panel_disappeared")
+            return self._transition(
+                RuntimeState.COLLECT_PENDING,
+                timestamp,
+                "get_panel_disappeared",
+                visual_acknowledgement="qualified_get_panel_disappeared",
+            )
         if panel is None or not panel.detected:
             return self._held(previous, "waiting_for_get_panel_observation")
         started = self._get_started_at if self._get_started_at is not None else self.state_since
         duration = float(timestamp) - started
-        if duration >= self.config.get_max_duration_seconds:
+        if not recorded_observation and duration >= self.config.get_max_duration_seconds:
             return self._transition(RuntimeState.SYNC_REQUIRED, timestamp, "get_retry_duration_exceeded")
-        if self._get_attempts >= self.config.get_max_attempts:
+        if not recorded_observation and self._get_attempts >= self.config.get_max_attempts:
             return self._transition(RuntimeState.SYNC_REQUIRED, timestamp, "get_retry_attempts_exceeded")
-        due = (
-            self._get_last_attempt_at is None
-            or float(timestamp) - self._get_last_attempt_at >= self.config.get_retry_interval_seconds
+        due = recorded_observation or (
+            self._get_last_applied_at is None
+            or float(timestamp) - self._get_last_applied_at >= self.config.get_retry_interval_seconds
         )
         if not due:
             return self._held(previous, "get_retry_interval_not_elapsed")
-        self._get_attempts += 1
-        self._get_last_attempt_at = float(timestamp)
-        action = ActionRequest(
+        action = self._propose(
             ActionIntent.COLLECT,
             max(evidence.confidence, panel.confidence),
             "get_panel_present_collect_retry",
-            {
-                "attempt": self._get_attempts,
+            payload={
+                "attempt": self._get_attempts + 1,
                 "max_attempts": self.config.get_max_attempts,
                 "elapsed_seconds": duration,
                 "max_duration_seconds": self.config.get_max_duration_seconds,
             },
         )
-        return FSMResult(previous, previous, action, "get_collect_retry_due", False)
+        return FSMResult(previous, previous, action, "get_collect_proposed", False)
 
     def advance(
         self,
         evidence: StateEvidence,
         timestamp: float,
         bundle: ObservationBundle | None = None,
+        *,
+        recorded_observation: bool = False,
     ) -> FSMResult:
         previous = self.state
+        self._pending_request = None
         failed_telemetry = ("FAILED",) if "FAILED" in evidence.reason.upper() else ()
         if self.state == RuntimeState.SYNC_REQUIRED:
             return self._held(previous, "sync_required_blocks_actions", failed_telemetry)
+        if self.state == RuntimeState.SYNCING:
+            return self._held(previous, "startup_synchronizer_owns_transition", failed_telemetry)
+
+        if self.state == RuntimeState.GET:
+            return self._advance_get(
+                evidence, timestamp, bundle,
+                recorded_observation=recorded_observation,
+            )
+
+        prompt = self._prompt_kind(bundle)
+
+        # A qualified GET panel has priority over every prompt, including
+        # recorded PRESS_INSTRUCTION and IDLE_CAST acknowledgements.
+        if bundle and bundle.get and bundle.get.detected and self.policy.is_legal(self.state, RuntimeState.GET):
+            return self._transition(
+                RuntimeState.GET,
+                timestamp,
+                "get_panel_priority",
+                visual_acknowledgement="qualified_get_panel_present",
+            )
+
+        if recorded_observation:
+            if self.state == RuntimeState.READY and prompt == PromptObservationKind.HOOK_INSTRUCTION:
+                return self._transition(
+                    RuntimeState.HOOK_PENDING,
+                    timestamp,
+                    "recorded_hook_instruction_acknowledgement",
+                    visual_acknowledgement="HOOK_INSTRUCTION",
+                )
+            if self.state == RuntimeState.HOOK and prompt in {
+                PromptObservationKind.PRESS_INSTRUCTION,
+                PromptObservationKind.IDLE_CAST,
+            }:
+                return self._transition(
+                    RuntimeState.RESULT_PENDING,
+                    timestamp,
+                    "recorded_hook_result_prompt_acknowledgement",
+                    visual_acknowledgement=prompt.value,
+                )
+            if self.state == RuntimeState.PRESS and prompt == PromptObservationKind.IDLE_CAST:
+                return self._transition(
+                    RuntimeState.RESULT_PENDING,
+                    timestamp,
+                    "recorded_press_result_prompt_acknowledgement",
+                    visual_acknowledgement=prompt.value,
+                )
 
         timeout_limits = {
             RuntimeState.CAST_PENDING: self.config.cast_pending_timeout_sec,
@@ -203,38 +334,13 @@ class FishingFSM:
         if self.state in timeout_limits and self._timeout(timestamp) >= timeout_limits[self.state]:
             return self._transition(RuntimeState.SYNC_REQUIRED, timestamp, f"{self.state.value.lower()}_timeout")
 
-        if self.state == RuntimeState.GET:
-            return self._advance_get(evidence, timestamp, bundle)
-
-        # A visible GET panel has priority over every prompt, including IDLE_CAST.
-        if bundle and bundle.get and bundle.get.detected and self.policy.is_legal(self.state, RuntimeState.GET):
-            moved = self._stable_transition(RuntimeState.GET, timestamp, "get_panel_priority")
-            return moved or self._held(previous, "get_panel_candidate_not_stable")
-
-        if self.state == RuntimeState.PRESS:
-            panel = bundle.press if bundle else None
-            if self._press_action_proposed:
-                self._press_waiting_for_clear = bool(panel and panel.detected)
-                return self._transition(RuntimeState.RESULT_PENDING, timestamp, "press_action_proposed")
-            if panel and panel.detected and panel.sequence:
-                action = self._emit_once(
-                    ActionIntent.PRESS_SEQUENCE,
-                    max(evidence.confidence, panel.confidence),
-                    "press_panel_sequence_confirmed",
-                    payload={"sequence": panel.sequence},
-                )
-                self._press_action_proposed = action.intent == ActionIntent.PRESS_SEQUENCE
-                return FSMResult(previous, previous, action, "press_sequence_ready", False)
-            return self._held(previous, "press_panel_active_awaiting_sequence", failed_telemetry)
-
         target = evidence.recommended_state
         if self.state == RuntimeState.WAITING and target == RuntimeState.IDLE:
-            # Residual/single-frame IDLE hints never pull WAITING backward.
             target = None
         if target in {RuntimeState.HOOK, RuntimeState.PRESS, RuntimeState.GET} and not self._specialized_confirmed(target, bundle):
             target = None
         if self.state == RuntimeState.RESULT_PENDING and target == RuntimeState.IDLE:
-            if self._prompt_kind(bundle) != PromptObservationKind.IDLE_CAST:
+            if prompt != PromptObservationKind.IDLE_CAST:
                 target = None
         if self.state == RuntimeState.RESULT_PENDING and self._press_waiting_for_clear:
             if bundle and bundle.press and bundle.press.detected and target == RuntimeState.PRESS:
@@ -251,48 +357,68 @@ class FishingFSM:
         self._conflict_since = None
 
         if target is not None and target != self.state:
-            moved = self._stable_transition(target, timestamp, f"stable_{evidence.reason}")
+            visual = None
+            if target == RuntimeState.HOOK:
+                visual = "qualified_active_hook_bar"
+            elif target == RuntimeState.PRESS:
+                visual = "qualified_press_panel"
+            elif target == RuntimeState.GET:
+                visual = "qualified_get_panel_present"
+            elif bundle and bundle.prompt:
+                visual = bundle.prompt.kind.value
+            moved = self._stable_transition(
+                target,
+                timestamp,
+                f"stable_{evidence.reason}",
+                visual_acknowledgement=visual,
+            )
             if moved is None:
                 return self._held(previous, "candidate_not_stable", failed_telemetry)
             if target == RuntimeState.PRESS:
                 panel = bundle.press if bundle else None
                 action = self._none("press_panel_has_no_sequence")
                 if panel and panel.sequence:
-                    action = self._emit_once(
+                    action = self._propose(
                         ActionIntent.PRESS_SEQUENCE,
                         max(evidence.confidence, panel.confidence),
                         "press_panel_sequence_confirmed",
                         payload={"sequence": panel.sequence},
                     )
-                    self._press_action_proposed = action.intent == ActionIntent.PRESS_SEQUENCE
-                return FSMResult(moved.previous_state, moved.next_state, action, moved.transition_reason, True)
+                return FSMResult(
+                    moved.previous_state, moved.next_state, action,
+                    moved.transition_reason, True,
+                    visual_acknowledgement=moved.visual_acknowledgement,
+                )
             return moved
         self._candidate = None
         self._candidate_frames = 0
 
-        prompt = self._prompt_kind(bundle)
         if self.state == RuntimeState.IDLE:
             get_guard_passed = bool(bundle and bundle.get is not None and not bundle.get.detected)
             if prompt == PromptObservationKind.IDLE_CAST and get_guard_passed:
-                action = self._emit_once(ActionIntent.CAST, evidence.confidence, "idle_cast_prompt_and_get_guard_passed")
-                if action.intent != ActionIntent.NONE:
-                    moved = self._transition(RuntimeState.CAST_PENDING, timestamp, "cast_intent_proposed")
-                    return FSMResult(previous, moved.next_state, action, moved.transition_reason, True)
+                action = self._propose(
+                    ActionIntent.CAST,
+                    evidence.confidence,
+                    "idle_cast_prompt_and_get_guard_passed",
+                )
+                return FSMResult(previous, previous, action, "cast_intent_proposed", False)
             return self._held(previous, "idle_waiting_for_prompt_or_get_guard", failed_telemetry)
 
         if self.state == RuntimeState.READY:
             if prompt == PromptObservationKind.READY_BITE:
-                action = self._emit_once(ActionIntent.START_HOOK, evidence.confidence, "ready_bite_confirmed")
-                if action.intent != ActionIntent.NONE:
-                    moved = self._transition(RuntimeState.HOOK_PENDING, timestamp, "start_hook_intent_proposed")
-                    return FSMResult(previous, moved.next_state, action, moved.transition_reason, True)
+                action = self._propose(
+                    ActionIntent.START_HOOK,
+                    evidence.confidence,
+                    "ready_bite_confirmed",
+                )
+                return FSMResult(previous, previous, action, "start_hook_intent_proposed", False)
             return self._held(previous, "ready_waiting_for_confirmed_bite", failed_telemetry)
 
         if self.state == RuntimeState.HOOK:
             hook = bundle.hook if bundle else None
             position = hook.fill_ratio if hook and hook.detected else None
             if position is not None and self.config.hook_safe_zone_start <= position <= self.config.hook_safe_zone_end:
-                action = self._emit_once(
+                action = self._propose(
                     ActionIntent.HOOK_ACTION,
                     max(evidence.confidence, hook.confidence),
                     "hook_cursor_entered_configured_safe_zone",
@@ -302,9 +428,19 @@ class FishingFSM:
                         "safe_zone_end": self.config.hook_safe_zone_end,
                     },
                 )
-                if action.intent != ActionIntent.NONE:
-                    moved = self._transition(RuntimeState.RESULT_PENDING, timestamp, "hook_action_proposed")
-                    return FSMResult(previous, moved.next_state, action, moved.transition_reason, True)
+                return FSMResult(previous, previous, action, "hook_action_proposed", False)
             return self._held(previous, "hook_waiting_for_configured_safe_zone", failed_telemetry)
+
+        if self.state == RuntimeState.PRESS:
+            panel = bundle.press if bundle else None
+            if panel and panel.detected and panel.sequence:
+                action = self._propose(
+                    ActionIntent.PRESS_SEQUENCE,
+                    max(evidence.confidence, panel.confidence),
+                    "press_panel_sequence_confirmed",
+                    payload={"sequence": panel.sequence},
+                )
+                return FSMResult(previous, previous, action, "press_sequence_proposed", False)
+            return self._held(previous, "press_panel_active_awaiting_sequence", failed_telemetry)
 
         return self._held(previous, "state_held", failed_telemetry)

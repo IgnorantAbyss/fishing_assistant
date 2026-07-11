@@ -93,5 +93,5 @@ def test_v2_config_action_emission_and_final_test_are_safe() -> None:
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     assert config["safety"]["emit_actions"] is False
     assert config["prompt"]["observer"] == "unimplemented"
-    assert config["prompt"]["roi_status"] == "unapproved"
+    assert config["prompt"]["roi_status"] == "approved"
     assert config["data"]["final_test"] == {"status": "not_collected", "sessions": []}

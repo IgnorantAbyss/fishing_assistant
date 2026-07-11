@@ -22,8 +22,13 @@ runtime_constraints:
 
 prompt:
   observer: unimplemented
-  roi_status: unapproved
-  roi: null
+  roi_status: approved
+  approved_candidate_id: prompt_final_candidate
+  roi:
+    x1: 940
+    y1: 36
+    x2: 1620
+    y2: 100
   roi_source_of_truth: pixel
   roi_review:
     session_ids:

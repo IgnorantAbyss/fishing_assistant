@@ -48,20 +48,70 @@ def _letter_boxes(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
     return sorted((box for box in candidates if box[1] <= top_row + 6), key=lambda box: box[0])
 
 
+def _mixed_progress_boxes(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Split a connected eight-cell live progress row into glyph slots."""
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    rows = [
+        tuple(int(value) for value in stat)
+        for stat in stats[1:count]
+        if stat[1] >= int(mask.shape[0] * 0.45)
+        and stat[2] >= int(mask.shape[1] * 0.35)
+        and stat[3] >= 35
+    ]
+    if not rows:
+        return []
+    x, y, width, height, _ = max(rows, key=lambda item: item[2] * item[3])
+    glyph_height = max(18, min(36, round(height * 0.36)))
+    return [
+        (
+            round(x + width * index / 8),
+            y,
+            round(x + width * (index + 1) / 8),
+            min(mask.shape[0], y + glyph_height),
+        )
+        for index in range(8)
+    ]
+
+
 def _select_glyph_mask(crop: np.ndarray) -> tuple[str, np.ndarray, list[tuple[int, int, int, int]]]:
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     masks = {
         "purple": ((hsv[:, :, 0] >= 125) & (hsv[:, :, 0] <= 170) & (hsv[:, :, 1] >= 60) & (hsv[:, :, 2] >= 65)).astype(np.uint8),
         "teal": ((hsv[:, :, 0] >= 75) & (hsv[:, :, 0] <= 115) & (hsv[:, :, 1] >= 40) & (hsv[:, :, 2] >= 65)).astype(np.uint8),
+        # Live progress recolours completed/current/pending glyphs green, teal,
+        # yellow, and red within the same row. A single-colour mask therefore
+        # returned only the currently highlighted key (Pilot frame 428). This
+        # mixed mask changes component extraction, not detector thresholds.
+        "mixed_live": (
+            (hsv[:, :, 1] >= 50)
+            & (hsv[:, :, 2] >= 50)
+        ).astype(np.uint8),
     }
-    candidates = [(name, mask, _letter_boxes(mask)) for name, mask in masks.items()]
+    candidates = [
+        (
+            name,
+            mask,
+            _mixed_progress_boxes(mask) if name == "mixed_live" else _letter_boxes(mask),
+        )
+        for name, mask in masks.items()
+    ]
     # Eight upper glyph components is a stronger signal than UI colour alone.
     return max(candidates, key=lambda item: (-(abs(len(item[2]) - 8)), len(item[2])))
 
 
-def _glyph(mask: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray:
+def _glyph(
+    mask: np.ndarray,
+    box: tuple[int, int, int, int],
+    *,
+    tighten: bool = False,
+) -> np.ndarray:
     x1, y1, x2, y2 = box
-    return cv2.resize(mask[y1:y2, x1:x2], (24, 32), interpolation=cv2.INTER_NEAREST)
+    crop = mask[y1:y2, x1:x2]
+    if tighten:
+        rows, columns = np.where(crop > 0)
+        if len(rows) and len(columns):
+            crop = crop[rows.min():rows.max() + 1, columns.min():columns.max() + 1]
+    return cv2.resize(crop, (24, 32), interpolation=cv2.INTER_NEAREST)
 
 
 def _templates_from_crop(crop: np.ndarray, sequence: str) -> tuple[dict[str, list[np.ndarray]], str | None]:
@@ -152,9 +202,14 @@ def detect_press_sequence(
     colour_mode, mask, local_boxes = _select_glyph_mask(crop)
     template_sets, template_errors = _load_template_sets()
     templates = template_sets.get(colour_mode, {})
+    if colour_mode == "mixed_live":
+        templates = template_sets.get("teal", {})
     key_boxes: list[dict[str, Any]] = []
     for box in local_boxes:
-        key, confidence = _classify(_glyph(mask, box), templates)
+        key, confidence = _classify(
+            _glyph(mask, box, tighten=colour_mode == "mixed_live"),
+            templates,
+        )
         key_boxes.append(
             {
                 "key": key,
@@ -176,7 +231,7 @@ def detect_press_sequence(
         panel_gray = cv2.cvtColor(frame[panel[1]:panel[3], panel[0]:panel[2]], cv2.COLOR_BGR2GRAY)
         dark_ratio = float(np.mean(panel_gray < 100))
     confidence = float(np.mean([item["confidence"] for item in key_boxes])) if key_boxes else 0.0
-    minimum_cells = 4 if colour_mode == "teal" else 8
+    minimum_cells = 4 if colour_mode in {"teal", "mixed_live"} else 8
     detected = (
         len(key_boxes) >= minimum_cells
         and all(key in "WASD" for key in sequence)

@@ -1,7 +1,7 @@
 # Prompt Final Candidate Review
 
-- Status: **unapproved**
-- Manual review required: **true**
+- Status: **approved** after explicit manual review
+- Manual review completed: **true**
 - Pixel coordinates are the source of truth; normalized coordinates are derived display metadata.
 - Pixel ROI: `[940, 36, 1620, 100]`
 - Derived normalized ROI: `[0.367188, 0.025, 0.632812, 0.069444]`

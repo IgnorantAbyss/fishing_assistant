@@ -38,7 +38,11 @@ def _bundle(
         frame,
         timestamp,
         prompt_observation,
-        HookObservation(hook, 0.98 if hook else 0.0, frame, timestamp, fill_ratio=fill_ratio),
+        HookObservation(
+            hook, 0.98 if hook else 0.0, frame, timestamp,
+            fill_ratio=fill_ratio,
+            evidence={"matched_features": ["hook_bar_rect", "bar_fill"] if hook and fill_ratio else ["hook_bar_rect"] if hook else []},
+        ),
         PressObservation(press, 0.98 if press else 0.0, frame, timestamp, sequence=tuple(sequence)),
         GetObservation(get, 0.98 if get else 0.0, frame, timestamp),
     )
@@ -65,8 +69,9 @@ def test_idle_cast_pending_waiting_flow_requires_get_guard() -> None:
         _evidence(RuntimeState.IDLE), 0.1,
         _bundle(prompt=PromptObservationKind.IDLE_CAST),
     )
-    assert first.next_state == RuntimeState.CAST_PENDING
+    assert first.next_state == RuntimeState.IDLE
     assert first.action_request.intent == ActionIntent.CAST
+    assert fsm.commit_action(first.action_request, 0.1).next_state == RuntimeState.CAST_PENDING
     second = fsm.advance(
         _evidence(RuntimeState.WAITING, frame=2), 0.2,
         _bundle(2, prompt=PromptObservationKind.WAITING_IN_PROGRESS),
@@ -94,8 +99,9 @@ def test_waiting_ready_hook_pending_flow_arms_before_confirmation() -> None:
         _evidence(RuntimeState.READY, frame=2), 0.2,
         _bundle(2, prompt=PromptObservationKind.READY_BITE),
     )
-    assert intent.next_state == RuntimeState.HOOK_PENDING
+    assert intent.next_state == RuntimeState.READY
     assert intent.action_request.intent == ActionIntent.START_HOOK
+    assert fsm.commit_action(intent.action_request, 0.2).next_state == RuntimeState.HOOK_PENDING
 
 
 def test_hook_instruction_cannot_confirm_hook_without_bar() -> None:
@@ -121,8 +127,9 @@ def test_hook_safe_zone_emits_once_without_waiting_for_perfect() -> None:
     )
     assert result.action_request.intent == ActionIntent.HOOK_ACTION
     assert result.action_request.payload["position_ratio"] == 0.70
-    assert result.next_state == RuntimeState.RESULT_PENDING
+    assert result.next_state == RuntimeState.HOOK
     assert 0.70 != 0.95  # The runtime deliberately does not chase the detector's perfect zone.
+    assert fsm.commit_action(result.action_request, 0.1).next_state == RuntimeState.RESULT_PENDING
     repeated = fsm.advance(_evidence(None, frame=2), 0.2, _bundle(2, hook=True, fill_ratio=0.70))
     assert repeated.action_request.intent == ActionIntent.NONE
 
@@ -135,6 +142,7 @@ def test_press_panel_confirms_press_and_residual_panel_does_not_repeat() -> None
     )
     assert entered.next_state == RuntimeState.PRESS
     assert entered.action_request.intent == ActionIntent.PRESS_SEQUENCE
+    assert fsm.commit_action(entered.action_request, 0.1).next_state == RuntimeState.RESULT_PENDING
     returned = fsm.advance(
         _evidence(RuntimeState.PRESS, frame=2), 0.2,
         _bundle(2, press=True, sequence=("W", "A")),

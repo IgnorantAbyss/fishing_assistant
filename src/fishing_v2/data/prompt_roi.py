@@ -106,8 +106,9 @@ def load_roi_candidates(path: str | Path) -> list[PromptROICandidate]:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("manual_approval_required") is not True:
         raise ValueError("Prompt ROI candidates must require manual approval")
-    if data.get("source_of_truth") != "pixel" or data.get("roi_status") != "unapproved":
-        raise ValueError("Prompt ROI review must use pixel source coordinates and remain unapproved")
+    status = data.get("roi_status")
+    if data.get("source_of_truth") != "pixel" or status not in {"unapproved", "approved"}:
+        raise ValueError("Prompt ROI candidates require pixel source coordinates and explicit approval status")
     reference = data.get("runtime_reference")
     if not isinstance(reference, Mapping):
         raise ValueError("Prompt ROI candidates require runtime_reference")
@@ -125,6 +126,10 @@ def load_roi_candidates(path: str | Path) -> list[PromptROICandidate]:
         raise ValueError("Each Prompt ROI candidate must be a mapping")
     if len({item.candidate_id for item in candidates}) != len(candidates):
         raise ValueError("Prompt ROI candidate ids must be unique")
+    if status == "approved" and data.get("approved_candidate_id") not in {
+        item.candidate_id for item in candidates
+    }:
+        raise ValueError("Approved Prompt ROI candidate id is missing from candidate history")
     return candidates
 
 
@@ -136,13 +141,14 @@ def load_approved_prompt_roi(config_path: str | Path) -> PromptROICandidate | No
         return None
     if status != "approved" or prompt.get("roi_source_of_truth") != "pixel":
         raise ValueError("Approved Prompt ROI must explicitly use pixel source coordinates")
+    approved_candidate_id = str(prompt.get("approved_candidate_id", "approved")).strip() or "approved"
     roi = prompt.get("roi")
     constraints = data.get("runtime_constraints", {}) if isinstance(data, dict) else {}
     resolution = constraints.get("resolution", {}) if isinstance(constraints, dict) else {}
     if not isinstance(roi, Mapping) or not isinstance(resolution, Mapping):
         raise ValueError("Approved Prompt ROI requires pixel roi and runtime resolution")
     return _candidate_from_mapping(
-        {"id": "approved", "pixel": roi, "note": "User-approved ROI"},
+        {"id": approved_candidate_id, "pixel": roi, "note": "User-approved ROI"},
         reference_width=_positive_int(resolution, "width"),
         reference_height=_positive_int(resolution, "height"),
     )

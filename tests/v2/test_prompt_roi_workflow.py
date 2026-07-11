@@ -101,11 +101,15 @@ def test_final_candidate_pixel_and_derived_geometry() -> None:
     assert candidate.normalized == pytest.approx((0.3671875, 0.025, 0.6328125, 0.0694444444))
 
 
-def test_candidate_config_cannot_claim_approval() -> None:
+def test_final_candidate_is_explicitly_approved_in_runtime_config() -> None:
     raw = yaml.safe_load(CANDIDATES.read_text(encoding="utf-8"))
     assert raw["manual_approval_required"] is True
-    assert raw["roi_status"] == "unapproved"
-    assert yaml.safe_load(CONFIG.read_text(encoding="utf-8"))["prompt"]["roi"] is None
+    assert raw["roi_status"] == "approved"
+    assert raw["approved_candidate_id"] == "prompt_final_candidate"
+    prompt = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))["prompt"]
+    assert prompt["roi_status"] == "approved"
+    assert prompt["approved_candidate_id"] == "prompt_final_candidate"
+    assert prompt["roi"] == {"x1": 940, "y1": 36, "x2": 1620, "y2": 100}
 
 
 def test_review_labels_are_appended_outside_prompt_content() -> None:
@@ -187,9 +191,9 @@ def test_runtime_modules_do_not_consume_prompt_id() -> None:
     assert "prompt_id" not in runtime_source
 
 
-def test_phase_does_not_create_formal_prompt_ground_truth() -> None:
+def test_only_pilot_prompt_ground_truth_exists() -> None:
     prompt_gt = list((ROOT / "assets" / "replay" / "sessions").glob("session_*/prompt_ground_truth.yaml"))
-    assert prompt_gt == []
+    assert [path.parent.name for path in prompt_gt] == ["session_20260710_130308"]
 
 
 def test_phase_does_not_materialize_prompt_dataset() -> None:

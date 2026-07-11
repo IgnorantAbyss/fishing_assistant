@@ -40,7 +40,11 @@ def _bundle(
         frame,
         timestamp,
         PromptObservation(prompt, 0.95, {prompt.value: 0.95}, "synthetic", frame, timestamp),
-        HookObservation(hook, 0.98 if hook else 0.0, frame, timestamp, fill_ratio=fill_ratio),
+        HookObservation(
+            hook, 0.98 if hook else 0.0, frame, timestamp,
+            fill_ratio=fill_ratio,
+            evidence={"matched_features": ["hook_bar_rect", "bar_fill"] if hook and fill_ratio else ["hook_bar_rect"] if hook else []},
+        ),
         PressObservation(press, 0.98 if press else 0.0, frame, timestamp, sequence=sequence),
         GetObservation(get, 0.98 if get else 0.0, frame, timestamp),
     )
@@ -53,23 +57,39 @@ def _evidence(state: RuntimeState | None, timestamp: float = 0.0, confidence: fl
     )
 
 
-def _controller(state: RuntimeState) -> RuntimeController:
+def _controller(state: RuntimeState, *, emit_actions: bool = False, sink=None) -> RuntimeController:
     return RuntimeController(
         ObservationFusion(),
         FishingFSM(FSMConfig(stable_frames=1), initial_state=state),
-        SafetyPolicy(SafetyConfig(emit_actions=False)),
+        SafetyPolicy(SafetyConfig(emit_actions=emit_actions)),
+        action_sink=sink,
     )
 
 
 def test_ready_action_arms_hook_detector() -> None:
-    result = _controller(RuntimeState.READY).process(
+    class Sink:
+        def emit(self, request): pass
+
+    result = _controller(RuntimeState.READY, emit_actions=True, sink=Sink()).process(
         _bundle(0.1, prompt=PromptObservationKind.READY_BITE),
         foreground=True,
         runtime_environment_supported=True,
     )
     assert result.fsm.next_state == RuntimeState.HOOK_PENDING
     assert result.fsm.action_request.intent == ActionIntent.START_HOOK
-    assert result.activation.hook == DetectorActivationMode.ARMED
+    assert result.action_applied is True
+    assert result.next_activation.hook == DetectorActivationMode.ARMED
+
+
+def test_emit_actions_false_keeps_ready_after_proposal() -> None:
+    result = _controller(RuntimeState.READY).process(
+        _bundle(0.1, prompt=PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+    )
+    assert result.fsm.action_request.intent == ActionIntent.START_HOOK
+    assert result.action_applied is False
+    assert result.fsm.next_state == RuntimeState.READY
 
 
 def test_hook_instruction_uses_burst_without_confirming_hook() -> None:
@@ -89,19 +109,23 @@ def test_hook_bar_is_required_for_hook_active() -> None:
         runtime_environment_supported=True,
     )
     assert result.fsm.next_state == RuntimeState.HOOK
-    assert result.activation.hook == DetectorActivationMode.ACTIVE
+    assert result.next_activation.hook == DetectorActivationMode.ACTIVE
 
 
 def test_hook_action_arms_press_and_get_detectors() -> None:
-    result = _controller(RuntimeState.HOOK).process(
+    class Sink:
+        def emit(self, request): pass
+
+    result = _controller(RuntimeState.HOOK, emit_actions=True, sink=Sink()).process(
         _bundle(0.1, hook=True, fill_ratio=0.70),
         foreground=True,
         runtime_environment_supported=True,
     )
     assert result.fsm.action_request.intent == ActionIntent.HOOK_ACTION
     assert result.fsm.next_state == RuntimeState.RESULT_PENDING
-    assert result.activation.press == DetectorActivationMode.ARMED
-    assert result.activation.get == DetectorActivationMode.ARMED
+    assert result.action_applied is True
+    assert result.next_activation.press == DetectorActivationMode.ARMED
+    assert result.next_activation.get == DetectorActivationMode.ARMED
 
 
 def test_press_instruction_uses_burst_without_confirming_press() -> None:
@@ -121,13 +145,14 @@ def test_press_panel_confirms_press_active() -> None:
         runtime_environment_supported=True,
     )
     assert result.fsm.next_state == RuntimeState.PRESS
-    assert result.activation.press == DetectorActivationMode.ACTIVE
+    assert result.next_activation.press == DetectorActivationMode.ACTIVE
     assert result.fsm.action_request.intent == ActionIntent.PRESS_SEQUENCE
 
 
 def test_get_retries_at_configured_point_four_seconds() -> None:
     fsm = FishingFSM(FSMConfig(stable_frames=1), initial_state=RuntimeState.GET)
     first = fsm.advance(_evidence(RuntimeState.GET, 0.0), 0.0, _bundle(0.0, get=True))
+    assert fsm.commit_action(first.action_request, 0.0).action_applied
     early = fsm.advance(_evidence(RuntimeState.GET, 0.2), 0.2, _bundle(0.2, get=True))
     retry = fsm.advance(_evidence(RuntimeState.GET, 0.4), 0.4, _bundle(0.4, get=True))
     assert first.action_request.payload["attempt"] == 1
@@ -146,8 +171,10 @@ def test_get_panel_disappearance_stops_collect_immediately() -> None:
 def test_get_attempt_limit_enters_sync_required() -> None:
     config = FSMConfig(stable_frames=1, get_retry_interval_seconds=0.4, get_max_attempts=2, get_max_duration_seconds=5.0)
     fsm = FishingFSM(config, initial_state=RuntimeState.GET)
-    fsm.advance(_evidence(RuntimeState.GET), 0.0, _bundle(0.0, get=True))
-    fsm.advance(_evidence(RuntimeState.GET), 0.4, _bundle(0.4, get=True))
+    first = fsm.advance(_evidence(RuntimeState.GET), 0.0, _bundle(0.0, get=True))
+    fsm.commit_action(first.action_request, 0.0)
+    second = fsm.advance(_evidence(RuntimeState.GET), 0.4, _bundle(0.4, get=True))
+    fsm.commit_action(second.action_request, 0.4)
     result = fsm.advance(_evidence(RuntimeState.GET), 0.8, _bundle(0.8, get=True))
     assert result.next_state == RuntimeState.SYNC_REQUIRED
     assert result.transition_reason == "get_retry_attempts_exceeded"
@@ -181,12 +208,12 @@ def test_safety_rejects_foreground_and_resolution_failures() -> None:
     request = ActionRequest(ActionIntent.CAST, 0.95, "cast")
     evidence = _evidence(RuntimeState.IDLE)
     foreground = policy.evaluate(
-        request, RuntimeState.CAST_PENDING, evidence,
+        request, RuntimeState.IDLE, evidence,
         foreground=False, already_sent=False, elapsed_since_action=None,
         runtime_environment_supported=True, get_panel_present=False,
     )
     resolution = policy.evaluate(
-        request, RuntimeState.CAST_PENDING, evidence,
+        request, RuntimeState.IDLE, evidence,
         foreground=True, already_sent=False, elapsed_since_action=None,
         runtime_environment_supported=False, get_panel_present=False,
     )
@@ -198,7 +225,7 @@ def test_safety_cast_guard_and_collect_limits() -> None:
     policy = SafetyPolicy(SafetyConfig(emit_actions=True))
     evidence = _evidence(RuntimeState.GET)
     cast = policy.evaluate(
-        ActionRequest(ActionIntent.CAST, 0.95, "cast"), RuntimeState.CAST_PENDING, evidence,
+        ActionRequest(ActionIntent.CAST, 0.95, "cast"), RuntimeState.IDLE, evidence,
         foreground=True, already_sent=False, elapsed_since_action=None,
         runtime_environment_supported=True, get_panel_present=True,
     )

@@ -31,9 +31,9 @@ class SafetyResult:
 
 class SafetyPolicy:
     ALLOWED_STATES = {
-        ActionIntent.CAST: {RuntimeState.CAST_PENDING},
-        ActionIntent.START_HOOK: {RuntimeState.HOOK_PENDING},
-        ActionIntent.HOOK_ACTION: {RuntimeState.RESULT_PENDING},
+        ActionIntent.CAST: {RuntimeState.IDLE},
+        ActionIntent.START_HOOK: {RuntimeState.READY},
+        ActionIntent.HOOK_ACTION: {RuntimeState.HOOK},
         ActionIntent.PRESS_SEQUENCE: {RuntimeState.PRESS},
         ActionIntent.COLLECT: {RuntimeState.GET},
     }

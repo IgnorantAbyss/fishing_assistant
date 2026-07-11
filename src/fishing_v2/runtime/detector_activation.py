@@ -42,13 +42,22 @@ class DetectorActivationPolicy:
     def __init__(self, config: DetectorActivationConfig | None = None) -> None:
         self.config = config or DetectorActivationConfig()
 
-    def evaluate(self, state: RuntimeState, bundle: ObservationBundle) -> DetectorActivationSnapshot:
+    def evaluate(
+        self,
+        state: RuntimeState,
+        bundle: ObservationBundle,
+        *,
+        recorded_observation: bool = False,
+    ) -> DetectorActivationSnapshot:
         prompt = bundle.prompt.kind if bundle.prompt else PromptObservationKind.UNKNOWN
 
         hook = DetectorActivationMode.OFF
         if state in {RuntimeState.SYNCING, RuntimeState.HOOK_PENDING}:
             hook = DetectorActivationMode.ARMED
-        if state in {RuntimeState.SYNCING, RuntimeState.HOOK_PENDING} and prompt == PromptObservationKind.HOOK_INSTRUCTION:
+        if (
+            state in {RuntimeState.SYNCING, RuntimeState.HOOK_PENDING}
+            or (recorded_observation and state == RuntimeState.READY)
+        ) and prompt == PromptObservationKind.HOOK_INSTRUCTION:
             hook = DetectorActivationMode.BURST
         if state == RuntimeState.HOOK:
             hook = DetectorActivationMode.ACTIVE
@@ -56,13 +65,20 @@ class DetectorActivationPolicy:
         press = DetectorActivationMode.OFF
         if state in {RuntimeState.SYNCING, RuntimeState.RESULT_PENDING}:
             press = DetectorActivationMode.ARMED
-        if state in {RuntimeState.SYNCING, RuntimeState.RESULT_PENDING} and prompt == PromptObservationKind.PRESS_INSTRUCTION:
+        if recorded_observation and state in {RuntimeState.HOOK, RuntimeState.PRESS}:
+            press = DetectorActivationMode.ARMED
+        if (
+            state in {RuntimeState.SYNCING, RuntimeState.RESULT_PENDING}
+            or (recorded_observation and state == RuntimeState.HOOK)
+        ) and prompt == PromptObservationKind.PRESS_INSTRUCTION:
             press = DetectorActivationMode.BURST
         if state == RuntimeState.PRESS:
             press = DetectorActivationMode.ACTIVE
 
         get = DetectorActivationMode.OFF
         if state in {RuntimeState.SYNCING, RuntimeState.RESULT_PENDING}:
+            get = DetectorActivationMode.ARMED
+        if recorded_observation and state in {RuntimeState.HOOK, RuntimeState.PRESS}:
             get = DetectorActivationMode.ARMED
         if state == RuntimeState.GET:
             get = DetectorActivationMode.ACTIVE

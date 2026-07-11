@@ -76,7 +76,7 @@ def test_sync_required_always_denies_actions() -> None:
 
 def test_low_confidence_action_waits() -> None:
     result = SafetyPolicy(SafetyConfig(emit_actions=True)).evaluate(
-        ActionRequest(ActionIntent.CAST, 0.5, "cast"), RuntimeState.CAST_PENDING,
+        ActionRequest(ActionIntent.CAST, 0.5, "cast"), RuntimeState.IDLE,
         _evidence(0.5), foreground=True, already_sent=False, elapsed_since_action=None,
     )
     assert result.decision == SafetyDecision.WAIT
@@ -84,7 +84,7 @@ def test_low_confidence_action_waits() -> None:
 
 def test_duplicate_action_is_denied() -> None:
     result = SafetyPolicy(SafetyConfig(emit_actions=True)).evaluate(
-        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.CAST_PENDING,
+        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.IDLE,
         _evidence(), foreground=True, already_sent=True, elapsed_since_action=1.0,
     )
     assert result.decision == SafetyDecision.DENY
@@ -92,7 +92,7 @@ def test_duplicate_action_is_denied() -> None:
 
 def test_foreground_window_is_required() -> None:
     result = SafetyPolicy(SafetyConfig(emit_actions=True)).evaluate(
-        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.CAST_PENDING,
+        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.IDLE,
         _evidence(), foreground=False, already_sent=False, elapsed_since_action=1.0,
     )
     assert result.decision == SafetyDecision.DENY
@@ -100,7 +100,7 @@ def test_foreground_window_is_required() -> None:
 
 def test_cooldown_causes_wait() -> None:
     result = SafetyPolicy(SafetyConfig(emit_actions=True, cooldown_sec=1.0)).evaluate(
-        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.CAST_PENDING,
+        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.IDLE,
         _evidence(), foreground=True, already_sent=False, elapsed_since_action=0.1,
     )
     assert result.decision == SafetyDecision.WAIT
@@ -123,12 +123,15 @@ def test_emit_actions_false_never_calls_sink() -> None:
     )
     assert result.fsm.action_request.intent == ActionIntent.CAST
     assert result.safety.decision == SafetyDecision.WAIT
+    assert result.action_applied is False
+    assert result.fsm.next_state == RuntimeState.IDLE
+    assert fsm.actions_applied == frozenset()
     assert sink.requests == []
 
 
 def test_conflicting_evidence_waits() -> None:
     result = SafetyPolicy(SafetyConfig(emit_actions=True)).evaluate(
-        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.CAST_PENDING,
+        ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.IDLE,
         _evidence(conflict=True), foreground=True, already_sent=False, elapsed_since_action=1.0,
     )
     assert result.decision == SafetyDecision.WAIT

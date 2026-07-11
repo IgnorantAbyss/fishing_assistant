@@ -8,7 +8,11 @@ Hybrid Runtime v2 keeps three concepts separate:
 2. A time-aware **RuntimeState** records the legal fishing flow and action history.
 3. An **ActionIntent** is a proposal that must pass SafetyPolicy; it is not keyboard input.
 
+Action handling is a two-phase commit. `action_proposed` is observable but does not change action-dependent state or action history. Only an allowed request emitted through a real sink becomes `action_applied`; that commit records the action, starts cooldown, and enters its pending/result state. `emit_actions=false`, Safety WAIT/DENY, or a missing sink always leaves `action_applied=false`.
+
 Prompt is a hint. HookBar, PressPanel, and GetPanel are specialized active confirmations. Runtime never derives Prompt from global ground truth, and a Prompt hint alone cannot activate HOOK or PRESS.
+
+Raw detector output is diagnostic data. OFF evidence is marked diagnostic-only, and ARMED/BURST evidence must pass detector-specific qualification before Fusion. Hook rectangle-only candidates and non-positive fill never become active Hook evidence; `bar_fill`, positive `fill_ratio`, and strong confidence are required, while `divider_line` is optional.
 
 ## Final Prompt contract
 
@@ -60,8 +64,10 @@ GET keeps proposing COLLECT while GetPanel remains visible and each attempt pass
 
 `emit_actions` remains false and no keyboard sink exists. SafetyPolicy rejects non-foreground execution, unsupported resolution, duplicate HOOK/PRESS intents, CAST without an absent-Get guard, COLLECT without a visible GetPanel, retries outside cooldown/attempt/duration limits, and every action in SYNC_REQUIRED. The supported environment is exactly 2560x1440, fixed UI scale, zh-TW, borderless, and fixed Prompt position.
 
+`recorded_observation` replay never claims action execution. It reports proposed intent with `action_applied=false`, then follows qualified visual acknowledgements already present in the fixed recording. This validates perception, qualification, Fusion, and state flow without an action timeline or counterfactual screen changes.
+
 ## ROI and data boundaries
 
-Prompt ROI uses fixed pixels as the source of truth; normalized coordinates are derived display metadata. `prompt_final_candidate` is `[940, 36, 1620, 100]` but remains unapproved. The compact review is manual evidence, not classifier evaluation or approval.
+Prompt ROI uses fixed pixels as the source of truth; normalized coordinates are derived display metadata. `prompt_final_candidate` `[940, 36, 1620, 100]` is approved for the fixed environment after explicit manual review. Other candidates remain historical comparisons.
 
 Global `ground_truth.yaml` remains evaluation-only runtime-state annotation. Human Prompt annotation is independent. This phase creates no official `prompt_ground_truth.yaml`, Prompt dataset, model, or raw replay modification. Legacy specialized detector algorithms remain unchanged behind adapters; v1 PromptClassifier and global StateDetector remain outside v2 core.

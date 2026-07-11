@@ -12,11 +12,10 @@
 
 ## Still requiring evidence or implementation
 
-- Explicit user approval of `prompt_final_candidate`; ROI status remains `unapproved`.
 - Replay/live detect-only validation of polling frequencies, burst FPS, and the initial 0.65–0.85 HOOK safe zone.
 - PromptObserver presence/rejection implementation and confidence calibration.
 - Foreground executable/process identity and platform-specific foreground confirmation.
 - New untouched sessions for final v2 testing.
 - Future action acknowledgement semantics if a real sink is ever separately authorized.
 
-Until resolved, PromptObserver remains unimplemented, action emission remains disabled, and final test status remains `not_collected`.
+The Prompt ROI is approved. Until the remaining runtime questions are resolved, PromptObserver remains unimplemented, action emission remains disabled, and final test status remains `not_collected`.

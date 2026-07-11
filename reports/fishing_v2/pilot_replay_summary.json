@@ -1,0 +1,44 @@
+{
+  "session": "session_20260710_130308",
+  "mode": "scripted_prompt",
+  "action_mode": "recorded_observation",
+  "frames": 600,
+  "final_frame": 600,
+  "final_state": "WAITING",
+  "proposed_intents": {
+    "START_HOOK": 68,
+    "HOOK_ACTION": 3,
+    "CAST": 85,
+    "COLLECT": 18
+  },
+  "actions_applied": 0,
+  "sync_required_frames": 0,
+  "detectors": {
+    "hook": {
+      "raw_detected": 219,
+      "qualified_detected": 50,
+      "used_by_fusion": 50
+    },
+    "press": {
+      "raw_detected": 0,
+      "qualified_detected": 0,
+      "used_by_fusion": 0
+    },
+    "get": {
+      "raw_detected": 59,
+      "qualified_detected": 19,
+      "used_by_fusion": 19
+    }
+  },
+  "global_press": {
+    "frames": 24,
+    "raw_detected": 0,
+    "qualified_detected": 0
+  },
+  "global_get": {
+    "frames": 19,
+    "raw_detected": 19,
+    "qualified_detected": 19
+  },
+  "complete_replay_processed": true
+}

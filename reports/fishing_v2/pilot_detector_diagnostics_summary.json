@@ -1,0 +1,158 @@
+{
+  "session": "session_20260710_130308",
+  "hook": {
+    "raw_detected_by_global_state": {
+      "READY": 30,
+      "HOOK": 63,
+      "WAITING": 115,
+      "IDLE": 11
+    },
+    "qualified_active_by_global_state": {
+      "HOOK": 50
+    },
+    "non_hook_qualified_false_positive_count": 0,
+    "qualification": "bar_fill + positive fill_ratio + strong confidence; divider optional"
+  },
+  "press": {
+    "range": [
+      415,
+      438
+    ],
+    "detected": 0,
+    "total": 24,
+    "rejection_reason_counts": {
+      "incomplete_sequence": 18,
+      "glyph_confidence": 24,
+      "dark_panel_ratio": 14
+    },
+    "frame_428": {
+      "frame": 428,
+      "confidence": 0.6,
+      "detected": false,
+      "sequence": [
+        "D",
+        "W",
+        "S",
+        "W",
+        "A",
+        "W",
+        "W",
+        "W"
+      ],
+      "key_boxes": [
+        {
+          "key": "D",
+          "bbox": [
+            1081,
+            349,
+            1119,
+            384
+          ],
+          "confidence": 0.6114
+        },
+        {
+          "key": "W",
+          "bbox": [
+            1119,
+            349,
+            1157,
+            384
+          ],
+          "confidence": 0.5694
+        },
+        {
+          "key": "S",
+          "bbox": [
+            1157,
+            349,
+            1195,
+            384
+          ],
+          "confidence": 0.5654
+        },
+        {
+          "key": "W",
+          "bbox": [
+            1195,
+            349,
+            1233,
+            384
+          ],
+          "confidence": 0.6185
+        },
+        {
+          "key": "A",
+          "bbox": [
+            1233,
+            349,
+            1271,
+            384
+          ],
+          "confidence": 0.6115
+        },
+        {
+          "key": "W",
+          "bbox": [
+            1271,
+            349,
+            1309,
+            384
+          ],
+          "confidence": 0.6407
+        },
+        {
+          "key": "W",
+          "bbox": [
+            1309,
+            349,
+            1347,
+            384
+          ],
+          "confidence": 0.649
+        },
+        {
+          "key": "W",
+          "bbox": [
+            1347,
+            349,
+            1385,
+            384
+          ],
+          "confidence": 0.5343
+        }
+      ],
+      "matched_features": [
+        "press_panel",
+        "key_cells",
+        "letter_templates"
+      ],
+      "dark_panel_ratio": 0.241,
+      "colour_mode": "mixed_live",
+      "detector_threshold": 0.65,
+      "rejection_reasons": [
+        "glyph_confidence:0.6000<0.68"
+      ]
+    },
+    "temporal_condition_used": false
+  },
+  "get": {
+    "visual_panel_range": [
+      440,
+      458
+    ],
+    "diagnostic_range": [
+      435,
+      463
+    ],
+    "original_detected_in_visual_range": 0,
+    "original_rejection_reason": "fixed whole-ROI template comparison was misaligned with the live panel scale and position",
+    "detected_in_visual_range": 19,
+    "total_visual_frames": 19,
+    "rejection_reason_counts": {
+      "accepted": 19
+    },
+    "visual_disappearance_frame": 459
+  },
+  "thresholds_modified": false,
+  "output_root": "D:\\project\\fishing_assistant\\reports\\fishing_v2\\pilot_detector_diagnostics"
+}
