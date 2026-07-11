@@ -9,10 +9,9 @@ class ActionIntent(str, Enum):
     NONE = "NONE"
     CAST = "CAST"
     START_HOOK = "START_HOOK"
+    HOOK_ACTION = "HOOK_ACTION"
     PRESS_SEQUENCE = "PRESS_SEQUENCE"
     COLLECT = "COLLECT"
-    PAUSE = "PAUSE"
-    STOP = "STOP"
 
 
 @dataclass(frozen=True)

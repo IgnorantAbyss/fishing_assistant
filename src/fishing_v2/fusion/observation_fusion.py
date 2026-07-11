@@ -62,34 +62,42 @@ class ObservationFusion:
         prompt_state: RuntimeState | None = None
         prompt = bundle.prompt
         prompt_mapping = {
-            PromptObservationKind.IDLE_PROMPT: RuntimeState.IDLE,
-            PromptObservationKind.WAITING_PROMPT: RuntimeState.WAITING,
-            PromptObservationKind.READY_PROMPT: RuntimeState.READY,
+            PromptObservationKind.IDLE_CAST: RuntimeState.IDLE,
+            PromptObservationKind.WAITING_IN_PROGRESS: RuntimeState.WAITING,
+            PromptObservationKind.READY_BITE: RuntimeState.READY,
         }
         if prompt is not None:
             prompt_state = prompt_mapping.get(prompt.kind)
             if prompt_state is not None and prompt.confidence >= self.config.prompt_min_confidence:
                 offer(prompt_state, prompt.confidence, f"prompt_{prompt.kind.value}")
-            elif prompt.kind in {PromptObservationKind.NO_PROMPT, PromptObservationKind.UNKNOWN}:
+            elif prompt.kind == PromptObservationKind.UNKNOWN:
                 support.append(f"prompt_{prompt.kind.value}:non_state_evidence")
-            elif prompt.kind == PromptObservationKind.OTHER_PROMPT:
-                support.append("prompt_OTHER_PROMPT:visible_unclassified_prompt")
+            elif prompt.kind in {
+                PromptObservationKind.HOOK_INSTRUCTION,
+                PromptObservationKind.PRESS_INSTRUCTION,
+            }:
+                support.append(f"prompt_{prompt.kind.value}:activation_hint_only")
 
         strong_special = [item for item in special if item[1] >= item[3]]
         if strong_special:
-            state, confidence, source, _ = max(strong_special, key=lambda item: item[1])
-            # A READY prompt is known to persist into HOOK and is supporting context,
-            # not evidence that should overwrite the specialized detector.
+            priority = {RuntimeState.GET: 3, RuntimeState.PRESS: 2, RuntimeState.HOOK: 1}
+            state, confidence, source, _ = max(
+                strong_special, key=lambda item: (priority[item[0]], item[1])
+            )
             if prompt_state is not None and prompt_state != state:
                 compatible = (
-                    state == RuntimeState.HOOK and prompt.kind == PromptObservationKind.READY_PROMPT
-                ) or (
-                    state == RuntimeState.PRESS and prompt.kind == PromptObservationKind.OTHER_PROMPT
+                    state == RuntimeState.GET
+                    or (state == RuntimeState.HOOK and prompt.kind == PromptObservationKind.READY_BITE)
                 )
                 if compatible:
                     support.append(f"compatible_residual_prompt:{prompt.kind.value}")
                 else:
                     conflicts.append(f"prompt_{prompt.kind.value}_vs_{source}")
+            elif prompt is not None and (
+                (state == RuntimeState.HOOK and prompt.kind == PromptObservationKind.HOOK_INSTRUCTION)
+                or (state == RuntimeState.PRESS and prompt.kind == PromptObservationKind.PRESS_INSTRUCTION)
+            ):
+                support.append(f"compatible_activation_hint:{prompt.kind.value}")
             return StateEvidence(
                 scores, tuple(support), tuple(conflicts), state, confidence,
                 f"strong_{source}_evidence", bundle.frame_index, bundle.timestamp,

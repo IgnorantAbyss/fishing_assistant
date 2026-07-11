@@ -1,25 +1,22 @@
 # Hybrid Runtime v2 Open Questions
 
-## Fixed for the current supported environment
+## Fixed decisions
 
-- Resolution: 2560x1440 only.
-- UI scale: fixed.
-- Language: zh-TW.
-- Window mode: borderless.
-- Prompt position: fixed.
-- Prompt ROI source of truth: pixel coordinates; normalized coordinates are derived display metadata only.
+- Supported environment: 2560x1440, fixed UI scale, zh-TW, borderless, fixed Prompt position.
+- Runtime Prompt hints: `IDLE_CAST`, `WAITING_IN_PROGRESS`, `READY_BITE`, `HOOK_INSTRUCTION`, `PRESS_INSTRUCTION`, or `UNKNOWN`.
+- `IGNORE` is annotation-only.
+- Prompt accelerates detector scheduling; specialized panel/bar evidence confirms active states.
+- GET panel outranks IDLE Prompt, and CAST requires an absent-Get guard.
+- HOOK uses a configurable safe zone and does not target Perfect.
+- There is no independent Failure Recovery state.
 
-Other resolutions, UI scales, languages, window modes, and Prompt positions are unsupported. This phase does not attempt anchor detection, adaptation, localization, or window calibration.
+## Still requiring evidence or implementation
 
-## Still unresolved and requiring user evidence
+- Explicit user approval of `prompt_final_candidate`; ROI status remains `unapproved`.
+- Replay/live detect-only validation of polling frequencies, burst FPS, and the initial 0.65–0.85 HOOK safe zone.
+- PromptObserver presence/rejection implementation and confidence calibration.
+- Foreground executable/process identity and platform-specific foreground confirmation.
+- New untouched sessions for final v2 testing.
+- Future action acknowledgement semantics if a real sink is ever separately authorized.
 
-- What is the foreground game window's executable/process identity?
-- Which unapproved pixel Prompt ROI contains complete required content without unrelated bottom UI or excessive background?
-- What visible Prompt kinds actually occur, including PRESS and GET flows, and which belong to `OTHER_PROMPT` or `NO_PROMPT`?
-- Which visually distinct prompts need separate optional `prompt_id` values?
-- Which transition frames should be annotated `IGNORE`?
-- Who will manually approve the final Prompt ROI and record that approval?
-- Which new, untouched sessions will be collected for v2 final testing?
-- What cooldowns and timeout values are safe in live play?
-
-Until these are answered, Prompt ROI remains `unapproved`, PromptObserver remains `unimplemented`, action emission remains disabled, and v2 final test remains `not_collected`. Contact sheets and inventory rows are review evidence only; they are not approval, Prompt ground truth, or a final recommendation.
+Until resolved, PromptObserver remains unimplemented, action emission remains disabled, and final test status remains `not_collected`.

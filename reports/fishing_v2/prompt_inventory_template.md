@@ -1,8 +1,8 @@
 # Prompt Inventory Manual Review Template
 
 This inventory is intentionally unlabelled. Global state only selects review strata; it must not be copied into Prompt observation ground truth.
-Allowed suggestions after visual review: `IDLE_PROMPT`, `WAITING_PROMPT`, `READY_PROMPT`, `OTHER_PROMPT`, `NO_PROMPT`, `IGNORE`.
-Optional prompt-id examples: `IDLE_CAST`, `FISHING_IN_PROGRESS`, `FISH_BITE_SPACE`, `PRESS_SEQUENCE_INSTRUCTION`.
+Allowed annotations after visual review: `IDLE_CAST`, `WAITING_IN_PROGRESS`, `READY_BITE`, `HOOK_INSTRUCTION`, `PRESS_INSTRUCTION`, `IGNORE`.
+`IGNORE` is annotation-only and is never emitted by the runtime Prompt observer.
 
 Distinct Prompt appearance count: **not yet manually confirmed**.
 

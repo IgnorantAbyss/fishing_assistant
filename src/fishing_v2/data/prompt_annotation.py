@@ -11,12 +11,31 @@ import yaml
 
 
 class PromptAnnotationKind(str, Enum):
+    IDLE_CAST = "IDLE_CAST"
+    WAITING_IN_PROGRESS = "WAITING_IN_PROGRESS"
+    READY_BITE = "READY_BITE"
+    HOOK_INSTRUCTION = "HOOK_INSTRUCTION"
+    PRESS_INSTRUCTION = "PRESS_INSTRUCTION"
+    IGNORE = "IGNORE"
+
+    # Deprecated read-only compatibility values. New v2 annotation writers
+    # reject these and runtime maps them to UNKNOWN.
     IDLE_PROMPT = "IDLE_PROMPT"
     WAITING_PROMPT = "WAITING_PROMPT"
     READY_PROMPT = "READY_PROMPT"
     OTHER_PROMPT = "OTHER_PROMPT"
     NO_PROMPT = "NO_PROMPT"
-    IGNORE = "IGNORE"
+
+
+FINAL_PROMPT_ANNOTATION_KINDS = frozenset({
+    PromptAnnotationKind.IDLE_CAST,
+    PromptAnnotationKind.WAITING_IN_PROGRESS,
+    PromptAnnotationKind.READY_BITE,
+    PromptAnnotationKind.HOOK_INSTRUCTION,
+    PromptAnnotationKind.PRESS_INSTRUCTION,
+    PromptAnnotationKind.IGNORE,
+})
+DEPRECATED_PROMPT_ANNOTATION_KINDS = frozenset(PromptAnnotationKind) - FINAL_PROMPT_ANNOTATION_KINDS
 
 
 @dataclass(frozen=True)
@@ -29,7 +48,7 @@ class PromptFrameAnnotation:
 
 
 def validate_prompt_segments(
-    segments: Iterable[Mapping[str, Any]], frame_count: int
+    segments: Iterable[Mapping[str, Any]], frame_count: int, *, allow_deprecated: bool = False
 ) -> list[dict[str, Any]]:
     if frame_count < 1:
         raise ValueError("frame_count must be positive")
@@ -45,6 +64,9 @@ def validate_prompt_segments(
         observation = observation.upper()
         if observation not in {item.value for item in PromptAnnotationKind}:
             raise ValueError(f"Invalid prompt observation: {observation}")
+        kind = PromptAnnotationKind(observation)
+        if kind in DEPRECATED_PROMPT_ANNOTATION_KINDS and not allow_deprecated:
+            raise ValueError(f"Deprecated prompt observation is read-only compatibility data: {observation}")
         if start < 1 or end < start or end > frame_count:
             raise ValueError(f"Invalid prompt range {start}-{end} for {frame_count} frames")
         parsed_segment: dict[str, Any] = {"start": start, "end": end, "observation": observation}
@@ -76,9 +98,9 @@ def validate_prompt_segments(
 
 
 def prompt_labels_from_segments(
-    segments: Iterable[Mapping[str, Any]], frame_count: int
+    segments: Iterable[Mapping[str, Any]], frame_count: int, *, allow_deprecated: bool = False
 ) -> dict[int, PromptAnnotationKind]:
-    parsed = validate_prompt_segments(segments, frame_count)
+    parsed = validate_prompt_segments(segments, frame_count, allow_deprecated=allow_deprecated)
     return {
         frame: PromptAnnotationKind(str(item["observation"]))
         for item in parsed
@@ -87,9 +109,9 @@ def prompt_labels_from_segments(
 
 
 def prompt_annotations_from_segments(
-    segments: Iterable[Mapping[str, Any]], frame_count: int
+    segments: Iterable[Mapping[str, Any]], frame_count: int, *, allow_deprecated: bool = False
 ) -> dict[int, PromptFrameAnnotation]:
-    parsed = validate_prompt_segments(segments, frame_count)
+    parsed = validate_prompt_segments(segments, frame_count, allow_deprecated=allow_deprecated)
     return {
         frame: PromptFrameAnnotation(
             observation=PromptAnnotationKind(str(item["observation"])),
@@ -110,12 +132,12 @@ def _load_segments(path: str | Path) -> list[Mapping[str, Any]]:
 
 
 def load_prompt_ground_truth(path: str | Path, frame_count: int) -> dict[int, PromptAnnotationKind]:
-    return prompt_labels_from_segments(_load_segments(path), frame_count)
+    return prompt_labels_from_segments(_load_segments(path), frame_count, allow_deprecated=True)
 
 
 def load_prompt_annotations(path: str | Path, frame_count: int) -> dict[int, PromptFrameAnnotation]:
     """Load optional prompt_id/notes for dataset tooling, never runtime inference."""
-    return prompt_annotations_from_segments(_load_segments(path), frame_count)
+    return prompt_annotations_from_segments(_load_segments(path), frame_count, allow_deprecated=True)
 
 
 def write_prompt_ground_truth(

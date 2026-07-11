@@ -11,7 +11,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.fishing_v2.data.prompt_annotation import PromptAnnotationKind, write_prompt_ground_truth  # noqa: E402
+from src.fishing_v2.data.prompt_annotation import (  # noqa: E402
+    FINAL_PROMPT_ANNOTATION_KINDS,
+    PromptAnnotationKind,
+    write_prompt_ground_truth,
+)
 from src.replay_session import DEFAULT_SESSION_ROOT, ReplaySession, latest_session  # noqa: E402
 
 
@@ -19,10 +23,13 @@ def parse_range(value: str) -> dict[str, int | str]:
     try:
         span, raw_observation = value.rsplit(":", 1)
         raw_start, raw_end = span.split("-", 1)
-        observation = PromptAnnotationKind(raw_observation.upper()).value
+        kind = PromptAnnotationKind(raw_observation.upper())
+        if kind not in FINAL_PROMPT_ANNOTATION_KINDS:
+            raise ValueError("deprecated Prompt annotation")
+        observation = kind.value
         return {"start": int(raw_start), "end": int(raw_end), "observation": observation}
     except (ValueError, KeyError) as exc:
-        allowed = ", ".join(item.value for item in PromptAnnotationKind)
+        allowed = ", ".join(sorted(item.value for item in FINAL_PROMPT_ANNOTATION_KINDS))
         raise argparse.ArgumentTypeError(f"Expected START-END:OBSERVATION; allowed: {allowed}") from exc
 
 

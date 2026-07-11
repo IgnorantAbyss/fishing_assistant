@@ -20,6 +20,7 @@ from tools.review_prompt_roi import (
     select_transition_windows,
     with_metadata_margin,
     review_prompt_roi,
+    review_final_candidate,
 )
 
 
@@ -64,7 +65,7 @@ def test_unsupported_resolution_is_rejected_before_future_runtime_use() -> None:
 def test_prompt_roi_candidates_use_pixel_source_of_truth() -> None:
     raw = yaml.safe_load(CANDIDATES.read_text(encoding="utf-8"))
     assert raw["source_of_truth"] == "pixel"
-    assert all("pixel" in item for item in raw["candidates"])
+    assert all(("pixel" in item) ^ ("pixel_roi" in item) for item in raw["candidates"])
 
 
 def test_normalized_roi_is_derived_from_fixed_pixels() -> None:
@@ -76,11 +77,12 @@ def test_normalized_roi_is_derived_from_fixed_pixels() -> None:
         assert y2 == pytest.approx(candidate.y2 / 1440)
 
 
-def test_all_six_candidates_are_inside_fixed_frame() -> None:
+def test_all_candidates_including_final_are_inside_fixed_frame() -> None:
     candidates = load_roi_candidates(CANDIDATES)
     assert [item.candidate_id for item in candidates] == [
         "legacy_reference", "tight_vertical", "icon_and_text_medium",
         "icon_and_text_tight", "text_only_medium", "text_only_tight",
+        "prompt_final_candidate",
     ]
     assert all(0 <= item.x1 < item.x2 <= 2560 and 0 <= item.y1 < item.y2 <= 1440 for item in candidates)
 
@@ -90,6 +92,13 @@ def test_legacy_roi_is_preserved_as_reference() -> None:
     assert legacy.candidate_id == "legacy_reference"
     assert legacy.pixel == (768, 29, 1792, 144)
     assert (legacy.width, legacy.height, legacy.area) == (1024, 115, 117760)
+
+
+def test_final_candidate_pixel_and_derived_geometry() -> None:
+    candidate = next(item for item in load_roi_candidates(CANDIDATES) if item.candidate_id == "prompt_final_candidate")
+    assert candidate.pixel == (940, 36, 1620, 100)
+    assert (candidate.width, candidate.height, candidate.area) == (680, 64, 43520)
+    assert candidate.normalized == pytest.approx((0.3671875, 0.025, 0.6328125, 0.0694444444))
 
 
 def test_candidate_config_cannot_claim_approval() -> None:
@@ -143,6 +152,24 @@ def test_transition_counts_are_accumulated_in_review_report(tmp_path: Path) -> N
     report = review_prompt_roi([session], [candidate], tmp_path / "review", samples_per_state=1)
     assert report["transition_windows"]["window_counts_by_transition"] == {"WAITING_to_READY": 1}
     assert report["transition_windows"]["sample_counts_by_transition"] == {"WAITING_to_READY": 20}
+
+
+def test_final_candidate_writes_only_one_compact_review_sheet(tmp_path: Path) -> None:
+    session = _review_session(tmp_path, "session_compact", [
+        {"start": 1, "end": 12, "state": "IDLE"},
+        {"start": 13, "end": 24, "state": "WAITING"},
+        {"start": 25, "end": 36, "state": "READY"},
+        {"start": 37, "end": 48, "state": "HOOK"},
+        {"start": 49, "end": 60, "state": "PRESS"},
+    ])
+    for index in range(1, 61):
+        cv2.imwrite(str(session / "frames" / f"{index:06d}.jpg"), np.full((100, 200, 3), index, dtype=np.uint8))
+    candidate = PromptROICandidate("prompt_final_candidate", 20, 5, 180, 30, reference_width=200, reference_height=100)
+    report = review_final_candidate([session], candidate, tmp_path / "review")
+    assert (tmp_path / "review" / "prompt_final_candidate_review.jpg").is_file()
+    assert (tmp_path / "review" / "prompt_final_candidate_review.md").is_file()
+    assert list((tmp_path / "review").glob("*.jpg")) == [tmp_path / "review" / "prompt_final_candidate_review.jpg"]
+    assert report["roi_status"] == "unapproved"
 
 
 def test_trial_session_is_explicitly_excluded_from_all_review() -> None:

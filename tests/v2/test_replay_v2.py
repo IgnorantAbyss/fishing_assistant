@@ -28,9 +28,9 @@ def _session(root: Path) -> Path:
         "segments:\n  - start: 1\n    end: 3\n    state: HOOK\n", encoding="utf-8"
     )
     write_prompt_ground_truth(session / "prompt_ground_truth.yaml", [
-        {"start": 1, "end": 1, "observation": "WAITING_PROMPT"},
+        {"start": 1, "end": 1, "observation": "WAITING_IN_PROGRESS"},
         {"start": 2, "end": 2, "observation": "IGNORE"},
-        {"start": 3, "end": 3, "observation": "READY_PROMPT"},
+        {"start": 3, "end": 3, "observation": "READY_BITE"},
     ], 3)
     return session
 
@@ -56,7 +56,7 @@ def _runner() -> V2ReplayRunner:
 
 def test_scripted_prompt_reads_prompt_ground_truth_only(tmp_path: Path) -> None:
     run = _runner().run(_session(tmp_path), mode="scripted_prompt", report_dir=tmp_path / "reports", start_state=RuntimeState.WAITING)
-    assert [row["prompt_observation"] for row in run.rows] == ["WAITING_PROMPT", "UNKNOWN", "READY_PROMPT"]
+    assert [row["prompt_observation"] for row in run.rows] == ["WAITING_IN_PROGRESS", "UNKNOWN", "READY_BITE"]
     assert all(row["global_ground_truth"] == "HOOK" for row in run.rows)
 
 

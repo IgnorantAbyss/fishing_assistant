@@ -27,7 +27,7 @@ def _bundle(prompt=None, *, hook=0.0, press=0.0, get=0.0):
 
 def test_strong_hook_outweighs_residual_ready_prompt() -> None:
     result = ObservationFusion().fuse(
-        _bundle(_prompt(PromptObservationKind.READY_PROMPT, 0.95), hook=0.98),
+        _bundle(_prompt(PromptObservationKind.READY_BITE, 0.95), hook=0.98),
         RuntimeState.HOOK,
     )
     assert result.recommended_state == RuntimeState.HOOK
@@ -37,25 +37,26 @@ def test_strong_hook_outweighs_residual_ready_prompt() -> None:
 
 def test_waiting_does_not_jump_to_idle_on_one_weak_prompt() -> None:
     result = ObservationFusion().fuse(
-        _bundle(_prompt(PromptObservationKind.IDLE_PROMPT, 0.70)),
+        _bundle(_prompt(PromptObservationKind.IDLE_CAST, 0.70)),
         RuntimeState.WAITING,
     )
     assert result.recommended_state is None
     assert result.reason == "insufficient_observation_evidence_no_fallback"
 
 
-def test_press_and_other_prompt_are_compatible() -> None:
+def test_press_instruction_and_panel_are_compatible() -> None:
     result = ObservationFusion().fuse(
-        _bundle(_prompt(PromptObservationKind.OTHER_PROMPT, 0.95), press=0.98),
+        _bundle(_prompt(PromptObservationKind.PRESS_INSTRUCTION, 0.95), press=0.98),
         RuntimeState.PRESS,
     )
     assert result.recommended_state == RuntimeState.PRESS
     assert result.conflicting_observations == ()
 
 
-@pytest.mark.parametrize("kind", [PromptObservationKind.NO_PROMPT, PromptObservationKind.UNKNOWN])
-def test_non_state_prompt_never_falls_back_to_idle(kind) -> None:
-    result = ObservationFusion().fuse(_bundle(_prompt(kind, 0.99)), RuntimeState.POST_CATCH)
+def test_unknown_prompt_never_falls_back_to_idle() -> None:
+    result = ObservationFusion().fuse(
+        _bundle(_prompt(PromptObservationKind.UNKNOWN, 0.99)), RuntimeState.RESULT_PENDING
+    )
     assert result.recommended_state is None
     assert RuntimeState.IDLE not in result.candidate_states
 
@@ -68,15 +69,16 @@ def test_strong_get_is_independent_candidate() -> None:
 
 def test_conflicting_prompt_is_recorded_not_silently_overwritten() -> None:
     result = ObservationFusion().fuse(
-        _bundle(_prompt(PromptObservationKind.IDLE_PROMPT, 0.95), get=0.96),
+        _bundle(_prompt(PromptObservationKind.IDLE_CAST, 0.95), get=0.96),
         RuntimeState.HOOK,
     )
     assert result.recommended_state == RuntimeState.GET
-    assert result.has_conflict
+    assert not result.has_conflict
+    assert result.recommended_state == RuntimeState.GET
 
 
-def test_other_prompt_has_no_runtime_state_mapping() -> None:
+def test_instruction_prompt_has_no_runtime_state_mapping() -> None:
     result = ObservationFusion().fuse(
-        _bundle(_prompt(PromptObservationKind.OTHER_PROMPT, 1.0)), RuntimeState.PRESS
+        _bundle(_prompt(PromptObservationKind.HOOK_INSTRUCTION, 1.0)), RuntimeState.HOOK_PENDING
     )
     assert result.candidate_states == {}

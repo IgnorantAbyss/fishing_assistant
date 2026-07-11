@@ -9,12 +9,15 @@ from typing import Any, Mapping
 
 
 class PromptObservationKind(str, Enum):
-    IDLE_PROMPT = "IDLE_PROMPT"
-    WAITING_PROMPT = "WAITING_PROMPT"
-    READY_PROMPT = "READY_PROMPT"
-    OTHER_PROMPT = "OTHER_PROMPT"
-    NO_PROMPT = "NO_PROMPT"
+    IDLE_CAST = "IDLE_CAST"
+    WAITING_IN_PROGRESS = "WAITING_IN_PROGRESS"
+    READY_BITE = "READY_BITE"
+    HOOK_INSTRUCTION = "HOOK_INSTRUCTION"
+    PRESS_INSTRUCTION = "PRESS_INSTRUCTION"
     UNKNOWN = "UNKNOWN"
+
+
+RUNTIME_PROMPT_KINDS = frozenset(PromptObservationKind)
 
 
 @dataclass(frozen=True)

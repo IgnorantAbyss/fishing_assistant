@@ -21,7 +21,8 @@ reports/prompt_classifier_v1/*.png
 reports/prompt_classifier_v1/failure_contact_sheets/
 reports/prompt_classifier_v1/saliency/
 reports/prompt_classifier_v1/cross_label_near_duplicates.jpg
-reports/fishing_v2/roi_review/
+reports/fishing_v2/roi_review/*
+!reports/fishing_v2/roi_review/prompt_final_candidate_review.md
 reports/fishing_v2/replay/
 datasets/prompt_observation_v1/
 *.mp4

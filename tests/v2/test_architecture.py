@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 
 from src.fishing_v2.domain.action_intent import ActionIntent
-from src.fishing_v2.domain.observations import PromptObservationKind
+from src.fishing_v2.domain.observations import PromptObservationKind, RUNTIME_PROMPT_KINDS
 from src.fishing_v2.domain.runtime_state import RuntimeState
 
 
@@ -43,17 +43,30 @@ def test_only_legacy_adapters_import_specialized_detectors() -> None:
 
 
 def test_domain_enums_are_distinct_types() -> None:
-    assert PromptObservationKind.READY_PROMPT != RuntimeState.READY
+    assert PromptObservationKind.READY_BITE != RuntimeState.READY
     assert RuntimeState.READY != ActionIntent.START_HOOK
-    assert type(PromptObservationKind.READY_PROMPT) is not type(RuntimeState.READY)
+    assert type(PromptObservationKind.READY_BITE) is not type(RuntimeState.READY)
 
 
 def test_prompt_unknown_does_not_equal_idle() -> None:
     assert PromptObservationKind.UNKNOWN.value != RuntimeState.IDLE.value
 
 
-def test_other_prompt_is_not_no_prompt() -> None:
-    assert PromptObservationKind.OTHER_PROMPT is not PromptObservationKind.NO_PROMPT
+def test_runtime_prompt_contract_is_five_hints_plus_unknown() -> None:
+    assert {item.value for item in RUNTIME_PROMPT_KINDS} == {
+        "IDLE_CAST", "WAITING_IN_PROGRESS", "READY_BITE",
+        "HOOK_INSTRUCTION", "PRESS_INSTRUCTION", "UNKNOWN",
+    }
+    assert "OTHER_PROMPT" not in PromptObservationKind.__members__
+    assert "NO_PROMPT" not in PromptObservationKind.__members__
+
+
+def test_runtime_states_match_final_flow_without_failure_recovery() -> None:
+    assert {item.value for item in RuntimeState} == {
+        "SYNCING", "IDLE", "CAST_PENDING", "WAITING", "READY",
+        "HOOK_PENDING", "HOOK", "RESULT_PENDING", "PRESS", "GET",
+        "COLLECT_PENDING", "SYNC_REQUIRED",
+    }
 
 
 def test_prompt_classifier_v1_is_not_imported_by_v2() -> None:

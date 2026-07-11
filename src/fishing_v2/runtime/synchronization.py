@@ -53,9 +53,9 @@ class StartupSynchronizer:
             if observation and observation.detected and observation.confidence >= self.config.minimum_confidence:
                 return SynchronizationResult(state, True, observation.confidence, f"strong_{state.value.lower()}_startup_evidence")
         mapping = {
-            PromptObservationKind.IDLE_PROMPT: RuntimeState.IDLE,
-            PromptObservationKind.WAITING_PROMPT: RuntimeState.WAITING,
-            PromptObservationKind.READY_PROMPT: RuntimeState.READY,
+            PromptObservationKind.IDLE_CAST: RuntimeState.IDLE,
+            PromptObservationKind.WAITING_IN_PROGRESS: RuntimeState.WAITING,
+            PromptObservationKind.READY_BITE: RuntimeState.READY,
         }
         if bundle.prompt and bundle.prompt.kind in mapping and bundle.prompt.confidence >= self.config.minimum_confidence:
             self._prompt_votes.append((mapping[bundle.prompt.kind], bundle.prompt.confidence))

@@ -36,3 +36,8 @@ candidates:
     normalized: {x1: 0.414062, y1: 0.023611, x2: 0.617188, y2: 0.068056}
     intended_content: Tight text-only hypothesis with minimum scene context.
     note: Highest long-text clipping risk; never auto-select from this candidate set.
+  - id: prompt_final_candidate
+    pixel_roi: {x1: 940, y1: 36, x2: 1620, y2: 100}
+    normalized: {x1: 0.367188, y1: 0.025000, x2: 0.632812, y2: 0.069444}
+    intended_content: Human-selected final review candidate for all five runtime Prompt hints.
+    note: Final candidate for concise review only; ROI remains unapproved pending explicit approval.

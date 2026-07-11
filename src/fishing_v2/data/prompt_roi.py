@@ -69,7 +69,9 @@ def _positive_int(mapping: Mapping[str, Any], key: str) -> int:
 def _candidate_from_mapping(
     item: Mapping[str, Any], *, reference_width: int, reference_height: int
 ) -> PromptROICandidate:
-    pixel = item.get("pixel")
+    if "pixel" in item and "pixel_roi" in item:
+        raise ValueError("Prompt ROI candidate must declare exactly one pixel source field")
+    pixel = item.get("pixel_roi", item.get("pixel"))
     if not isinstance(pixel, Mapping):
         raise ValueError("Prompt ROI candidate requires pixel coordinates as source of truth")
     candidate = PromptROICandidate(

@@ -35,9 +35,9 @@ def _session(root: Path, name: str = "session_test") -> Path:
         "segments:\n  - start: 1\n    end: 4\n    state: HOOK\n", encoding="utf-8"
     )
     write_prompt_ground_truth(session / "prompt_ground_truth.yaml", [
-        {"start": 1, "end": 2, "observation": "READY_PROMPT"},
+        {"start": 1, "end": 2, "observation": "READY_BITE"},
         {"start": 3, "end": 3, "observation": "IGNORE"},
-        {"start": 4, "end": 4, "observation": "OTHER_PROMPT"},
+        {"start": 4, "end": 4, "observation": "PRESS_INSTRUCTION"},
     ], 4)
     return session
 
@@ -130,7 +130,7 @@ def test_prompt_label_is_not_derived_from_global_hook_state(tmp_path: Path) -> N
         dry_run_candidate=_roi(),
     )
     assert result.rows[0]["global_state"] == "HOOK"
-    assert result.rows[0]["prompt_observation"] == "READY_PROMPT"
+    assert result.rows[0]["prompt_observation"] == "READY_BITE"
 
 
 def test_old_test_session_is_marked_development_diagnostic(tmp_path: Path) -> None:

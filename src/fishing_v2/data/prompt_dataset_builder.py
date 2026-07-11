@@ -13,6 +13,7 @@ import yaml
 
 from src.fishing_v2.data.dataset_lineage import BUILDER_VERSION, sha256_file, write_dataset_lineage
 from src.fishing_v2.data.prompt_annotation import (
+    DEPRECATED_PROMPT_ANNOTATION_KINDS,
     PromptAnnotationKind,
     load_prompt_annotations,
     prompt_boundary_frames,
@@ -112,6 +113,16 @@ def build_prompt_dataset(
         frame_count = int(manifest["frame_count"])
         image_format = str(manifest["image_format"])
         prompt_annotations = load_prompt_annotations(prompt_gt, frame_count)
+        deprecated = sorted({
+            annotation.observation.value
+            for annotation in prompt_annotations.values()
+            if annotation.observation in DEPRECATED_PROMPT_ANNOTATION_KINDS
+        })
+        if deprecated:
+            raise ValueError(
+                "Deprecated Prompt annotation values cannot become v2 classifier targets: "
+                + ", ".join(deprecated)
+            )
         prompt_labels = {frame: annotation.observation for frame, annotation in prompt_annotations.items()}
         global_labels = _segments_to_labels(global_gt, frame_count)
         prompt_boundaries = prompt_boundary_frames(prompt_labels)

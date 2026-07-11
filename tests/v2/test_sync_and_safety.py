@@ -34,7 +34,7 @@ def test_prompt_consensus_synchronizes_waiting() -> None:
     sync = StartupSynchronizer(SynchronizationConfig(observation_frames=10, minimum_consensus_ratio=0.7, minimum_confidence=0.8, timeout_sec=5.0))
     result = None
     for frame in range(1, 11):
-        kind = PromptObservationKind.WAITING_PROMPT if frame <= 7 else PromptObservationKind.OTHER_PROMPT
+        kind = PromptObservationKind.WAITING_IN_PROGRESS if frame <= 7 else PromptObservationKind.HOOK_INSTRUCTION
         result = sync.observe(_bundle(frame, _prompt(kind, frame=frame)))
     assert result.state == RuntimeState.WAITING
     assert result.synchronized is True
@@ -46,10 +46,10 @@ def test_strong_press_synchronizes_immediately() -> None:
     assert result.synchronized
 
 
-def test_other_prompt_alone_does_not_synchronize_press() -> None:
+def test_instruction_hint_alone_does_not_synchronize_press() -> None:
     sync = StartupSynchronizer(SynchronizationConfig(observation_frames=2, timeout_sec=5.0))
-    sync.observe(_bundle(1, _prompt(PromptObservationKind.OTHER_PROMPT, frame=1)))
-    result = sync.observe(_bundle(2, _prompt(PromptObservationKind.OTHER_PROMPT, frame=2)))
+    sync.observe(_bundle(1, _prompt(PromptObservationKind.PRESS_INSTRUCTION, frame=1)))
+    result = sync.observe(_bundle(2, _prompt(PromptObservationKind.PRESS_INSTRUCTION, frame=2)))
     assert result.state == RuntimeState.SYNC_REQUIRED
 
 
@@ -116,7 +116,11 @@ def test_emit_actions_false_never_calls_sink() -> None:
     controller = RuntimeController(
         ObservationFusion(), fsm, SafetyPolicy(SafetyConfig(emit_actions=False)), action_sink=sink
     )
-    result = controller.process(_bundle(1, _prompt(PromptObservationKind.IDLE_PROMPT)), foreground=True)
+    result = controller.process(
+        _bundle(1, _prompt(PromptObservationKind.IDLE_CAST)),
+        foreground=True,
+        runtime_environment_supported=True,
+    )
     assert result.fsm.action_request.intent == ActionIntent.CAST
     assert result.safety.decision == SafetyDecision.WAIT
     assert sink.requests == []

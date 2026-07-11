@@ -21,6 +21,7 @@ from src.fishing_v2.legacy_adapters.replay_source_adapter import LegacyReplaySou
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.replay.v2_replay_report import write_v2_replay_report
 from src.fishing_v2.runtime.fishing_fsm import FSMConfig, FishingFSM
+from src.fishing_v2.runtime.detector_activation import DetectorActivationConfig, DetectorActivationPolicy
 from src.fishing_v2.runtime.runtime_controller import RuntimeController
 from src.fishing_v2.runtime.safety_policy import SafetyConfig, SafetyPolicy
 from src.fishing_v2.runtime.synchronization import SynchronizationConfig, StartupSynchronizer
@@ -37,11 +38,27 @@ class V2ReplayRun:
 
 def _config_objects(config_path: Path):
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    fsm = dict(data["fsm"])
+    fsm.update({
+        "hook_safe_zone_start": data["hook_detector"]["safe_zone_start"],
+        "hook_safe_zone_end": data["hook_detector"]["safe_zone_end"],
+        "get_retry_interval_seconds": data["get_detector"]["retry_interval_seconds"],
+        "get_max_attempts": data["get_detector"]["max_attempts"],
+        "get_max_duration_seconds": data["get_detector"]["max_duration_seconds"],
+    })
+    activation = DetectorActivationConfig(
+        hook_armed_fps=data["hook_detector"]["armed_fps"],
+        hook_burst_fps=data["hook_detector"]["burst_fps"],
+        press_armed_fps=data["press_detector"]["armed_fps"],
+        press_burst_fps=data["press_detector"]["burst_fps"],
+        get_armed_fps=data["get_detector"]["armed_fps"],
+    )
     return (
         FusionConfig(**data["fusion"]),
-        FSMConfig(**data["fsm"]),
+        FSMConfig(**fsm),
         SynchronizationConfig(**data["sync"]),
         SafetyConfig(**data["safety"]),
+        activation,
     )
 
 
@@ -67,7 +84,13 @@ class V2ReplayRunner:
         get_detector: Any | None = None,
     ) -> None:
         self.config_path = Path(config_path)
-        self.fusion_config, self.fsm_config, self.sync_config, self.safety_config = _config_objects(self.config_path)
+        (
+            self.fusion_config,
+            self.fsm_config,
+            self.sync_config,
+            self.safety_config,
+            self.activation_config,
+        ) = _config_objects(self.config_path)
         if self.safety_config.emit_actions:
             raise ValueError("Hybrid Runtime v2 replay requires safety.emit_actions=false")
         self.hook_detector = hook_detector or LegacyHookDetectorAdapter()
@@ -93,18 +116,29 @@ class V2ReplayRunner:
         fsm = FishingFSM(self.fsm_config, initial_state=RuntimeState.SYNCING)
         fusion = ObservationFusion(self.fusion_config)
         safety = SafetyPolicy(self.safety_config)
-        controller = RuntimeController(fusion, fsm, safety, action_sink=None)
+        controller = RuntimeController(
+            fusion,
+            fsm,
+            safety,
+            action_sink=None,
+            activation_policy=DetectorActivationPolicy(self.activation_config),
+        )
         synchronizer = StartupSynchronizer(self.sync_config, started_at=0.0)
         if start_state is not None:
             fsm.force_state(start_state, 0.0, "manual_start_state_override")
         rows: list[dict[str, Any]] = []
         annotation_mapping = {
-            PromptAnnotationKind.IDLE_PROMPT: PromptObservationKind.IDLE_PROMPT,
-            PromptAnnotationKind.WAITING_PROMPT: PromptObservationKind.WAITING_PROMPT,
-            PromptAnnotationKind.READY_PROMPT: PromptObservationKind.READY_PROMPT,
-            PromptAnnotationKind.OTHER_PROMPT: PromptObservationKind.OTHER_PROMPT,
-            PromptAnnotationKind.NO_PROMPT: PromptObservationKind.NO_PROMPT,
+            PromptAnnotationKind.IDLE_CAST: PromptObservationKind.IDLE_CAST,
+            PromptAnnotationKind.WAITING_IN_PROGRESS: PromptObservationKind.WAITING_IN_PROGRESS,
+            PromptAnnotationKind.READY_BITE: PromptObservationKind.READY_BITE,
+            PromptAnnotationKind.HOOK_INSTRUCTION: PromptObservationKind.HOOK_INSTRUCTION,
+            PromptAnnotationKind.PRESS_INSTRUCTION: PromptObservationKind.PRESS_INSTRUCTION,
             PromptAnnotationKind.IGNORE: PromptObservationKind.UNKNOWN,
+            PromptAnnotationKind.IDLE_PROMPT: PromptObservationKind.UNKNOWN,
+            PromptAnnotationKind.WAITING_PROMPT: PromptObservationKind.UNKNOWN,
+            PromptAnnotationKind.READY_PROMPT: PromptObservationKind.UNKNOWN,
+            PromptAnnotationKind.OTHER_PROMPT: PromptObservationKind.UNKNOWN,
+            PromptAnnotationKind.NO_PROMPT: PromptObservationKind.UNKNOWN,
         }
         for replay_frame in source.frames():
             frame = cv2.imread(str(replay_frame.path), cv2.IMREAD_COLOR)
@@ -134,7 +168,11 @@ class V2ReplayRunner:
                 elif sync.state == RuntimeState.SYNC_REQUIRED:
                     fsm.force_state(RuntimeState.SYNC_REQUIRED, context.timestamp, sync.reason)
             previous = fsm.state
-            result = controller.process(bundle, foreground=None)
+            result = controller.process(
+                bundle,
+                foreground=None,
+                runtime_environment_supported=source.session.manifest.get("screen_size") == [2560, 1440],
+            )
             rows.append({
                 "frame_index": context.frame_index,
                 "global_ground_truth": replay_frame.global_ground_truth,
@@ -147,6 +185,11 @@ class V2ReplayRunner:
                 "next_runtime_state": result.fsm.next_state.value,
                 "action_intent": result.fsm.action_request.intent.value,
                 "safety_decision": result.safety.decision.value,
+                "detector_activation": {
+                    "hook": result.activation.hook.value,
+                    "press": result.activation.press.value,
+                    "get": result.activation.get.value,
+                },
                 "transition_reason": sync_reason or result.fsm.transition_reason,
             })
         csv_path, report_path = write_v2_replay_report(

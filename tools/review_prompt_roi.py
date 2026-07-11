@@ -409,6 +409,71 @@ def review_prompt_roi(
     return report
 
 
+def review_final_candidate(
+    session_paths: Sequence[Path],
+    candidate: PromptROICandidate,
+    report_dir: Path,
+) -> dict[str, Any]:
+    """Write one compact, unapproved sheet for the human-selected final candidate."""
+    sessions = [_load_session(path) for path in session_paths]
+    required_states = ("IDLE", "WAITING", "READY", "HOOK", "PRESS")
+    samples: list[ReviewSample] = []
+    stable_counts: Counter[str] = Counter()
+    transition_count = 0
+    for session in sessions:
+        if _manifest_screen_size(session.path) != (candidate.reference_width, candidate.reference_height):
+            raise ValueError(f"Session violates fixed ROI environment: {session.path.name}")
+        stable = select_stable_interior(session, samples_per_state=1)
+        for state in required_states:
+            if stable[state]:
+                samples.append(stable[state][0])
+                stable_counts[state] += 1
+        windows = select_transition_windows(session)
+        if windows:
+            window = windows[0]
+            before = next((item for item in window.samples if item.frame_index == window.boundary_frame - 1), None)
+            after = next((item for item in window.samples if item.frame_index == window.boundary_frame), None)
+            samples.extend(item for item in (before, after) if item is not None)
+            transition_count += sum(item is not None for item in (before, after))
+
+    tiles = [_tile(sample, candidate, full_frame=False) for sample in samples]
+    image_path = report_dir / "prompt_final_candidate_review.jpg"
+    markdown_path = report_dir / "prompt_final_candidate_review.md"
+    _write_image(image_path, _contact_sheet(tiles))
+    legacy_area = 1024 * 115
+    details = _candidate_report(candidate, legacy_area)
+    lines = [
+        "# Prompt Final Candidate Review",
+        "",
+        "- Status: **unapproved**",
+        "- Manual review required: **true**",
+        "- Pixel coordinates are the source of truth; normalized coordinates are derived display metadata.",
+        f"- Pixel ROI: `{details['pixel_coordinates']}`",
+        f"- Derived normalized ROI: `{details['normalized_coordinates_derived']}`",
+        f"- Width / height / area: {details['width']} / {details['height']} / {details['area']}",
+        f"- Area reduction vs legacy_reference: {details['area_reduction_vs_legacy_percent']:.2f}%",
+        f"- Stable samples: `{dict(stable_counts)}`",
+        f"- Fade-boundary samples: {transition_count}",
+        f"- Sessions: {', '.join(session.path.name for session in sessions)}",
+        "- Prompt metadata is placed below each crop and does not cover Prompt content.",
+        "- No classifier score, bright-mask score, automatic selection, or approval was performed.",
+        "",
+        "Review image: `reports/fishing_v2/roi_review/prompt_final_candidate_review.jpg`",
+    ]
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "candidate": details,
+        "roi_status": "unapproved",
+        "manual_review_required": True,
+        "image": str(image_path),
+        "markdown": str(markdown_path),
+        "sample_count": len(samples),
+        "stable_counts": dict(stable_counts),
+        "transition_samples": transition_count,
+    }
+
+
 def _manifest_screen_size(session_path: Path) -> tuple[int, int]:
     manifest = json.loads((session_path / "manifest.json").read_text(encoding="utf-8"))
     raw = manifest.get("screen_size")
@@ -444,8 +509,8 @@ def _write_inventory(
         "# Prompt Inventory Manual Review Template",
         "",
         "This inventory is intentionally unlabelled. Global state only selects review strata; it must not be copied into Prompt observation ground truth.",
-        "Allowed suggestions after visual review: `IDLE_PROMPT`, `WAITING_PROMPT`, `READY_PROMPT`, `OTHER_PROMPT`, `NO_PROMPT`, `IGNORE`.",
-        "Optional prompt-id examples: `IDLE_CAST`, `FISHING_IN_PROGRESS`, `FISH_BITE_SPACE`, `PRESS_SEQUENCE_INSTRUCTION`.",
+        "Allowed annotations after visual review: `IDLE_CAST`, `WAITING_IN_PROGRESS`, `READY_BITE`, `HOOK_INSTRUCTION`, `PRESS_INSTRUCTION`, `IGNORE`.",
+        "IGNORE is annotation-only and is never emitted by the runtime Prompt observer.",
         "",
         "Distinct Prompt appearance count: **not yet manually confirmed**.",
         "",
@@ -529,7 +594,7 @@ def _configured_session_ids(config_path: Path) -> tuple[list[str], list[str]]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create human-review sheets for unapproved fixed-pixel Prompt ROI candidates.")
-    selection = parser.add_mutually_exclusive_group(required=True)
+    selection = parser.add_mutually_exclusive_group(required=False)
     selection.add_argument("--all", action="store_true", help="Use the seven configured review sessions; excludes trial sessions.")
     selection.add_argument("--session", action="append", help="Session id; repeatable")
     parser.add_argument("--session-root", type=Path, default=DEFAULT_SESSION_ROOT)
@@ -544,10 +609,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     configured, excluded = _configured_session_ids(args.config)
-    if args.all:
+    compact_final = args.candidate == ["prompt_final_candidate"] and not args.all and not args.session
+    if compact_final:
         selected_ids = configured
-    else:
+    elif args.all:
+        selected_ids = configured
+    elif args.session:
         selected_ids = list(args.session)
+    else:
+        raise ValueError("Select --all/--session, or use --candidate prompt_final_candidate for compact review")
     forbidden = sorted(set(selected_ids) & set(excluded))
     if forbidden:
         raise ValueError(f"Trial sessions are excluded from Prompt ROI review: {', '.join(forbidden)}")
@@ -561,6 +631,10 @@ def main() -> int:
         candidates = [item for item in candidates if item.candidate_id in allowed]
         if not candidates:
             raise ValueError("No requested ROI candidate id was found")
+    if compact_final:
+        report = review_final_candidate(sessions, candidates[0], args.report_dir)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
     report = review_prompt_roi(sessions, candidates, args.report_dir, samples_per_state=args.samples_per_state)
     markdown_path = args.report_dir.parent / "roi_review_report.md"
     json_path = args.report_dir.parent / "roi_review_report.json"

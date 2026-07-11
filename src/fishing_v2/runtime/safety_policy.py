@@ -33,10 +33,9 @@ class SafetyPolicy:
     ALLOWED_STATES = {
         ActionIntent.CAST: {RuntimeState.CAST_PENDING},
         ActionIntent.START_HOOK: {RuntimeState.HOOK_PENDING},
+        ActionIntent.HOOK_ACTION: {RuntimeState.RESULT_PENDING},
         ActionIntent.PRESS_SEQUENCE: {RuntimeState.PRESS},
-        ActionIntent.COLLECT: {RuntimeState.COLLECT_PENDING},
-        ActionIntent.PAUSE: set(RuntimeState),
-        ActionIntent.STOP: set(RuntimeState),
+        ActionIntent.COLLECT: {RuntimeState.GET},
     }
 
     def __init__(self, config: SafetyConfig | None = None) -> None:
@@ -51,6 +50,8 @@ class SafetyPolicy:
         foreground: bool | None,
         already_sent: bool,
         elapsed_since_action: float | None,
+        runtime_environment_supported: bool = True,
+        get_panel_present: bool | None = None,
     ) -> SafetyResult:
         if state == RuntimeState.SYNC_REQUIRED:
             return SafetyResult(SafetyDecision.DENY, "sync_required_blocks_actions")
@@ -62,6 +63,8 @@ class SafetyPolicy:
             return SafetyResult(SafetyDecision.DENY, "action_not_allowed_in_runtime_state")
         if already_sent:
             return SafetyResult(SafetyDecision.DENY, "duplicate_action_in_state")
+        if not runtime_environment_supported:
+            return SafetyResult(SafetyDecision.DENY, "unsupported_runtime_resolution")
         if foreground is False:
             return SafetyResult(SafetyDecision.DENY, "foreground_window_not_confirmed")
         if foreground is None:
@@ -70,6 +73,22 @@ class SafetyPolicy:
             return SafetyResult(SafetyDecision.WAIT, "conflicting_evidence")
         if evidence.confidence < self.config.minimum_evidence_confidence:
             return SafetyResult(SafetyDecision.WAIT, "evidence_confidence_too_low")
+        if request.intent == ActionIntent.CAST:
+            if get_panel_present is True:
+                return SafetyResult(SafetyDecision.DENY, "get_panel_guard_cancelled_cast")
+            if get_panel_present is None:
+                return SafetyResult(SafetyDecision.WAIT, "get_panel_guard_not_observed")
+        if request.intent == ActionIntent.COLLECT:
+            if get_panel_present is not True:
+                return SafetyResult(SafetyDecision.DENY, "collect_requires_visible_get_panel")
+            attempt = int(request.payload.get("attempt", 0))
+            maximum = int(request.payload.get("max_attempts", 0))
+            elapsed = float(request.payload.get("elapsed_seconds", float("inf")))
+            max_duration = float(request.payload.get("max_duration_seconds", 0.0))
+            if attempt < 1 or maximum < 1 or attempt > maximum:
+                return SafetyResult(SafetyDecision.DENY, "collect_attempt_limit_exceeded")
+            if elapsed >= max_duration:
+                return SafetyResult(SafetyDecision.DENY, "collect_duration_limit_exceeded")
         if elapsed_since_action is not None and elapsed_since_action < self.config.cooldown_sec:
             return SafetyResult(SafetyDecision.WAIT, "action_cooldown")
         if not self.config.emit_actions:

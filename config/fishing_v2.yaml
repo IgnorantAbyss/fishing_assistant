@@ -48,9 +48,32 @@ fsm:
   stable_frames: 2
   cast_pending_timeout_sec: 4.0
   hook_pending_timeout_sec: 3.0
-  post_catch_timeout_sec: 5.0
+  result_pending_timeout_sec: 5.0
   collect_pending_timeout_sec: 4.0
   sync_lost_timeout_sec: 2.0
+
+prompt_polling:
+  waiting_interval_seconds: 4.0
+  waiting_min_seconds: 3.0
+  waiting_max_seconds: 5.0
+  ready_fps: 5
+  result_pending_fps: 5
+
+hook_detector:
+  armed_fps: 5
+  burst_fps: 25
+  safe_zone_start: 0.65
+  safe_zone_end: 0.85
+
+press_detector:
+  armed_fps: 5
+  burst_fps: 20
+
+get_detector:
+  armed_fps: 5
+  retry_interval_seconds: 0.4
+  max_attempts: 12
+  max_duration_seconds: 5.0
 
 sync:
   observation_frames: 10
