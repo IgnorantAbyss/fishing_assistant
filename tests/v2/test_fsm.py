@@ -157,6 +157,31 @@ def test_press_panel_confirms_press_and_residual_panel_does_not_repeat() -> None
     assert residual.action_request.intent == ActionIntent.NONE
 
 
+def test_press_sequence_is_proposed_only_once_even_when_emission_is_disabled() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.PRESS)
+    first = fsm.advance(
+        _evidence(RuntimeState.PRESS), 0.1,
+        _bundle(press=True, sequence=("W", "A", "S", "D")),
+    )
+    assert first.action_request.intent == ActionIntent.PRESS_SEQUENCE
+    second = fsm.advance(
+        _evidence(RuntimeState.PRESS, frame=2), 0.2,
+        _bundle(2, press=True, sequence=("W", "A", "S", "D")),
+    )
+    assert second.next_state == RuntimeState.PRESS
+    assert second.action_request.intent == ActionIntent.NONE
+
+
+def test_press_panel_disappearance_without_result_prompt_enters_pending() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.PRESS)
+    result = fsm.advance(
+        _evidence(None), 0.2,
+        _bundle(2, press=False, sequence=()),
+    )
+    assert result.next_state == RuntimeState.RESULT_PENDING
+    assert result.action_request.intent == ActionIntent.NONE
+
+
 def test_waiting_ignores_idle_prompt_instead_of_leaving_state() -> None:
     fsm = FishingFSM(CONFIG, initial_state=RuntimeState.WAITING)
     result = fsm.advance(

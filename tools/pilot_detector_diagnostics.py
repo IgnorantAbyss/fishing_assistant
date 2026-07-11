@@ -96,20 +96,20 @@ def _sample(rows: list[dict[str, Any]], maximum: int = 6) -> list[dict[str, Any]
 
 def _press_rejections(result: dict[str, Any]) -> list[str]:
     debug = result["debug"]
-    mode = debug["colour_mode"]
-    minimum_cells = 4 if mode == "teal" else 8
     reasons: list[str] = []
     if not debug["template_keys"]:
         reasons.append("templates_unavailable")
-    if len(result["key_boxes"]) < minimum_cells:
-        reasons.append(f"incomplete_sequence:{len(result['key_boxes'])}<{minimum_cells}")
-    if any(key not in "WASD" for key in result["sequence"]):
+    if not result["panel_present"]:
+        reasons.append(result["panel_qualification_reason"])
+    if not result["key_boxes"]:
+        reasons.append("sequence_candidate_missing")
+    if any(key not in "WASD" for key in result["sequence_candidate"]):
         reasons.append("invalid_key_classification")
-    if result["confidence"] < 0.68:
-        reasons.append(f"glyph_confidence:{result['confidence']:.4f}<0.68")
-    if debug["dark_panel_ratio"] < 0.14:
-        reasons.append(f"dark_panel_ratio:{debug['dark_panel_ratio']:.4f}<0.14")
-    return reasons or ["accepted"]
+    if result["sequence_confidence"] < 0.68:
+        reasons.append(f"sequence_confidence:{result['sequence_confidence']:.4f}<0.68")
+    if result["panel_present"] and not result["sequence_ready"]:
+        reasons.append("temporal_sequence_consensus_required")
+    return reasons or ["panel_and_sequence_ready"]
 
 
 def _get_rejections(result: dict[str, Any]) -> list[str]:
@@ -190,7 +190,12 @@ def run(session_path: Path, output: Path) -> dict[str, Any]:
                 "frame": frame_index,
                 "confidence": raw_press["confidence"],
                 "detected": raw_press["detected"],
-                "sequence": raw_press["sequence"],
+                "panel_candidate": raw_press["panel_candidate"],
+                "panel_present": raw_press["panel_present"],
+                "panel_qualification_reason": raw_press["panel_qualification_reason"],
+                "sequence": raw_press["sequence_candidate"],
+                "sequence_ready": raw_press["sequence_ready"],
+                "sequence_confidence": raw_press["sequence_confidence"],
                 "key_boxes": raw_press["key_boxes"],
                 "matched_features": raw_press["matched_features"],
                 "dark_panel_ratio": raw_press["debug"]["dark_panel_ratio"],
@@ -279,11 +284,12 @@ def run(session_path: Path, output: Path) -> dict[str, Any]:
         },
         "press": {
             "range": [415, 438],
-            "detected": sum(item["detected"] for item in press_rows),
+            "panel_present": sum(item["panel_present"] for item in press_rows),
+            "sequence_ready": sum(item["sequence_ready"] for item in press_rows),
             "total": len(press_rows),
             "rejection_reason_counts": dict(press_reason_counts),
             "frame_428": {key: value for key, value in press_428.items() if key != "frame_path"},
-            "temporal_condition_used": False,
+            "temporal_condition_used": True,
         },
         "get": {
             "visual_panel_range": [440, 458],
@@ -311,10 +317,11 @@ def run(session_path: Path, output: Path) -> dict[str, Any]:
         f"- Hook qualified ACTIVE by global state: `{dict(qualified_by_state)}`",
         f"- Non-HOOK qualified false positives: **{non_hook_qualified}**",
         "- Hook qualification: raw detected + `bar_fill` + positive `fill_ratio` + strong confidence; divider is optional.",
-        f"- PRESS detected: **{summary['press']['detected']}/{summary['press']['total']}**",
+        f"- PRESS panel present: **{summary['press']['panel_present']}/{summary['press']['total']}**",
+        f"- PRESS sequence ready (single-frame tool): **{summary['press']['sequence_ready']}/{summary['press']['total']}**",
         f"- PRESS rejection counts: `{dict(press_reason_counts)}`",
-        f"- Frame 428: confidence={press_428['confidence']}, sequence={press_428['sequence']}, boxes={len(press_428['key_boxes'])}, reasons=`{press_428['rejection_reasons']}`.",
-        "- PRESS detector has no temporal rejection rule; failures are frame-local sequence/key-box/confidence/panel checks.",
+        f"- Frame 428: panel_confidence={press_428['confidence']}, sequence_candidate={press_428['sequence']}, sequence_confidence={press_428['sequence_confidence']}, boxes={len(press_428['key_boxes'])}, reasons=`{press_428['rejection_reasons']}`.",
+        "- Runtime sequence readiness is temporal; see `press_detector_diagnostics_summary.md` and the manual review bundle.",
         "- GET original baseline: **0/19**; the fixed whole-ROI template comparison was misaligned with the live panel scale and position.",
         f"- GET detected in visual panel range 440-458: **{summary['get']['detected_in_visual_range']}/{len(get_true)}**",
         f"- GET rejection counts: `{dict(get_reason_counts)}`",

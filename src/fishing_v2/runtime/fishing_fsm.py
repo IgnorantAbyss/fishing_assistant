@@ -71,6 +71,7 @@ class FishingFSM:
         self._actions_applied: set[tuple[RuntimeState, ActionIntent]] = set()
         self._pending_request: ActionRequest | None = None
         self._press_waiting_for_clear = False
+        self._press_intent_proposed = False
         self._get_started_at: float | None = initial_timestamp if initial_state == RuntimeState.GET else None
         self._get_last_applied_at: float | None = None
         self._get_attempts = 0
@@ -104,6 +105,7 @@ class FishingFSM:
         self._candidate_frames = 0
         self._conflict_since = None
         self._pending_request = None
+        self._press_intent_proposed = False
         if state == RuntimeState.GET:
             self._reset_get_retry(timestamp)
         return FSMResult(previous, state, self._none(), reason, previous != state)
@@ -125,6 +127,10 @@ class FishingFSM:
         self._conflict_since = None
         if target == RuntimeState.GET:
             self._reset_get_retry(timestamp)
+        if target == RuntimeState.PRESS and previous != RuntimeState.PRESS:
+            self._press_intent_proposed = False
+        elif previous == RuntimeState.PRESS and target != RuntimeState.PRESS:
+            self._press_intent_proposed = False
         if target == RuntimeState.IDLE and previous != RuntimeState.IDLE:
             self._actions_applied.clear()
             self._press_waiting_for_clear = False
@@ -141,11 +147,15 @@ class FishingFSM:
         *,
         payload: dict | None = None,
     ) -> ActionRequest:
+        if intent == ActionIntent.PRESS_SEQUENCE and self._press_intent_proposed:
+            return self._none("press_sequence_already_proposed_in_episode")
         key = (self.state, intent)
         if key in self._actions_applied and intent != ActionIntent.COLLECT:
             return self._none("action_already_applied_in_state")
         request = ActionRequest(intent, confidence, reason, payload or {})
         self._pending_request = request
+        if intent == ActionIntent.PRESS_SEQUENCE:
+            self._press_intent_proposed = True
         return request
 
     def discard_proposal(self) -> None:
@@ -297,6 +307,20 @@ class FishingFSM:
                 timestamp,
                 "get_panel_priority",
                 visual_acknowledgement="qualified_get_panel_present",
+            )
+
+        if (
+            self.state == RuntimeState.PRESS
+            and bundle
+            and bundle.press is not None
+            and not bundle.press.detected
+            and not bundle.press.panel_candidate
+        ):
+            return self._transition(
+                RuntimeState.RESULT_PENDING,
+                timestamp,
+                "press_panel_disappeared",
+                visual_acknowledgement="qualified_press_panel_disappeared",
             )
 
         if recorded_observation:

@@ -1,6 +1,6 @@
 # Fishing Assistant Agent Check
 
-- Generated (UTC): 2026-07-11 08:01:03
+- Generated (UTC): 2026-07-11 14:09:17
 - Python: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
 - OS: Windows-11-10.0.26200-SP0
 - Reference image count: 11
@@ -19,8 +19,8 @@
 | ready2.png | READY | READY | 97.62% |
 | hook.png | HOOK | HOOK | 100.00% |
 | hook2.png | HOOK | HOOK | 100.00% |
-| press.png | PRESS | PRESS | 100.00% |
-| press2.png | PRESS | PRESS | 100.00% |
+| press.png | PRESS | PRESS | 99.31% |
+| press2.png | PRESS | PRESS | 99.31% |
 | get.png | GET | GET | 97.52% |
 | get2.png | GET | GET | 97.52% |
 
@@ -33,17 +33,17 @@
 ## Pytest output
 
 ```text
-........................................................................ [ 28%]
-........................................................................ [ 57%]
-........................................................................ [ 85%]
-....................................                                     [100%]
+........................................................................ [ 27%]
+........................................................................ [ 54%]
+........................................................................ [ 82%]
+..............................................                           [100%]
 ============================== warnings summary ===============================
 .venv\Lib\site-packages\_pytest\cacheprovider.py:469
   D:\project\fishing_assistant\.venv\Lib\site-packages\_pytest\cacheprovider.py:469: PytestCacheWarning: could not create cache path D:\project\fishing_assistant\.pytest_cache\v\cache\nodeids: [WinError 183] 當檔案已存在時，無法建立該檔案。: 'D:\\project\\fishing_assistant\\.pytest_cache\\v\\cache'
     config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-252 passed, 1 warning in 16.75s
+262 passed, 1 warning in 16.13s
 ```
 
 ## Failure summary
@@ -60,7 +60,7 @@
     config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-3 passed, 1 warning in 4.57s
+3 passed, 1 warning in 4.46s
 ```
 
 ## Debug output paths

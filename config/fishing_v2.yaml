@@ -73,6 +73,12 @@ hook_detector:
 press_detector:
   armed_fps: 5
   burst_fps: 20
+  panel_confirmation_frames: 2
+  panel_geometry_tolerance: 0.12
+  sequence_window_frames: 5
+  sequence_consensus_frames: 3
+  per_key_min_aggregated_confidence: 0.68
+  sequence_min_aggregated_confidence: 0.68
 
 get_detector:
   armed_fps: 5

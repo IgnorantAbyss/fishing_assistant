@@ -152,15 +152,198 @@ def _load_template_sets() -> tuple[dict[str, dict[str, list[np.ndarray]]], dict[
     return template_sets, errors
 
 
-def _classify(glyph: np.ndarray, templates: dict[str, list[np.ndarray]]) -> tuple[str, float]:
+def _classify_candidates(
+    glyph: np.ndarray,
+    templates: dict[str, list[np.ndarray]],
+) -> tuple[str, float, list[dict[str, Any]]]:
     if not templates:
-        return "?", 0.0
+        return "?", 0.0, []
     scores = {
         label: max(float(cv2.matchTemplate(glyph, template, cv2.TM_CCOEFF_NORMED)[0, 0]) for template in variants)
         for label, variants in templates.items()
     }
-    key = max(scores, key=scores.get)
-    return key, max(0.0, min(1.0, (scores[key] + 1.0) / 2.0))
+    ranked = sorted(
+        (
+            {"key": key, "confidence": round(max(0.0, min(1.0, (score + 1.0) / 2.0)), 4)}
+            for key, score in scores.items()
+        ),
+        key=lambda item: item["confidence"],
+        reverse=True,
+    )
+    return ranked[0]["key"], ranked[0]["confidence"], ranked[:3]
+
+
+def _horizontal_groups(values: np.ndarray) -> list[tuple[int, int]]:
+    indices = np.flatnonzero(values)
+    if not len(indices):
+        return []
+    groups: list[tuple[int, int]] = []
+    start = previous = int(indices[0])
+    for value in indices[1:]:
+        value = int(value)
+        if value > previous + 1:
+            groups.append((start, previous + 1))
+            start = value
+        previous = value
+    groups.append((start, previous + 1))
+    return groups
+
+
+def _measure_panel_geometry(
+    gray: np.ndarray,
+    edges: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    *,
+    baseline_hint: bool,
+) -> dict[str, Any]:
+    x1, y1, x2, y2 = bbox
+    panel_gray = gray[y1:y2, x1:x2]
+    panel_edges = edges[y1:y2, x1:x2]
+    panel_h, panel_w = panel_gray.shape[:2]
+    dark_ratio = float(np.mean(panel_gray < 115)) if panel_gray.size else 0.0
+    strong_columns = np.sum(panel_edges > 0, axis=0) >= max(8, round(panel_h * 0.45))
+    divider_groups = _horizontal_groups(strong_columns)
+    divider_centres = [round((start + end - 1) / 2) for start, end in divider_groups]
+    divider_centres = [value for value in divider_centres if 2 <= value <= panel_w - 3]
+    divider_count = len(divider_centres)
+    estimated_slots = max(4, min(14, round(panel_w / max(1.0, panel_h * 0.64))))
+    grid_match_count = sum(
+        any(abs(centre - expected) <= 5 for centre in divider_centres)
+        for expected in (round(index * panel_w / estimated_slots) for index in range(1, estimated_slots))
+    )
+    aspect = panel_w / max(1, panel_h)
+    geometry_score = max(0.0, min(1.0, 1.0 - abs(aspect - 6.4) / 3.0))
+    dark_score = max(0.0, min(1.0, (dark_ratio - 0.25) / 0.45))
+    divider_score = max(0.0, min(1.0, grid_match_count / max(1, estimated_slots - 1)))
+    panel_confidence = 0.45 + 0.25 * geometry_score + 0.20 * dark_score + 0.10 * divider_score
+    panel_candidate = bool(baseline_hint or dark_ratio >= 0.20 or grid_match_count >= 2)
+    panel_present = bool(
+        4.5 <= aspect <= 10.0
+        and dark_ratio >= 0.38
+        and grid_match_count >= max(4, round((estimated_slots - 1) * 0.75))
+    )
+    reason = (
+        "structural_panel_present" if panel_present
+        else "panel_geometry_incomplete" if panel_candidate
+        else "panel_not_found"
+    )
+    boundaries = [round(index * panel_w / estimated_slots) for index in range(estimated_slots + 1)]
+    slot_boxes = [
+        (x1 + boundaries[index], y1, x1 + boundaries[index + 1], y2)
+        for index in range(estimated_slots)
+    ]
+    return {
+        "panel_candidate": panel_candidate,
+        "panel_present": panel_present,
+        "reason": reason,
+        "panel_bbox": bbox,
+        "dark_ratio": dark_ratio,
+        "divider_count": divider_count,
+        "grid_match_count": grid_match_count,
+        "slot_count": estimated_slots,
+        "geometry_score": geometry_score,
+        "panel_confidence": max(0.0, min(1.0, panel_confidence)) if panel_candidate else 0.0,
+        "slot_boxes": slot_boxes,
+        "baseline_hint": baseline_hint,
+    }
+
+
+def _find_panel_geometry(crop: np.ndarray) -> dict[str, Any]:
+    """Find the PRESS grid by timer hints plus repeated cell geometry."""
+    height, width = crop.shape[:2]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 45, 130)
+    yellow = (
+        (hsv[:, :, 0] >= 12)
+        & (hsv[:, :, 0] <= 42)
+        & (hsv[:, :, 1] >= 75)
+        & (hsv[:, :, 2] >= 70)
+    ).astype(np.uint8) * 255
+    yellow[: int(height * 0.55)] = 0
+    yellow = cv2.morphologyEx(
+        yellow,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (31, 3)),
+    )
+    contours, _ = cv2.findContours(yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    baselines: list[tuple[int, int, int, int]] = []
+    for contour in contours:
+        x, y, candidate_width, candidate_height = cv2.boundingRect(contour)
+        if (
+            candidate_width >= int(width * 0.30)
+            and candidate_height <= 18
+            and int(height * 0.55) <= y <= height - 1
+        ):
+            baselines.append((x, y, candidate_width, candidate_height))
+    panel_width = round(width * 0.617)
+    panel_height = round(height * 0.298)
+    candidates: dict[tuple[int, int, int, int], bool] = {}
+    for x, y, candidate_width, _ in baselines:
+        if candidate_width < width * 0.90:
+            x1 = max(0, min(width - panel_width, x))
+            y2 = max(panel_height, min(height, y + 1))
+            candidates[(x1, y2 - panel_height, x1 + panel_width, y2)] = True
+    for x_ratio in (0.176, 0.190, 0.204):
+        for y_ratio in (0.49, 0.54, 0.59, 0.657):
+            x1 = max(0, min(width - panel_width, round(width * x_ratio)))
+            y1 = max(0, min(height - panel_height, round(height * y_ratio)))
+            candidates.setdefault((x1, y1, x1 + panel_width, y1 + panel_height), False)
+    measurements = [
+        _measure_panel_geometry(gray, edges, bbox, baseline_hint=hint)
+        for bbox, hint in candidates.items()
+    ]
+    return max(
+        measurements,
+        key=lambda item: (
+            item["panel_present"],
+            item["grid_match_count"],
+            item["dark_ratio"],
+            item["baseline_hint"],
+        ),
+    )
+
+
+def _decode_panel_slots(
+    crop: np.ndarray,
+    geometry: dict[str, Any],
+    templates: dict[str, list[np.ndarray]],
+) -> list[dict[str, Any]]:
+    if not geometry["panel_present"]:
+        return []
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    key_boxes: list[dict[str, Any]] = []
+    occupied_started = False
+    for x1, y1, x2, y2 in geometry["slot_boxes"]:
+        cell = hsv[y1:y2, x1:x2]
+        if not cell.size:
+            continue
+        # Letter glyphs occupy the upper half; directional arrows below them
+        # are deliberately excluded from classification.
+        glyph_bottom = max(1, round(cell.shape[0] * 0.56))
+        glyph_region = cell[2:glyph_bottom, 3:max(4, cell.shape[1] - 3)]
+        coloured = (
+            (glyph_region[:, :, 1] >= 50)
+            & (glyph_region[:, :, 2] >= 45)
+        )
+        occupied = float(np.mean(coloured)) >= 0.035
+        if not occupied:
+            if occupied_started:
+                break
+            continue
+        occupied_started = True
+        mask = coloured.astype(np.uint8)
+        key, confidence, top_candidates = _classify_candidates(
+            _glyph(mask, (0, 0, mask.shape[1], mask.shape[0]), tighten=True),
+            templates,
+        )
+        key_boxes.append({
+            "key": key,
+            "bbox": [x1, y1, x2, y1 + glyph_bottom],
+            "confidence": round(confidence, 4),
+            "top_candidates": top_candidates,
+        })
+    return key_boxes
 
 
 def _save_debug_image(
@@ -193,71 +376,77 @@ def detect_press_sequence(
     *,
     save_debug: bool = True,
 ) -> dict[str, Any]:
-    """Parse an eight-cell WASD panel without assuming the target sequence."""
+    """Detect PRESS panel structure and decode a frame-local sequence candidate."""
     frame, source = _load_image(image)
     config = roi_config or load_roi_config()
     active_thresholds = thresholds or load_thresholds_config()
     left, top, right, bottom = normalized_to_pixel_roi(config.rois["press_sequence"], frame.shape[1], frame.shape[0])
     crop = frame[top:bottom, left:right]
-    colour_mode, mask, local_boxes = _select_glyph_mask(crop)
+    geometry = _find_panel_geometry(crop)
     template_sets, template_errors = _load_template_sets()
-    templates = template_sets.get(colour_mode, {})
-    if colour_mode == "mixed_live":
-        templates = template_sets.get("teal", {})
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    purple_ratio = float(np.mean((hsv[:, :, 0] >= 125) & (hsv[:, :, 0] <= 170) & (hsv[:, :, 1] >= 60)))
+    colour_mode = "purple" if purple_ratio >= 0.003 else "mixed_live"
+    templates = template_sets.get("purple" if colour_mode == "purple" else "teal", {})
+    local_key_boxes = _decode_panel_slots(crop, geometry, templates)
     key_boxes: list[dict[str, Any]] = []
-    for box in local_boxes:
-        key, confidence = _classify(
-            _glyph(mask, box, tighten=colour_mode == "mixed_live"),
-            templates,
-        )
-        key_boxes.append(
-            {
-                "key": key,
-                "bbox": [left + box[0], top + box[1], left + box[2], top + box[3]],
-                "confidence": round(confidence, 4),
-            }
-        )
+    for item in local_key_boxes:
+        x1, y1, x2, y2 = item["bbox"]
+        key_boxes.append({
+            **item,
+            "bbox": [left + x1, top + y1, left + x2, top + y2],
+        })
     sequence = [item["key"] for item in key_boxes]
     sequence_text = "".join(sequence)
-    panel = None
-    dark_ratio = 0.0
-    if local_boxes:
-        panel = (
-            max(0, left + min(box[0] for box in local_boxes) - 20),
-            max(0, top + min(box[1] for box in local_boxes) - 16),
-            min(frame.shape[1], left + max(box[2] for box in local_boxes) + 20),
-            min(frame.shape[0], top + max(box[3] for box in local_boxes) + 22),
-        )
-        panel_gray = cv2.cvtColor(frame[panel[1]:panel[3], panel[0]:panel[2]], cv2.COLOR_BGR2GRAY)
-        dark_ratio = float(np.mean(panel_gray < 100))
-    confidence = float(np.mean([item["confidence"] for item in key_boxes])) if key_boxes else 0.0
-    minimum_cells = 4 if colour_mode in {"teal", "mixed_live"} else 8
-    detected = (
-        len(key_boxes) >= minimum_cells
-        and all(key in "WASD" for key in sequence)
-        and confidence >= 0.68
-        and dark_ratio >= 0.14
-        and bool(templates)
+    sequence_confidence = float(np.mean([item["confidence"] for item in key_boxes])) if key_boxes else 0.0
+    panel_local = geometry["panel_bbox"]
+    panel = None if panel_local is None else (
+        left + panel_local[0], top + panel_local[1], left + panel_local[2], top + panel_local[3]
     )
+    panel_present = bool(geometry["panel_present"])
+    panel_confidence = float(geometry["panel_confidence"])
+    detected = panel_present
     debug_path = _save_debug_image(frame, (left, top, right, bottom), panel, key_boxes, source) if save_debug else None
     features: list[str] = []
-    if panel is not None and dark_ratio >= 0.14:
+    if geometry["panel_candidate"]:
+        features.append("press_panel_candidate")
+    if panel_present:
         features.append("press_panel")
-    if len(key_boxes) >= minimum_cells:
+    if key_boxes:
         features.append("key_cells")
     if templates:
         features.append("letter_templates")
     return {
         "detected": detected,
-        "confidence": round(confidence, 4),
-        "sequence": sequence,
+        "confidence": round(panel_confidence, 4),
+        "panel_candidate": bool(geometry["panel_candidate"]),
+        "panel_present": panel_present,
+        "panel_qualification_reason": geometry["reason"],
+        "key_box_count": len(key_boxes),
+        "stable_key_box_count": 0,
+        "sequence": [],
+        "sequence_candidate": sequence,
+        "sequence_ready": False,
+        "sequence_confidence": round(sequence_confidence, 4),
+        "sequence_qualification_reason": (
+            "temporal_consensus_required" if panel_present and key_boxes
+            else "sequence_not_recoverable_from_frame" if panel_present
+            else "panel_not_present"
+        ),
         "sequence_text": sequence_text,
         "key_boxes": key_boxes,
         "matched_features": features,
         "debug": {
             "roi_name": "press_sequence",
             "colour_mode": colour_mode,
-            "dark_panel_ratio": round(dark_ratio, 4),
+            "panel_bbox": list(panel) if panel else None,
+            "dark_panel_ratio": round(float(geometry["dark_ratio"]), 4),
+            "divider_count": int(geometry["divider_count"]),
+            "grid_match_count": int(geometry["grid_match_count"]),
+            "slot_count": int(geometry["slot_count"]),
+            "geometry_score": round(float(geometry["geometry_score"]), 4),
+            "panel_confidence": round(panel_confidence, 4),
+            "glyph_confidence": round(sequence_confidence, 4),
             "template_error": template_errors.get(colour_mode),
             "template_keys": sorted(templates),
             "detector_min_confidence": active_thresholds.min_confidence_for("PRESS"),

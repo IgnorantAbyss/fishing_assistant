@@ -6,10 +6,11 @@
 - Hook qualified ACTIVE by global state: `{'HOOK': 50}`
 - Non-HOOK qualified false positives: **0**
 - Hook qualification: raw detected + `bar_fill` + positive `fill_ratio` + strong confidence; divider is optional.
-- PRESS detected: **0/24**
-- PRESS rejection counts: `{'incomplete_sequence': 18, 'glyph_confidence': 24, 'dark_panel_ratio': 14}`
-- Frame 428: confidence=0.6, sequence=['D', 'W', 'S', 'W', 'A', 'W', 'W', 'W'], boxes=8, reasons=`['glyph_confidence:0.6000<0.68']`.
-- PRESS detector has no temporal rejection rule; failures are frame-local sequence/key-box/confidence/panel checks.
+- PRESS panel present: **24/24**
+- PRESS sequence ready (single-frame tool): **0/24**
+- PRESS rejection counts: `{'sequence_confidence': 24, 'temporal_sequence_consensus_required': 24}`
+- Frame 428: panel_confidence=0.9702, sequence_candidate=['W', 'W', 'S', 'W', 'A', 'D', 'A', 'S'], sequence_confidence=0.5927, boxes=8, reasons=`['sequence_confidence:0.5927<0.68', 'temporal_sequence_consensus_required']`.
+- Runtime sequence readiness is temporal; see `press_detector_diagnostics_summary.md` and the manual review bundle.
 - GET original baseline: **0/19**; the fixed whole-ROI template comparison was misaligned with the live panel scale and position.
 - GET detected in visual panel range 440-458: **19/19**
 - GET rejection counts: `{'accepted': 19}`

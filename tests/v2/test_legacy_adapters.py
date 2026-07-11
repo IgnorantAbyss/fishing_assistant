@@ -32,7 +32,10 @@ def test_press_adapter_matches_legacy_semantics() -> None:
     observation = LegacyPressDetectorAdapter().observe(frame, CONTEXT)
     assert observation.detected == legacy["detected"]
     assert observation.confidence == legacy["confidence"]
-    assert "".join(observation.sequence) == legacy["sequence_text"]
+    assert observation.sequence == ()
+    assert "".join(observation.sequence_candidate) == legacy["sequence_text"]
+    assert observation.panel_present is True
+    assert observation.sequence_ready is False
 
 
 def test_get_adapter_matches_legacy_semantics() -> None:

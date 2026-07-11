@@ -1,0 +1,1701 @@
+{
+  "config": {
+    "panel_confirmation_frames": 2,
+    "panel_geometry_tolerance": 0.12,
+    "sequence_window_frames": 5,
+    "sequence_consensus_frames": 3,
+    "per_key_min_aggregated_confidence": 0.68,
+    "sequence_min_aggregated_confidence": 0.68
+  },
+  "session_count": 7,
+  "episode_count": 8,
+  "press_frame_support": 151,
+  "panel_present_frames": 147,
+  "panel_presence_recall": 0.9735,
+  "false_positive_raw_by_state": {
+    "IDLE": 0,
+    "WAITING": 1,
+    "READY": 0,
+    "HOOK": 0,
+    "GET": 0
+  },
+  "false_positive_temporally_confirmed_by_state": {
+    "IDLE": 0,
+    "WAITING": 0,
+    "READY": 0,
+    "HOOK": 0,
+    "GET": 0
+  },
+  "false_positive_frames": [
+    {
+      "session_id": "session_20260710_124419",
+      "frame": 204,
+      "global_state": "WAITING",
+      "panel_confidence": 0.9461,
+      "key_box_count": 10,
+      "temporally_confirmed": false
+    }
+  ],
+  "runtime_fusion_false_positive_count": 0,
+  "runtime_fusion_false_positive_reason": "Non-PRESS diagnostic scans do not bypass detector activation; OFF evidence is never used by Fusion.",
+  "sequence_ready_episode_count": 0,
+  "sequence_accuracy": null,
+  "sequence_accuracy_reason": "No manually confirmed sequence ground truth; accuracy is intentionally not computed.",
+  "sessions": [
+    {
+      "session_id": "session_20260709_192315",
+      "frame_count": 600,
+      "press_episode_count": 1,
+      "press_frame_support": 12,
+      "panel_present_frames": 11,
+      "panel_presence_recall": 0.9167,
+      "sequence_ready_episodes": 0
+    },
+    {
+      "session_id": "session_20260710_061220",
+      "frame_count": 600,
+      "press_episode_count": 1,
+      "press_frame_support": 11,
+      "panel_present_frames": 8,
+      "panel_presence_recall": 0.7273,
+      "sequence_ready_episodes": 0
+    },
+    {
+      "session_id": "session_20260710_123210",
+      "frame_count": 600,
+      "press_episode_count": 1,
+      "press_frame_support": 10,
+      "panel_present_frames": 10,
+      "panel_presence_recall": 1.0,
+      "sequence_ready_episodes": 0
+    },
+    {
+      "session_id": "session_20260710_124419",
+      "frame_count": 600,
+      "press_episode_count": 1,
+      "press_frame_support": 22,
+      "panel_present_frames": 22,
+      "panel_presence_recall": 1.0,
+      "sequence_ready_episodes": 0
+    },
+    {
+      "session_id": "session_20260710_125441",
+      "frame_count": 600,
+      "press_episode_count": 1,
+      "press_frame_support": 24,
+      "panel_present_frames": 24,
+      "panel_presence_recall": 1.0,
+      "sequence_ready_episodes": 0
+    },
+    {
+      "session_id": "session_20260710_130308",
+      "frame_count": 600,
+      "press_episode_count": 1,
+      "press_frame_support": 24,
+      "panel_present_frames": 24,
+      "panel_presence_recall": 1.0,
+      "sequence_ready_episodes": 0
+    },
+    {
+      "session_id": "session_20260710_131254",
+      "frame_count": 600,
+      "press_episode_count": 2,
+      "press_frame_support": 48,
+      "panel_present_frames": 48,
+      "panel_presence_recall": 1.0,
+      "sequence_ready_episodes": 0
+    }
+  ],
+  "episodes": [
+    {
+      "session_id": "session_20260709_192315",
+      "press_start": 472,
+      "press_end": 483,
+      "support": 12,
+      "panel_candidate_first_frame": 472,
+      "panel_present_first_frame": 472,
+      "panel_confirmed_first_frame": 473,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 0.9167,
+      "key_box_counts": [
+        8,
+        10,
+        10,
+        10,
+        10,
+        10,
+        8,
+        8,
+        8,
+        8,
+        10,
+        0
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        8,
+        9,
+        9,
+        9,
+        9,
+        0
+      ],
+      "glyph_confidence": {
+        "count": 100,
+        "min": 0.4842,
+        "p25": 0.5265,
+        "median": 0.5571,
+        "p75": 0.601,
+        "max": 0.7382
+      },
+      "aggregated_confidence": {
+        "count": 11,
+        "min": 0.4445,
+        "p25": 0.4814,
+        "median": 0.5153,
+        "p75": 0.5376,
+        "max": 0.6798
+      },
+      "modal_sequence_candidate": "WWWSSSSADD",
+      "sequence_candidate_consistency": 0.5455,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 474,
+      "review_top_candidates": [
+        [
+          {
+            "key": "W",
+            "confidence": 0.5335
+          },
+          {
+            "key": "S",
+            "confidence": 0.5035
+          },
+          {
+            "key": "A",
+            "confidence": 0.3961
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5386
+          },
+          {
+            "key": "S",
+            "confidence": 0.5121
+          },
+          {
+            "key": "A",
+            "confidence": 0.4461
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5406
+          },
+          {
+            "key": "S",
+            "confidence": 0.5236
+          },
+          {
+            "key": "A",
+            "confidence": 0.4931
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.568
+          },
+          {
+            "key": "W",
+            "confidence": 0.5605
+          },
+          {
+            "key": "A",
+            "confidence": 0.537
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.5572
+          },
+          {
+            "key": "W",
+            "confidence": 0.5506
+          },
+          {
+            "key": "A",
+            "confidence": 0.509
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.5423
+          },
+          {
+            "key": "A",
+            "confidence": 0.5179
+          },
+          {
+            "key": "W",
+            "confidence": 0.5056
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.5025
+          },
+          {
+            "key": "A",
+            "confidence": 0.4947
+          },
+          {
+            "key": "W",
+            "confidence": 0.4732
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5314
+          },
+          {
+            "key": "S",
+            "confidence": 0.5272
+          },
+          {
+            "key": "W",
+            "confidence": 0.5027
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.5815
+          },
+          {
+            "key": "A",
+            "confidence": 0.5468
+          },
+          {
+            "key": "W",
+            "confidence": 0.5467
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.5226
+          },
+          {
+            "key": "W",
+            "confidence": 0.4532
+          },
+          {
+            "key": "A",
+            "confidence": 0.4187
+          }
+        ]
+      ]
+    },
+    {
+      "session_id": "session_20260710_061220",
+      "press_start": 507,
+      "press_end": 517,
+      "support": 11,
+      "panel_candidate_first_frame": 507,
+      "panel_present_first_frame": 507,
+      "panel_confirmed_first_frame": 508,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 0.7273,
+      "key_box_counts": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        5,
+        0,
+        0,
+        0
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        7,
+        0,
+        0,
+        0
+      ],
+      "glyph_confidence": {
+        "count": 33,
+        "min": 0.4849,
+        "p25": 0.5803,
+        "median": 0.6221,
+        "p75": 0.6282,
+        "max": 0.7158
+      },
+      "aggregated_confidence": {
+        "count": 8,
+        "min": 0.4138,
+        "p25": 0.4275,
+        "median": 0.5072,
+        "p75": 0.5951,
+        "max": 0.6253
+      },
+      "modal_sequence_candidate": "AWSA",
+      "sequence_candidate_consistency": 0.375,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 514,
+      "review_top_candidates": [
+        [
+          {
+            "key": "S",
+            "confidence": 0.6128
+          },
+          {
+            "key": "W",
+            "confidence": 0.6082
+          },
+          {
+            "key": "A",
+            "confidence": 0.601
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5594
+          },
+          {
+            "key": "S",
+            "confidence": 0.5556
+          },
+          {
+            "key": "D",
+            "confidence": 0.5177
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.508
+          },
+          {
+            "key": "A",
+            "confidence": 0.4919
+          },
+          {
+            "key": "D",
+            "confidence": 0.484
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.5803
+          },
+          {
+            "key": "S",
+            "confidence": 0.5788
+          },
+          {
+            "key": "W",
+            "confidence": 0.5649
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.6891
+          },
+          {
+            "key": "D",
+            "confidence": 0.6285
+          },
+          {
+            "key": "W",
+            "confidence": 0.6279
+          }
+        ]
+      ]
+    },
+    {
+      "session_id": "session_20260710_123210",
+      "press_start": 574,
+      "press_end": 583,
+      "support": 10,
+      "panel_candidate_first_frame": 574,
+      "panel_present_first_frame": 574,
+      "panel_confirmed_first_frame": 575,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 1.0,
+      "key_box_counts": [
+        2,
+        2,
+        2,
+        10,
+        2,
+        2,
+        2,
+        2,
+        3,
+        3
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "glyph_confidence": {
+        "count": 30,
+        "min": 0.4945,
+        "p25": 0.5216,
+        "median": 0.618,
+        "p75": 0.6369,
+        "max": 0.718
+      },
+      "aggregated_confidence": {
+        "count": 10,
+        "min": 0.5099,
+        "p25": 0.5151,
+        "median": 0.5373,
+        "p75": 0.5572,
+        "max": 0.6367
+      },
+      "modal_sequence_candidate": "AW",
+      "sequence_candidate_consistency": 0.8,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 577,
+      "review_top_candidates": [
+        [
+          {
+            "key": "S",
+            "confidence": 0.5079
+          },
+          {
+            "key": "W",
+            "confidence": 0.5075
+          },
+          {
+            "key": "D",
+            "confidence": 0.4964
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.4945
+          },
+          {
+            "key": "W",
+            "confidence": 0.4854
+          },
+          {
+            "key": "D",
+            "confidence": 0.4833
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.6485
+          },
+          {
+            "key": "W",
+            "confidence": 0.5726
+          },
+          {
+            "key": "A",
+            "confidence": 0.5238
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.677
+          },
+          {
+            "key": "W",
+            "confidence": 0.6007
+          },
+          {
+            "key": "A",
+            "confidence": 0.5345
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.6387
+          },
+          {
+            "key": "W",
+            "confidence": 0.6309
+          },
+          {
+            "key": "A",
+            "confidence": 0.521
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.5265
+          },
+          {
+            "key": "W",
+            "confidence": 0.5224
+          },
+          {
+            "key": "S",
+            "confidence": 0.4604
+          }
+        ]
+      ]
+    },
+    {
+      "session_id": "session_20260710_124419",
+      "press_start": 334,
+      "press_end": 355,
+      "support": 22,
+      "panel_candidate_first_frame": 334,
+      "panel_present_first_frame": 334,
+      "panel_confirmed_first_frame": 335,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 1.0,
+      "key_box_counts": [
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        5,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        8,
+        9,
+        9,
+        9,
+        9,
+        7,
+        9,
+        7,
+        9,
+        9,
+        9
+      ],
+      "glyph_confidence": {
+        "count": 215,
+        "min": 0.4658,
+        "p25": 0.5,
+        "median": 0.5015,
+        "p75": 0.5894,
+        "max": 0.6904
+      },
+      "aggregated_confidence": {
+        "count": 22,
+        "min": 0.3871,
+        "p25": 0.4306,
+        "median": 0.4839,
+        "p75": 0.5175,
+        "max": 0.5299
+      },
+      "modal_sequence_candidate": "DDWDDAAAAA",
+      "sequence_candidate_consistency": 0.2727,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 351,
+      "review_top_candidates": [
+        [
+          {
+            "key": "S",
+            "confidence": 0.5469
+          },
+          {
+            "key": "W",
+            "confidence": 0.5051
+          },
+          {
+            "key": "D",
+            "confidence": 0.4949
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.6904
+          },
+          {
+            "key": "S",
+            "confidence": 0.6054
+          },
+          {
+            "key": "D",
+            "confidence": 0.5573
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.6372
+          },
+          {
+            "key": "S",
+            "confidence": 0.6136
+          },
+          {
+            "key": "W",
+            "confidence": 0.6135
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.6415
+          },
+          {
+            "key": "D",
+            "confidence": 0.6285
+          },
+          {
+            "key": "S",
+            "confidence": 0.5818
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.547
+          },
+          {
+            "key": "S",
+            "confidence": 0.5126
+          },
+          {
+            "key": "W",
+            "confidence": 0.4518
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5998
+          },
+          {
+            "key": "D",
+            "confidence": 0.5751
+          },
+          {
+            "key": "S",
+            "confidence": 0.5544
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.6064
+          },
+          {
+            "key": "D",
+            "confidence": 0.5654
+          },
+          {
+            "key": "S",
+            "confidence": 0.5206
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.6312
+          },
+          {
+            "key": "D",
+            "confidence": 0.5259
+          },
+          {
+            "key": "S",
+            "confidence": 0.4964
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ]
+      ]
+    },
+    {
+      "session_id": "session_20260710_125441",
+      "press_start": 396,
+      "press_end": 419,
+      "support": 24,
+      "panel_candidate_first_frame": 396,
+      "panel_present_first_frame": 396,
+      "panel_confirmed_first_frame": 397,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 1.0,
+      "key_box_counts": [
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        7,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        8,
+        9,
+        7,
+        9,
+        9,
+        9,
+        8
+      ],
+      "glyph_confidence": {
+        "count": 237,
+        "min": 0.4656,
+        "p25": 0.5131,
+        "median": 0.5588,
+        "p75": 0.5687,
+        "max": 0.6903
+      },
+      "aggregated_confidence": {
+        "count": 24,
+        "min": 0.4119,
+        "p25": 0.4507,
+        "median": 0.5927,
+        "p75": 0.5985,
+        "max": 0.61
+      },
+      "modal_sequence_candidate": "DDDDDDDSDA",
+      "sequence_candidate_consistency": 0.4583,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 413,
+      "review_top_candidates": [
+        [
+          {
+            "key": "A",
+            "confidence": 0.6848
+          },
+          {
+            "key": "S",
+            "confidence": 0.583
+          },
+          {
+            "key": "D",
+            "confidence": 0.5537
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.6392
+          },
+          {
+            "key": "A",
+            "confidence": 0.6378
+          },
+          {
+            "key": "D",
+            "confidence": 0.6156
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.5159
+          },
+          {
+            "key": "W",
+            "confidence": 0.4558
+          },
+          {
+            "key": "D",
+            "confidence": 0.4347
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.6206
+          },
+          {
+            "key": "D",
+            "confidence": 0.5677
+          },
+          {
+            "key": "A",
+            "confidence": 0.5523
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5935
+          },
+          {
+            "key": "D",
+            "confidence": 0.521
+          },
+          {
+            "key": "S",
+            "confidence": 0.5137
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5622
+          },
+          {
+            "key": "S",
+            "confidence": 0.5606
+          },
+          {
+            "key": "A",
+            "confidence": 0.5445
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5948
+          },
+          {
+            "key": "W",
+            "confidence": 0.5521
+          },
+          {
+            "key": "S",
+            "confidence": 0.5382
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5857
+          },
+          {
+            "key": "W",
+            "confidence": 0.5775
+          },
+          {
+            "key": "S",
+            "confidence": 0.5514
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.5266
+          },
+          {
+            "key": "S",
+            "confidence": 0.5261
+          },
+          {
+            "key": "W",
+            "confidence": 0.5242
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5926
+          },
+          {
+            "key": "D",
+            "confidence": 0.5892
+          },
+          {
+            "key": "W",
+            "confidence": 0.5651
+          }
+        ]
+      ]
+    },
+    {
+      "session_id": "session_20260710_130308",
+      "press_start": 415,
+      "press_end": 438,
+      "support": 24,
+      "panel_candidate_first_frame": 415,
+      "panel_present_first_frame": 415,
+      "panel_confirmed_first_frame": 416,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 1.0,
+      "key_box_counts": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        9,
+        9,
+        6,
+        6,
+        6,
+        9,
+        8,
+        8,
+        8
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        8,
+        9,
+        9,
+        8,
+        9,
+        7,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "glyph_confidence": {
+        "count": 189,
+        "min": 0.4943,
+        "p25": 0.578,
+        "median": 0.6004,
+        "p75": 0.6306,
+        "max": 0.8383
+      },
+      "aggregated_confidence": {
+        "count": 24,
+        "min": 0.4215,
+        "p25": 0.4495,
+        "median": 0.5259,
+        "p75": 0.6509,
+        "max": 0.6616
+      },
+      "modal_sequence_candidate": "AAAAAAAA",
+      "sequence_candidate_consistency": 0.375,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 430,
+      "review_top_candidates": [
+        [
+          {
+            "key": "W",
+            "confidence": 0.7002
+          },
+          {
+            "key": "S",
+            "confidence": 0.6224
+          },
+          {
+            "key": "D",
+            "confidence": 0.5764
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.6486
+          },
+          {
+            "key": "S",
+            "confidence": 0.5571
+          },
+          {
+            "key": "D",
+            "confidence": 0.5475
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.6278
+          },
+          {
+            "key": "W",
+            "confidence": 0.6277
+          },
+          {
+            "key": "D",
+            "confidence": 0.6111
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.6168
+          },
+          {
+            "key": "W",
+            "confidence": 0.5938
+          },
+          {
+            "key": "D",
+            "confidence": 0.5636
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5565
+          },
+          {
+            "key": "A",
+            "confidence": 0.5385
+          },
+          {
+            "key": "S",
+            "confidence": 0.5187
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.6146
+          },
+          {
+            "key": "S",
+            "confidence": 0.4403
+          },
+          {
+            "key": "W",
+            "confidence": 0.4093
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.5708
+          },
+          {
+            "key": "A",
+            "confidence": 0.5646
+          },
+          {
+            "key": "W",
+            "confidence": 0.5254
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.577
+          },
+          {
+            "key": "D",
+            "confidence": 0.557
+          },
+          {
+            "key": "S",
+            "confidence": 0.5564
+          }
+        ]
+      ]
+    },
+    {
+      "session_id": "session_20260710_131254",
+      "press_start": 225,
+      "press_end": 249,
+      "support": 25,
+      "panel_candidate_first_frame": 225,
+      "panel_present_first_frame": 225,
+      "panel_confirmed_first_frame": 226,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 1.0,
+      "key_box_counts": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        8,
+        8,
+        5,
+        5,
+        5,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        8,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        7,
+        9,
+        7,
+        7,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "glyph_confidence": {
+        "count": 171,
+        "min": 0.4778,
+        "p25": 0.5767,
+        "median": 0.6123,
+        "p75": 0.6542,
+        "max": 0.7833
+      },
+      "aggregated_confidence": {
+        "count": 25,
+        "min": 0.3803,
+        "p25": 0.4581,
+        "median": 0.5511,
+        "p75": 0.6447,
+        "max": 0.6781
+      },
+      "modal_sequence_candidate": "AAAAAAA",
+      "sequence_candidate_consistency": 0.28,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 239,
+      "review_top_candidates": [
+        [
+          {
+            "key": "W",
+            "confidence": 0.6542
+          },
+          {
+            "key": "D",
+            "confidence": 0.5422
+          },
+          {
+            "key": "S",
+            "confidence": 0.5217
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.6614
+          },
+          {
+            "key": "W",
+            "confidence": 0.646
+          },
+          {
+            "key": "A",
+            "confidence": 0.6281
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5978
+          },
+          {
+            "key": "A",
+            "confidence": 0.562
+          },
+          {
+            "key": "S",
+            "confidence": 0.5442
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.6218
+          },
+          {
+            "key": "D",
+            "confidence": 0.6069
+          },
+          {
+            "key": "W",
+            "confidence": 0.5934
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.4901
+          },
+          {
+            "key": "S",
+            "confidence": 0.4253
+          },
+          {
+            "key": "D",
+            "confidence": 0.4236
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "S",
+            "confidence": 0.6413
+          },
+          {
+            "key": "W",
+            "confidence": 0.6382
+          },
+          {
+            "key": "D",
+            "confidence": 0.581
+          }
+        ]
+      ]
+    },
+    {
+      "session_id": "session_20260710_131254",
+      "press_start": 554,
+      "press_end": 576,
+      "support": 23,
+      "panel_candidate_first_frame": 554,
+      "panel_present_first_frame": 554,
+      "panel_confirmed_first_frame": 555,
+      "sequence_ready_first_frame": null,
+      "panel_detection_latency_frames": 1,
+      "panel_detection_latency_seconds": 0.2,
+      "panel_presence_recall": 1.0,
+      "key_box_counts": [
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        7,
+        7,
+        4,
+        4,
+        4,
+        5,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6
+      ],
+      "grid_match_counts": [
+        9,
+        9,
+        9,
+        9,
+        8,
+        9,
+        9,
+        7,
+        9,
+        9,
+        9,
+        9,
+        7,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "glyph_confidence": {
+        "count": 133,
+        "min": 0.5,
+        "p25": 0.5847,
+        "median": 0.6153,
+        "p75": 0.6558,
+        "max": 0.7846
+      },
+      "aggregated_confidence": {
+        "count": 23,
+        "min": 0.4243,
+        "p25": 0.5867,
+        "median": 0.6617,
+        "p75": 0.6956,
+        "max": 0.7419
+      },
+      "modal_sequence_candidate": "AAAAAA",
+      "sequence_candidate_consistency": 0.3913,
+      "predicted_sequence": "",
+      "sequence_status": "sequence_not_recoverable_from_replay",
+      "review_frame": 564,
+      "review_top_candidates": [
+        [
+          {
+            "key": "W",
+            "confidence": 0.7481
+          },
+          {
+            "key": "S",
+            "confidence": 0.5921
+          },
+          {
+            "key": "D",
+            "confidence": 0.5921
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.6879
+          },
+          {
+            "key": "S",
+            "confidence": 0.643
+          },
+          {
+            "key": "W",
+            "confidence": 0.6199
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.5618
+          },
+          {
+            "key": "A",
+            "confidence": 0.5261
+          },
+          {
+            "key": "S",
+            "confidence": 0.5206
+          }
+        ],
+        [
+          {
+            "key": "A",
+            "confidence": 0.5
+          },
+          {
+            "key": "S",
+            "confidence": 0.5
+          },
+          {
+            "key": "D",
+            "confidence": 0.5
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.5549
+          },
+          {
+            "key": "W",
+            "confidence": 0.4698
+          },
+          {
+            "key": "S",
+            "confidence": 0.3931
+          }
+        ],
+        [
+          {
+            "key": "D",
+            "confidence": 0.5464
+          },
+          {
+            "key": "A",
+            "confidence": 0.5018
+          },
+          {
+            "key": "S",
+            "confidence": 0.4839
+          }
+        ],
+        [
+          {
+            "key": "W",
+            "confidence": 0.6424
+          },
+          {
+            "key": "S",
+            "confidence": 0.5871
+          },
+          {
+            "key": "A",
+            "confidence": 0.5707
+          }
+        ]
+      ]
+    }
+  ],
+  "review_html": "D:\\project\\fishing_assistant\\reports\\fishing_v2\\press_sequence_review\\index.html",
+  "review_csv": "D:\\project\\fishing_assistant\\reports\\fishing_v2\\press_sequence_review\\review_items.csv"
+}

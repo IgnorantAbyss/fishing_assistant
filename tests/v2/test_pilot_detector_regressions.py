@@ -11,11 +11,14 @@ FRAMES = ROOT / "assets" / "replay" / "sessions" / "session_20260710_130308" / "
 def test_pilot_press_frame_428_parses_mixed_progress_colours() -> None:
     result = detect_press_sequence(FRAMES / "000428.jpg", save_debug=False)
     assert len(result["key_boxes"]) == 8
-    assert all(key in "WASD" for key in result["sequence"])
-    # Extraction is repaired; confidence calibration remains deliberately
-    # unchanged, so this Pilot frame is still reported as a candidate miss.
-    assert result["detected"] is False
-    assert result["confidence"] < 0.68
+    assert all(key in "WASD" for key in result["sequence_candidate"])
+    # Panel presence is structural and independent of glyph confidence. A
+    # single frame never exposes an action-ready sequence.
+    assert result["panel_present"] is True
+    assert result["detected"] is True
+    assert result["sequence_ready"] is False
+    assert result["sequence"] == []
+    assert result["sequence_confidence"] < 0.68
 
 
 def test_pilot_get_panel_is_detected_from_frame_440() -> None:

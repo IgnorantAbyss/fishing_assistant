@@ -198,6 +198,11 @@ def test_waiting_polling_and_detector_frequencies_are_configured() -> None:
     assert polling["waiting_max_seconds"] == 5.0
     assert config["hook_detector"]["burst_fps"] == 25
     assert config["press_detector"]["burst_fps"] == 20
+    assert config["press_detector"]["panel_confirmation_frames"] == 2
+    assert config["press_detector"]["sequence_window_frames"] == 5
+    assert config["press_detector"]["sequence_consensus_frames"] == 3
+    assert config["press_detector"]["per_key_min_aggregated_confidence"] == 0.68
+    assert config["press_detector"]["sequence_min_aggregated_confidence"] == 0.68
     policy = RuntimeSchedulePolicy(PromptPollingConfig(**polling))
     assert policy.prompt_interval_seconds(RuntimeState.WAITING) == 4.0
     assert policy.prompt_interval_seconds(RuntimeState.READY) == pytest.approx(0.2)

@@ -58,12 +58,25 @@ def _config_objects(config_path: Path):
         press_burst_fps=data["press_detector"]["burst_fps"],
         get_armed_fps=data["get_detector"]["armed_fps"],
     )
+    press = data["press_detector"]
+    qualification = EvidenceQualificationConfig(
+        hook_strong_confidence=data["fusion"]["hook_strong_threshold"],
+        press_strong_confidence=data["fusion"]["press_strong_threshold"],
+        get_strong_confidence=data["fusion"]["get_strong_threshold"],
+        press_panel_confirmation_frames=press["panel_confirmation_frames"],
+        press_panel_geometry_tolerance=press["panel_geometry_tolerance"],
+        press_sequence_window_frames=press["sequence_window_frames"],
+        press_sequence_consensus_frames=press["sequence_consensus_frames"],
+        press_per_key_min_aggregated_confidence=press["per_key_min_aggregated_confidence"],
+        press_sequence_min_aggregated_confidence=press["sequence_min_aggregated_confidence"],
+    )
     return (
         FusionConfig(**data["fusion"]),
         FSMConfig(**fsm),
         SynchronizationConfig(**data["sync"]),
         SafetyConfig(**data["safety"]),
         activation,
+        qualification,
     )
 
 
@@ -111,6 +124,7 @@ class V2ReplayRunner:
             self.sync_config,
             self.safety_config,
             self.activation_config,
+            self.qualification_config,
         ) = _config_objects(self.config_path)
         if self.safety_config.emit_actions:
             raise ValueError("Hybrid Runtime v2 replay requires safety.emit_actions=false")
@@ -146,11 +160,7 @@ class V2ReplayRunner:
             safety,
             action_sink=None,
             activation_policy=DetectorActivationPolicy(self.activation_config),
-            evidence_qualifier=DetectorEvidenceQualifier(EvidenceQualificationConfig(
-                hook_strong_confidence=self.fusion_config.hook_strong_threshold,
-                press_strong_confidence=self.fusion_config.press_strong_threshold,
-                get_strong_confidence=self.fusion_config.get_strong_threshold,
-            )),
+            evidence_qualifier=DetectorEvidenceQualifier(self.qualification_config),
         )
         synchronizer = StartupSynchronizer(self.sync_config, started_at=0.0)
         if start_state is not None:
@@ -208,6 +218,7 @@ class V2ReplayRunner:
                 action_mode=action_mode,
             )
             qualifications = _qualification_values(result.qualified)
+            qualified_press = result.qualified.bundle.press
             rows.append({
                 "frame_index": context.frame_index,
                 "global_ground_truth": replay_frame.global_ground_truth,
@@ -219,6 +230,17 @@ class V2ReplayRunner:
                 "qualification_reason": qualifications["reason"],
                 "used_by_fusion": qualifications["used"],
                 "diagnostic_only": qualifications["diagnostic_only"],
+                "press_panel_candidate": press.panel_candidate,
+                "press_panel_present_raw": press.panel_present,
+                "press_panel_present_qualified": bool(qualified_press and qualified_press.panel_present),
+                "press_panel_qualification_reason": result.qualified.press.qualification_reason,
+                "press_key_box_count": press.key_box_count,
+                "press_stable_key_box_count": qualified_press.stable_key_box_count if qualified_press else 0,
+                "press_sequence_candidate": list(qualified_press.sequence_candidate) if qualified_press else [],
+                "press_sequence_ready": bool(qualified_press and qualified_press.sequence_ready),
+                "press_sequence_confidence": qualified_press.sequence_confidence if qualified_press else 0.0,
+                "press_sequence_qualification_reason": result.qualified.press.sequence_qualification_reason,
+                "press_used_by_fusion": result.qualified.press.used_by_fusion,
                 "hook_observation": asdict(hook),
                 "press_observation": asdict(press),
                 "get_observation": asdict(get),

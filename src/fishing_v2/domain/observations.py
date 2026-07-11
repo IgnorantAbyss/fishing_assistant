@@ -51,6 +51,15 @@ class PressObservation:
     timestamp: float
     source: str = "press_detector"
     sequence: tuple[str, ...] = ()
+    panel_candidate: bool = False
+    panel_present: bool = False
+    panel_qualification_reason: str = ""
+    key_box_count: int = 0
+    stable_key_box_count: int = 0
+    sequence_candidate: tuple[str, ...] = ()
+    sequence_ready: bool = False
+    sequence_confidence: float = 0.0
+    sequence_qualification_reason: str = ""
     evidence: Mapping[str, Any] = field(default_factory=dict)
 
 

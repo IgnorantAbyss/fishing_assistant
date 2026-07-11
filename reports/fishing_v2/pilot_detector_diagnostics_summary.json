@@ -18,122 +18,241 @@
       415,
       438
     ],
-    "detected": 0,
+    "panel_present": 24,
+    "sequence_ready": 0,
     "total": 24,
     "rejection_reason_counts": {
-      "incomplete_sequence": 18,
-      "glyph_confidence": 24,
-      "dark_panel_ratio": 14
+      "sequence_confidence": 24,
+      "temporal_sequence_consensus_required": 24
     },
     "frame_428": {
       "frame": 428,
-      "confidence": 0.6,
-      "detected": false,
+      "confidence": 0.9702,
+      "detected": true,
+      "panel_candidate": true,
+      "panel_present": true,
+      "panel_qualification_reason": "structural_panel_present",
       "sequence": [
-        "D",
+        "W",
         "W",
         "S",
         "W",
         "A",
-        "W",
-        "W",
-        "W"
+        "D",
+        "A",
+        "S"
       ],
+      "sequence_ready": false,
+      "sequence_confidence": 0.5927,
       "key_boxes": [
         {
-          "key": "D",
+          "key": "W",
           "bbox": [
             1081,
-            349,
+            377,
             1119,
-            384
+            411
           ],
-          "confidence": 0.6114
+          "confidence": 0.6988,
+          "top_candidates": [
+            {
+              "key": "W",
+              "confidence": 0.6988
+            },
+            {
+              "key": "S",
+              "confidence": 0.6235
+            },
+            {
+              "key": "D",
+              "confidence": 0.5747
+            }
+          ]
         },
         {
           "key": "W",
           "bbox": [
             1119,
-            349,
+            377,
             1157,
-            384
+            411
           ],
-          "confidence": 0.5694
+          "confidence": 0.6857,
+          "top_candidates": [
+            {
+              "key": "W",
+              "confidence": 0.6857
+            },
+            {
+              "key": "S",
+              "confidence": 0.5788
+            },
+            {
+              "key": "D",
+              "confidence": 0.5759
+            }
+          ]
         },
         {
           "key": "S",
           "bbox": [
             1157,
-            349,
+            377,
             1195,
-            384
+            411
           ],
-          "confidence": 0.5654
+          "confidence": 0.6369,
+          "top_candidates": [
+            {
+              "key": "S",
+              "confidence": 0.6369
+            },
+            {
+              "key": "W",
+              "confidence": 0.6295
+            },
+            {
+              "key": "A",
+              "confidence": 0.6102
+            }
+          ]
         },
         {
           "key": "W",
           "bbox": [
             1195,
-            349,
+            377,
             1233,
-            384
+            411
           ],
-          "confidence": 0.6185
+          "confidence": 0.5929,
+          "top_candidates": [
+            {
+              "key": "W",
+              "confidence": 0.5929
+            },
+            {
+              "key": "S",
+              "confidence": 0.5709
+            },
+            {
+              "key": "A",
+              "confidence": 0.523
+            }
+          ]
         },
         {
           "key": "A",
           "bbox": [
             1233,
-            349,
+            377,
             1271,
-            384
+            411
           ],
-          "confidence": 0.6115
+          "confidence": 0.5,
+          "top_candidates": [
+            {
+              "key": "A",
+              "confidence": 0.5
+            },
+            {
+              "key": "S",
+              "confidence": 0.5
+            },
+            {
+              "key": "D",
+              "confidence": 0.5
+            }
+          ]
         },
         {
-          "key": "W",
+          "key": "D",
           "bbox": [
             1271,
-            349,
-            1309,
-            384
+            377,
+            1308,
+            411
           ],
-          "confidence": 0.6407
+          "confidence": 0.5749,
+          "top_candidates": [
+            {
+              "key": "D",
+              "confidence": 0.5749
+            },
+            {
+              "key": "A",
+              "confidence": 0.4571
+            },
+            {
+              "key": "W",
+              "confidence": 0.4327
+            }
+          ]
         },
         {
-          "key": "W",
+          "key": "A",
           "bbox": [
-            1309,
-            349,
-            1347,
-            384
+            1308,
+            377,
+            1346,
+            411
           ],
-          "confidence": 0.649
+          "confidence": 0.5,
+          "top_candidates": [
+            {
+              "key": "A",
+              "confidence": 0.5
+            },
+            {
+              "key": "S",
+              "confidence": 0.5
+            },
+            {
+              "key": "D",
+              "confidence": 0.5
+            }
+          ]
         },
         {
-          "key": "W",
+          "key": "S",
           "bbox": [
-            1347,
-            349,
-            1385,
-            384
+            1346,
+            377,
+            1384,
+            411
           ],
-          "confidence": 0.5343
+          "confidence": 0.5526,
+          "top_candidates": [
+            {
+              "key": "S",
+              "confidence": 0.5526
+            },
+            {
+              "key": "A",
+              "confidence": 0.5458
+            },
+            {
+              "key": "W",
+              "confidence": 0.5279
+            }
+          ]
         }
       ],
       "matched_features": [
+        "press_panel_candidate",
         "press_panel",
         "key_cells",
         "letter_templates"
       ],
-      "dark_panel_ratio": 0.241,
+      "dark_panel_ratio": 0.6485,
       "colour_mode": "mixed_live",
       "detector_threshold": 0.65,
       "rejection_reasons": [
-        "glyph_confidence:0.6000<0.68"
+        "sequence_confidence:0.5927<0.68",
+        "temporal_sequence_consensus_required"
       ]
     },
-    "temporal_condition_used": false
+    "temporal_condition_used": true
   },
   "get": {
     "visual_panel_range": [

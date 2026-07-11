@@ -11,6 +11,10 @@ REPLAY_FIELDS = (
     "frame_index", "global_ground_truth", "prompt_observation", "action_mode",
     "detector_activation_mode", "raw_detected", "qualified_detected",
     "qualification_reason", "used_by_fusion", "diagnostic_only",
+    "press_panel_candidate", "press_panel_present_raw", "press_panel_present_qualified",
+    "press_panel_qualification_reason", "press_key_box_count", "press_stable_key_box_count",
+    "press_sequence_candidate", "press_sequence_ready", "press_sequence_confidence",
+    "press_sequence_qualification_reason", "press_used_by_fusion",
     "hook_observation", "press_observation", "get_observation",
     "qualified_hook_observation", "qualified_press_observation", "qualified_get_observation",
     "previous_runtime_state", "state_evidence", "next_runtime_state",
@@ -36,8 +40,8 @@ def write_v2_replay_report(
         writer.writeheader()
         for row in rows:
             writer.writerow({
-                name: json.dumps(row[name], ensure_ascii=False, sort_keys=True)
-                if isinstance(row[name], (dict, list)) else row[name]
+                name: json.dumps(row.get(name), ensure_ascii=False, sort_keys=True)
+                if isinstance(row.get(name), (dict, list)) else row.get(name)
                 for name in REPLAY_FIELDS
             })
     transitions = [
@@ -71,6 +75,9 @@ def write_v2_replay_report(
             "frames": len(press_frames),
             "raw_detected": sum(bool(row["raw_detected"]["press"]) for row in press_frames),
             "qualified_detected": sum(bool(row["qualified_detected"]["press"]) for row in press_frames),
+            "panel_present": sum(bool(row.get("press_panel_present_raw")) for row in press_frames),
+            "sequence_ready": sum(bool(row.get("press_sequence_ready")) for row in press_frames),
+            "sequence_intents": sum(row["proposed_intent"] == "PRESS_SEQUENCE" for row in press_frames),
         },
         "global_get": {
             "frames": len(get_frames),
@@ -95,6 +102,8 @@ def write_v2_replay_report(
         f"- SYNC_REQUIRED frames: **{sync_required_frames}**",
         f"- Detector raw/qualified counts: `{detector_counts}`",
         f"- Global PRESS raw/qualified: **{summary['global_press']['raw_detected']}/{summary['global_press']['qualified_detected']}** of {len(press_frames)}",
+        f"- Global PRESS panel present: **{summary['global_press']['panel_present']}/{len(press_frames)}**",
+        f"- Global PRESS sequence ready frames/intents: **{summary['global_press']['sequence_ready']}/{summary['global_press']['sequence_intents']}**",
         f"- Global GET raw/qualified: **{summary['global_get']['raw_detected']}/{summary['global_get']['qualified_detected']}** of {len(get_frames)}",
         "",
         "## Runtime transitions",
@@ -117,7 +126,7 @@ def write_v2_replay_report(
             encoding="utf-8",
         )
         (small_root / "pilot_replay_summary.md").write_text(
-            "\n".join(lines[:16]) + "\n",
+            "\n".join(lines[:18]) + "\n",
             encoding="utf-8",
         )
     return csv_path, md_path
