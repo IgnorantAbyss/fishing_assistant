@@ -59,3 +59,17 @@ Capture/replay readers and global ground-truth validation remain infrastructure/
 ## Data boundaries
 
 Global `ground_truth.yaml` remains the runtime-state annotation. Human-authored `prompt_ground_truth.yaml` describes only visible prompt content and may have different boundaries. New crops go only to `datasets/prompt_observation_v1`; `datasets/fishing_v2` is a frozen lineage reference. Sessions previously inspected as v1 test data are development/diagnostic data in v2. A new v2 final test is `not_collected` and is never auto-selected.
+
+## Fixed supported environment
+
+The current v2 contract supports exactly 2560x1440, fixed game UI scale, zh-TW, borderless window mode, and a fixed Prompt position. This phase deliberately does not implement anchor detection, UI-scale adaptation, localization, window calibration, or resolution scaling. `runtime_constraints` in `config/fishing_v2.yaml` is the machine-readable contract. A validation interface rejects a mismatched frame size before future inference. A future live composition root must treat that rejection as unsafe, enter a non-action state, and emit no key action; this phase does not connect the validator to runtime core or add an input sink.
+
+## Prompt ROI review boundary
+
+Prompt ROI coordinates use fixed 2560x1440 pixel coordinates as the sole source of truth. Normalized coordinates are derived display metadata and must not be used to rescale an unsupported frame. Six unapproved candidates are compared with stable-interior and transition-window contact sheets. Global ground truth is used only for review stratification and context; it never becomes a Prompt label. Visual completeness, prompt identity, transition IGNORE ranges, and final ROI approval all require manual review.
+
+The generated large contact sheets live under the ignored `reports/fishing_v2/roi_review/` directory. The small Markdown/JSON report and Prompt inventory template are tracked. The review workflow does not use OCR, bright masks, v1 classifier accuracy, or automatic candidate selection.
+
+## Prompt-specific annotation metadata
+
+`prompt_ground_truth.yaml` remains human-authored and independent of global state. Each segment may optionally carry `prompt_id` and `notes`. Old version-1 YAML without these fields remains valid. Runtime loaders expose only `PromptObservationKind`; the richer annotation loader is limited to dataset tooling, where future manifest rows retain `prompt_id`. `IGNORE` may omit it and `NO_PROMPT` defaults to null. No official session is annotated or materialized into a Prompt dataset during ROI review.

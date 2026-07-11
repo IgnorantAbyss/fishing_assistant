@@ -1,21 +1,38 @@
-version: 1
+version: 2
 manual_approval_required: true
+roi_status: unapproved
+source_of_truth: pixel
+runtime_reference:
+  width: 2560
+  height: 1440
 candidates:
-  - id: legacy_top_prompt
-    x1: 0.30
-    y1: 0.02
-    x2: 0.70
-    y2: 0.10
-    note: Existing correctly positioned but overly broad ROI; baseline only.
-  - id: reduced_vertical_band
-    x1: 0.30
-    y1: 0.025
-    x2: 0.70
-    y2: 0.075
-    note: Candidate intended to remove the bottom status strip; not approved.
-  - id: reduced_background_band
-    x1: 0.34
-    y1: 0.025
-    x2: 0.66
-    y2: 0.075
-    note: Tighter horizontal candidate requiring manual long-prompt review; not approved.
+  - id: legacy_reference
+    pixel: {x1: 768, y1: 29, x2: 1792, y2: 144}
+    normalized: {x1: 0.300000, y1: 0.020139, x2: 0.700000, y2: 0.100000}
+    intended_content: Legacy top-prompt band used only as the comparison reference.
+    note: Broad baseline; not approved and not asserted to be complete or correct.
+  - id: tight_vertical
+    pixel: {x1: 768, y1: 32, x2: 1792, y2: 100}
+    normalized: {x1: 0.300000, y1: 0.022222, x2: 0.700000, y2: 0.069444}
+    intended_content: Preserve the legacy horizontal span while reducing vertical scene and lower UI.
+    note: Manual review must verify every prompt height and descender.
+  - id: icon_and_text_medium
+    pixel: {x1: 880, y1: 32, x2: 1680, y2: 104}
+    normalized: {x1: 0.343750, y1: 0.022222, x2: 0.656250, y2: 0.072222}
+    intended_content: Medium-width hypothesis intended to include an icon/key cue and prompt text.
+    note: Manual review must verify the longest prompt and edge padding.
+  - id: icon_and_text_tight
+    pixel: {x1: 940, y1: 34, x2: 1620, y2: 100}
+    normalized: {x1: 0.367188, y1: 0.023611, x2: 0.632812, y2: 0.069444}
+    intended_content: Tighter icon/key-cue plus text hypothesis.
+    note: Higher clipping risk; review transition frames and long text before any approval.
+  - id: text_only_medium
+    pixel: {x1: 1000, y1: 32, x2: 1660, y2: 104}
+    normalized: {x1: 0.390625, y1: 0.022222, x2: 0.648438, y2: 0.072222}
+    intended_content: Medium text-only hypothesis that may intentionally omit a left icon/key cue.
+    note: Candidate is exploratory; manual review must decide whether omitted visual cues are required.
+  - id: text_only_tight
+    pixel: {x1: 1060, y1: 34, x2: 1580, y2: 98}
+    normalized: {x1: 0.414062, y1: 0.023611, x2: 0.617188, y2: 0.068056}
+    intended_content: Tight text-only hypothesis with minimum scene context.
+    note: Highest long-text clipping risk; never auto-select from this candidate set.

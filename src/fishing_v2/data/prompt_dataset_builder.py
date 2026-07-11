@@ -14,7 +14,7 @@ import yaml
 from src.fishing_v2.data.dataset_lineage import BUILDER_VERSION, sha256_file, write_dataset_lineage
 from src.fishing_v2.data.prompt_annotation import (
     PromptAnnotationKind,
-    load_prompt_ground_truth,
+    load_prompt_annotations,
     prompt_boundary_frames,
 )
 from src.fishing_v2.data.prompt_roi import PromptROICandidate, load_approved_prompt_roi
@@ -22,7 +22,7 @@ from src.fishing_v2.data.prompt_roi import PromptROICandidate, load_approved_pro
 
 MANIFEST_FIELDS = (
     "session_id", "frame_index", "source_frame", "crop_path",
-    "prompt_observation", "global_state", "is_boundary_global",
+    "prompt_observation", "prompt_id", "global_state", "is_boundary_global",
     "is_boundary_prompt", "split", "usage",
     "source_prompt_ground_truth_sha256", "source_global_ground_truth_sha256",
     "source_frame_sha256", "roi_config_sha256", "dataset_version",
@@ -111,7 +111,8 @@ def build_prompt_dataset(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         frame_count = int(manifest["frame_count"])
         image_format = str(manifest["image_format"])
-        prompt_labels = load_prompt_ground_truth(prompt_gt, frame_count)
+        prompt_annotations = load_prompt_annotations(prompt_gt, frame_count)
+        prompt_labels = {frame: annotation.observation for frame, annotation in prompt_annotations.items()}
         global_labels = _segments_to_labels(global_gt, frame_count)
         prompt_boundaries = prompt_boundary_frames(prompt_labels)
         global_boundaries = _boundaries(global_labels)
@@ -122,6 +123,7 @@ def build_prompt_dataset(
         })
         for frame_index in range(1, frame_count + 1):
             prompt_label = prompt_labels[frame_index]
+            prompt_annotation = prompt_annotations[frame_index]
             if prompt_label == PromptAnnotationKind.IGNORE:
                 continue
             source_frame = session_path / "frames" / f"{frame_index:06d}.{image_format}"
@@ -135,6 +137,7 @@ def build_prompt_dataset(
                 "source_frame": source_frame.as_posix(),
                 "crop_path": crop_relative.as_posix(),
                 "prompt_observation": prompt_label.value,
+                "prompt_id": prompt_annotation.prompt_id,
                 "global_state": global_labels[frame_index],
                 "is_boundary_global": frame_index in global_boundaries,
                 "is_boundary_prompt": frame_index in prompt_boundaries,

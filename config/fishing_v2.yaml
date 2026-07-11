@@ -10,10 +10,32 @@ data:
     status: not_collected
     sessions: []
 
+runtime_constraints:
+  resolution:
+    width: 2560
+    height: 1440
+  ui_scale: fixed
+  language: zh-TW
+  window_mode: borderless
+  prompt_position: fixed
+  supported_environment_only: true
+
 prompt:
   observer: unimplemented
   roi_status: unapproved
   roi: null
+  roi_source_of_truth: pixel
+  roi_review:
+    session_ids:
+      - session_20260709_192315
+      - session_20260710_061220
+      - session_20260710_123210
+      - session_20260710_124419
+      - session_20260710_125441
+      - session_20260710_130308
+      - session_20260710_131254
+    excluded_trial_sessions:
+      - session_20260709_192231
 
 fusion:
   hook_strong_threshold: 0.85

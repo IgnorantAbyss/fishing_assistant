@@ -4,6 +4,7 @@ import pytest
 
 from src.fishing_v2.data.prompt_annotation import (
     PromptAnnotationKind,
+    load_prompt_annotations,
     load_prompt_ground_truth,
     prompt_boundary_frames,
     validate_prompt_segments,
@@ -77,3 +78,24 @@ def test_existing_prompt_annotation_requires_force(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError):
         write_prompt_ground_truth(path, _segments(), 8)
     write_prompt_ground_truth(path, _segments(), 8, force=True)
+
+
+def test_prompt_id_and_notes_are_optional_dataset_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "prompt_ground_truth.yaml"
+    segments = [
+        {"start": 1, "end": 1, "observation": "WAITING_PROMPT", "prompt_id": "FISHING_IN_PROGRESS", "notes": "manual"},
+        {"start": 2, "end": 2, "observation": "NO_PROMPT", "prompt_id": None},
+        {"start": 3, "end": 3, "observation": "IGNORE"},
+    ]
+    write_prompt_ground_truth(path, segments, 3)
+    annotations = load_prompt_annotations(path, 3)
+    assert annotations[1].prompt_id == "FISHING_IN_PROGRESS"
+    assert annotations[1].notes == "manual"
+    assert annotations[2].prompt_id is None
+    assert annotations[3].prompt_id is None
+
+
+def test_old_prompt_yaml_without_prompt_id_remains_readable(tmp_path: Path) -> None:
+    path = tmp_path / "prompt_ground_truth.yaml"
+    path.write_text("version: 1\nsegments:\n- start: 1\n  end: 1\n  observation: IDLE_PROMPT\n", encoding="utf-8")
+    assert load_prompt_annotations(path, 1)[1].prompt_id is None
