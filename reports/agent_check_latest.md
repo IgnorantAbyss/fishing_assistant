@@ -1,6 +1,6 @@
 # Fishing Assistant Agent Check
 
-- Generated (UTC): 2026-07-11 14:09:17
+- Generated (UTC): 2026-07-12 02:54:49
 - Python: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
 - OS: Windows-11-10.0.26200-SP0
 - Reference image count: 11
@@ -33,17 +33,17 @@
 ## Pytest output
 
 ```text
-........................................................................ [ 27%]
-........................................................................ [ 54%]
-........................................................................ [ 82%]
-..............................................                           [100%]
+........................................................................ [ 26%]
+........................................................................ [ 53%]
+........................................................................ [ 79%]
+.......................................................                  [100%]
 ============================== warnings summary ===============================
 .venv\Lib\site-packages\_pytest\cacheprovider.py:469
-  D:\project\fishing_assistant\.venv\Lib\site-packages\_pytest\cacheprovider.py:469: PytestCacheWarning: could not create cache path D:\project\fishing_assistant\.pytest_cache\v\cache\nodeids: [WinError 183] 當檔案已存在時，無法建立該檔案。: 'D:\\project\\fishing_assistant\\.pytest_cache\\v\\cache'
+  D:\project\fishing_assistant\.venv\Lib\site-packages\_pytest\cacheprovider.py:469: PytestCacheWarning: cache could not write path D:\project\fishing_assistant\.pytest_cache\v\cache\nodeids: [Errno 13] Permission denied: 'D:\\project\\fishing_assistant\\.pytest_cache\\v\\cache\\nodeids'
     config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-262 passed, 1 warning in 16.13s
+271 passed, 1 warning in 21.65s
 ```
 
 ## Failure summary
@@ -60,7 +60,7 @@
     config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-3 passed, 1 warning in 4.46s
+3 passed, 1 warning in 6.10s
 ```
 
 ## Debug output paths

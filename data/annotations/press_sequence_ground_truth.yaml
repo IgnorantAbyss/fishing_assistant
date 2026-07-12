@@ -1,0 +1,50 @@
+version: 1
+episodes:
+  - session_id: session_20260709_192315
+    press_start: 472
+    press_end: 483
+    sequence: ASDWWDWS
+    status: confirmed
+    source: manual_original_frame_review
+  - session_id: session_20260710_061220
+    press_start: 507
+    press_end: 517
+    sequence: AWSA
+    status: confirmed
+    source: manual_original_frame_review
+  - session_id: session_20260710_123210
+    press_start: 574
+    press_end: 583
+    sequence: DW
+    status: confirmed
+    source: manual_original_frame_review
+  - session_id: session_20260710_124419
+    press_start: 334
+    press_end: 355
+    sequence: DSWSS
+    status: confirmed
+    source: manual_original_frame_review
+  - session_id: session_20260710_125441
+    press_start: 396
+    press_end: 419
+    sequence: WASASDD
+    status: confirmed
+    source: manual_original_frame_review
+  - session_id: session_20260710_130308
+    press_start: 415
+    press_end: 438
+    sequence: WWDDWWSS
+    status: confirmed
+    source: manual_original_frame_review
+  - session_id: session_20260710_131254
+    press_start: 225
+    press_end: 249
+    sequence: WDASADS
+    status: confirmed
+    source: manual_original_frame_review
+  - session_id: session_20260710_131254
+    press_start: 554
+    press_end: 576
+    sequence: WAAASA
+    status: confirmed
+    source: manual_original_frame_review

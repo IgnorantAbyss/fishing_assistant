@@ -346,6 +346,237 @@ def _decode_panel_slots(
     return key_boxes
 
 
+ARROW_TO_KEY = {"LEFT": "A", "DOWN": "S", "RIGHT": "D", "UP": "W"}
+KEY_TO_ARROW = {key: direction for direction, key in ARROW_TO_KEY.items()}
+
+
+def _extract_arrow_glyph(mask: np.ndarray) -> tuple[np.ndarray | None, list[int] | None]:
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    components = [
+        (int(area), int(x), int(y), int(width), int(height))
+        for x, y, width, height, area in stats[1:count]
+        if area >= 6 and width >= 3 and height >= 3
+    ]
+    if not components:
+        return None, None
+    _, x, y, width, height = max(components)
+    component = mask[y:y + height, x:x + width].astype(np.uint8)
+    glyph = cv2.resize(component, (24, 24), interpolation=cv2.INTER_NEAREST)
+    return glyph, [x, y, x + width, y + height]
+
+
+@lru_cache(maxsize=1)
+def _load_arrow_templates() -> dict[str, list[np.ndarray]]:
+    live = cv2.imread(str(LIVE_TEMPLATE_IMAGE), cv2.IMREAD_COLOR)
+    if live is None:
+        return {}
+    geometry = _find_panel_geometry(live)
+    hsv = cv2.cvtColor(live, cv2.COLOR_BGR2HSV)
+    templates: dict[str, list[np.ndarray]] = {}
+    for key, (x1, y1, x2, y2) in zip(
+        LIVE_BOOTSTRAP_SEQUENCE,
+        geometry["slot_boxes"],
+        strict=False,
+    ):
+        cell = hsv[y1:y2, x1:x2]
+        height, width = cell.shape[:2]
+        arrow_start = min(height - 1, round(height * 0.53))
+        arrow_end = max(arrow_start + 1, round(height * 0.93))
+        colour = (cell[:, :, 1] >= 75) & (cell[:, :, 2] >= 70)
+        glyph, _ = _extract_arrow_glyph(colour[arrow_start:arrow_end, 3:max(4, width - 3)])
+        if glyph is not None:
+            templates.setdefault(key, []).append(glyph)
+    return templates
+
+
+def _classify_arrow(mask: np.ndarray) -> dict[str, Any]:
+    glyph, bbox = _extract_arrow_glyph(mask)
+    if glyph is None or bbox is None:
+        return {
+            "arrow_direction": None,
+            "arrow_confidence": 0.0,
+            "second_direction": None,
+            "ambiguity_margin": 0.0,
+            "mapped_key": None,
+            "arrow_bbox": None,
+            "arrow_top_candidates": [],
+        }
+    templates = _load_arrow_templates()
+    template_scores = {
+        key: max(
+            float(cv2.matchTemplate(glyph, template, cv2.TM_CCOEFF_NORMED)[0, 0])
+            for template in variants
+        )
+        for key, variants in templates.items()
+    } if templates else {}
+    if template_scores:
+        ranked_keys = sorted(
+            (
+                (key, max(0.0, min(1.0, (score + 1.0) / 2.0)))
+                for key, score in template_scores.items()
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        key, confidence = ranked_keys[0]
+        second_key, second_confidence = ranked_keys[1] if len(ranked_keys) > 1 else (None, 0.0)
+        return {
+            "arrow_direction": KEY_TO_ARROW[key],
+            "arrow_confidence": round(confidence, 4),
+            "second_direction": KEY_TO_ARROW.get(second_key),
+            "ambiguity_margin": round(max(0.0, confidence - second_confidence), 4),
+            "mapped_key": key,
+            "arrow_bbox": bbox,
+            "arrow_top_candidates": [
+                {"key": candidate, "direction": KEY_TO_ARROW[candidate], "confidence": round(score, 4)}
+                for candidate, score in ranked_keys[:2]
+            ],
+        }
+
+    x, y, x2, y2 = bbox
+    width, height = x2 - x, y2 - y
+    component = mask[y:y2, x:x2].astype(bool)
+    third_x = max(1, round(width / 3))
+    third_y = max(1, round(height / 3))
+    total = max(1.0, float(np.sum(component)))
+    left = float(np.sum(component[:, :third_x]))
+    right = float(np.sum(component[:, width - third_x:]))
+    top = float(np.sum(component[:third_y, :]))
+    bottom = float(np.sum(component[height - third_y:, :]))
+    raw_scores = {
+        "RIGHT": max(0.0, (left - right) / total),
+        "LEFT": max(0.0, (right - left) / total),
+        "DOWN": max(0.0, (top - bottom) / total),
+        "UP": max(0.0, (bottom - top) / total),
+    }
+    ranked = sorted(raw_scores.items(), key=lambda item: item[1], reverse=True)
+    direction, best = ranked[0]
+    second_direction, second = ranked[1]
+    confidence = max(0.0, min(1.0, best * 3.0))
+    margin = max(0.0, min(1.0, (best - second) * 3.0))
+    return {
+        "arrow_direction": direction if confidence > 0 else None,
+        "arrow_confidence": round(confidence, 4),
+        "second_direction": second_direction if second > 0 else None,
+        "ambiguity_margin": round(margin, 4),
+        "mapped_key": ARROW_TO_KEY.get(direction) if confidence > 0 else None,
+        "arrow_bbox": bbox,
+        "arrow_top_candidates": [],
+    }
+
+
+def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str, Any]:
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    slots: list[dict[str, Any]] = []
+    for index, (x1, y1, x2, y2) in enumerate(geometry["slot_boxes"]):
+        cell = hsv[y1:y2, x1:x2]
+        if not cell.size:
+            continue
+        height, width = cell.shape[:2]
+        colour = (cell[:, :, 1] >= 60) & (cell[:, :, 2] >= 60)
+        arrow_colour = (cell[:, :, 1] >= 75) & (cell[:, :, 2] >= 70)
+        letter_end = max(1, round(height * 0.56))
+        arrow_start = min(height - 1, round(height * 0.53))
+        arrow_end = max(arrow_start + 1, round(height * 0.93))
+        letter_mask = colour[2:letter_end, 3:max(4, width - 3)]
+        arrow_mask = arrow_colour[arrow_start:arrow_end, 3:max(4, width - 3)]
+        arrow = _classify_arrow(arrow_mask)
+        coloured_pixels = int(np.sum(letter_mask)) + int(np.sum(arrow_mask))
+        arrow_pixels = int(np.sum(arrow_mask))
+        if coloured_pixels < 8 and arrow_pixels < 5:
+            occupancy = "EMPTY"
+            occupancy_confidence = max(0.0, min(1.0, 1.0 - coloured_pixels / 8.0))
+        elif arrow["mapped_key"] and arrow["arrow_confidence"] >= 0.35:
+            occupancy = "OCCUPIED"
+            occupancy_confidence = min(1.0, 0.5 + coloured_pixels / 80.0)
+        else:
+            occupancy = "UNCERTAIN"
+            occupancy_confidence = min(1.0, coloured_pixels / 40.0)
+        coloured_hues = cell[:, :, 0][colour]
+        median_hue = float(np.median(coloured_hues)) if len(coloured_hues) else None
+        slot = {
+            "index": index,
+            "bbox": [x1, y1, x2, y2],
+            "occupancy": occupancy,
+            "occupancy_confidence": round(float(occupancy_confidence), 4),
+            "coloured_pixel_count": coloured_pixels,
+            "median_hue": None if median_hue is None else round(median_hue, 2),
+            **arrow,
+        }
+        if arrow["arrow_bbox"]:
+            ax1, ay1, ax2, ay2 = arrow["arrow_bbox"]
+            slot["arrow_bbox"] = [x1 + 3 + ax1, y1 + arrow_start + ay1, x1 + 3 + ax2, y1 + arrow_start + ay2]
+        slots.append(slot)
+
+    occupied_indices = [slot["index"] for slot in slots if slot["occupancy"] == "OCCUPIED"]
+    occupied_count = 0
+    for slot in slots:
+        if slot["occupancy"] == "OCCUPIED" and slot["index"] == occupied_count:
+            occupied_count += 1
+        else:
+            break
+    layout_conflict = any(
+        slot["occupancy"] == "OCCUPIED" and slot["index"] >= occupied_count
+        for slot in slots
+    )
+    occupied = slots[:occupied_count]
+    empty_count = sum(slot["occupancy"] == "EMPTY" for slot in slots)
+    uncertain_count = sum(slot["occupancy"] == "UNCERTAIN" for slot in slots)
+    hues = [slot["median_hue"] for slot in occupied if slot["median_hue"] is not None]
+    hue_spread = 0.0
+    if len(hues) >= 2:
+        hue_spread = max(
+            min(abs(a - b), 180.0 - abs(a - b)) for a in hues for b in hues
+        )
+    panel = geometry["panel_bbox"]
+    panel_hsv = hsv[panel[1]:panel[3], panel[0]:panel[2]]
+    glow_ratio = float(np.mean((panel_hsv[:, :, 2] >= 215) & (panel_hsv[:, :, 1] <= 80)))
+    uncertain_effect = bool(occupied_count > 0 and uncertain_count > 0)
+    input_effect_detected = bool(
+        glow_ratio >= 0.045 or uncertain_effect or layout_conflict
+    )
+    effect_reasons = []
+    if glow_ratio >= 0.045:
+        effect_reasons.append(f"panel_glow_ratio:{glow_ratio:.4f}")
+    if uncertain_effect:
+        effect_reasons.append(f"uncertain_slots:{uncertain_count}")
+    if layout_conflict:
+        effect_reasons.append("occupied_after_empty_layout_conflict")
+    clean_frame_eligible = bool(
+        geometry["panel_present"]
+        and occupied_count > 0
+        and uncertain_count == 0
+        and not layout_conflict
+        and not input_effect_detected
+        and all(slot["mapped_key"] for slot in occupied)
+    )
+    sequence = tuple(str(slot["mapped_key"]) for slot in occupied if slot["mapped_key"])
+    per_slot_confidence = tuple(float(slot["arrow_confidence"]) for slot in occupied)
+    sequence_confidence = float(np.mean(per_slot_confidence)) if per_slot_confidence else 0.0
+    arrow_sequence_ready = bool(
+        clean_frame_eligible
+        and len(sequence) == occupied_count
+        and all(value >= 0.55 for value in per_slot_confidence)
+        and sequence_confidence >= 0.68
+    )
+    return {
+        "slots": slots,
+        "total_slot_count": len(slots),
+        "occupied_slot_count": occupied_count,
+        "empty_slot_count": empty_count,
+        "uncertain_slot_count": uncertain_count,
+        "layout_conflict": layout_conflict,
+        "input_effect_detected": input_effect_detected,
+        "input_effect_reason": ";".join(effect_reasons) if effect_reasons else "none",
+        "panel_glow_ratio": round(glow_ratio, 4),
+        "slot_hue_spread": round(hue_spread, 4),
+        "clean_frame_eligible": clean_frame_eligible,
+        "arrow_sequence": sequence,
+        "arrow_sequence_confidence": round(sequence_confidence, 4),
+        "arrow_sequence_ready": arrow_sequence_ready,
+    }
+
+
 def _save_debug_image(
     frame: np.ndarray,
     roi: tuple[int, int, int, int],
@@ -389,6 +620,7 @@ def detect_press_sequence(
     colour_mode = "purple" if purple_ratio >= 0.003 else "mixed_live"
     templates = template_sets.get("purple" if colour_mode == "purple" else "teal", {})
     local_key_boxes = _decode_panel_slots(crop, geometry, templates)
+    arrow_result = _decode_arrow_slots(crop, geometry)
     key_boxes: list[dict[str, Any]] = []
     for item in local_key_boxes:
         x1, y1, x2, y2 = item["bbox"]
@@ -396,9 +628,14 @@ def detect_press_sequence(
             **item,
             "bbox": [left + x1, top + y1, left + x2, top + y2],
         })
-    sequence = [item["key"] for item in key_boxes]
+    auxiliary_sequence = [item["key"] for item in key_boxes]
+    sequence = list(arrow_result["arrow_sequence"]) or auxiliary_sequence
     sequence_text = "".join(sequence)
-    sequence_confidence = float(np.mean([item["confidence"] for item in key_boxes])) if key_boxes else 0.0
+    glyph_confidence = float(np.mean([item["confidence"] for item in key_boxes])) if key_boxes else 0.0
+    sequence_confidence = (
+        float(arrow_result["arrow_sequence_confidence"])
+        if arrow_result["arrow_sequence"] else glyph_confidence
+    )
     panel_local = geometry["panel_bbox"]
     panel = None if panel_local is None else (
         left + panel_local[0], top + panel_local[1], left + panel_local[2], top + panel_local[3]
@@ -414,6 +651,10 @@ def detect_press_sequence(
         features.append("press_panel")
     if key_boxes:
         features.append("key_cells")
+    if arrow_result["occupied_slot_count"]:
+        features.append("occupied_slots")
+    if arrow_result["arrow_sequence"]:
+        features.append("arrow_directions")
     if templates:
         features.append("letter_templates")
     return {
@@ -424,12 +665,28 @@ def detect_press_sequence(
         "panel_qualification_reason": geometry["reason"],
         "key_box_count": len(key_boxes),
         "stable_key_box_count": 0,
+        "panel_phase": (
+            "PANEL_INPUT_STARTED" if arrow_result["input_effect_detected"]
+            else "PANEL_CLEAN" if arrow_result["clean_frame_eligible"]
+            else "PANEL_APPEARING"
+        ),
+        "clean_frame_eligible": arrow_result["clean_frame_eligible"],
+        "input_effect_detected": arrow_result["input_effect_detected"],
+        "input_effect_reason": arrow_result["input_effect_reason"],
+        "selected_for_sequence": arrow_result["clean_frame_eligible"],
+        "total_slot_count": arrow_result["total_slot_count"],
+        "occupied_slot_count": arrow_result["occupied_slot_count"],
+        "empty_slot_count": arrow_result["empty_slot_count"],
+        "uncertain_slot_count": arrow_result["uncertain_slot_count"],
+        "layout_conflict": arrow_result["layout_conflict"],
+        "slots": arrow_result["slots"],
         "sequence": [],
         "sequence_candidate": sequence,
         "sequence_ready": False,
         "sequence_confidence": round(sequence_confidence, 4),
         "sequence_qualification_reason": (
-            "temporal_consensus_required" if panel_present and key_boxes
+            "earliest_clean_arrow_candidate" if arrow_result["arrow_sequence_ready"]
+            else "temporal_consensus_required" if panel_present and sequence
             else "sequence_not_recoverable_from_frame" if panel_present
             else "panel_not_present"
         ),
@@ -446,7 +703,11 @@ def detect_press_sequence(
             "slot_count": int(geometry["slot_count"]),
             "geometry_score": round(float(geometry["geometry_score"]), 4),
             "panel_confidence": round(panel_confidence, 4),
-            "glyph_confidence": round(sequence_confidence, 4),
+            "glyph_confidence": round(glyph_confidence, 4),
+            "arrow_sequence_confidence": arrow_result["arrow_sequence_confidence"],
+            "arrow_sequence_ready": arrow_result["arrow_sequence_ready"],
+            "panel_glow_ratio": arrow_result["panel_glow_ratio"],
+            "slot_hue_spread": arrow_result["slot_hue_spread"],
             "template_error": template_errors.get(colour_mode),
             "template_keys": sorted(templates),
             "detector_min_confidence": active_thresholds.min_confidence_for("PRESS"),

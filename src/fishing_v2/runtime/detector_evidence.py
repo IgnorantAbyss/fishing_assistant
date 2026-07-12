@@ -216,6 +216,7 @@ class DetectorEvidenceQualifier:
                 **observation.evidence,
                 "stable_panel_frames": aggregation.stable_panel_frames,
                 "per_key_aggregated_confidence": list(aggregation.per_key_confidence),
+                "selected_clean_frame": aggregation.selected_clean_frame,
             },
         )
         return sanitized, EvidenceQualification(

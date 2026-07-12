@@ -41,6 +41,7 @@ class PressSequenceAggregation:
     sequence_confidence: float
     per_key_confidence: tuple[float, ...]
     qualification_reason: str
+    selected_clean_frame: int | None = None
 
 
 class PressSequenceTemporalAggregator:
@@ -51,11 +52,19 @@ class PressSequenceTemporalAggregator:
         self._panel_frames = 0
         self._missing_frames = 0
         self._window: deque[PressObservation] = deque(maxlen=self.config.sequence_window_frames)
+        self._frozen_clean_sequence: tuple[str, ...] | None = None
+        self._frozen_clean_confidence: tuple[float, ...] = ()
+        self._frozen_clean_frame: int | None = None
+        self._input_effect_seen = False
 
     def reset(self) -> None:
         self._panel_frames = 0
         self._missing_frames = 0
         self._window.clear()
+        self._frozen_clean_sequence = None
+        self._frozen_clean_confidence = ()
+        self._frozen_clean_frame = None
+        self._input_effect_seen = False
 
     @staticmethod
     def _boxes(observation: PressObservation) -> list[dict[str, Any]]:
@@ -147,6 +156,25 @@ class PressSequenceTemporalAggregator:
             self._panel_frames += 1
             self._missing_frames = 0
             self._window.append(observation)
+            if observation.evidence.get("input_effect_detected") is True:
+                self._input_effect_seen = True
+            if (
+                self._frozen_clean_sequence is None
+                and not self._input_effect_seen
+                and observation.evidence.get("clean_frame_eligible") is True
+                and observation.evidence.get("arrow_sequence_ready") is True
+                and observation.sequence_candidate
+            ):
+                slots = observation.evidence.get("slots", ())
+                occupied = [
+                    item for item in slots
+                    if isinstance(item, dict) and item.get("occupancy") == "OCCUPIED"
+                ]
+                self._frozen_clean_sequence = tuple(observation.sequence_candidate)
+                self._frozen_clean_confidence = tuple(
+                    float(item.get("arrow_confidence", 0.0)) for item in occupied
+                )
+                self._frozen_clean_frame = observation.frame_index
         else:
             self._missing_frames += 1
             if self._missing_frames >= self.config.panel_confirmation_frames:
@@ -156,6 +184,34 @@ class PressSequenceTemporalAggregator:
             )
 
         panel_confirmed = self._panel_frames >= self.config.panel_confirmation_frames
+        if self._frozen_clean_sequence and not panel_confirmed:
+            per_key = self._frozen_clean_confidence
+            confidence = sum(per_key) / len(per_key) if per_key else observation.sequence_confidence
+            return PressSequenceAggregation(
+                False,
+                self._panel_frames,
+                len(self._frozen_clean_sequence),
+                self._frozen_clean_sequence,
+                False,
+                round(confidence, 4),
+                tuple(round(value, 4) for value in per_key),
+                "panel_confirmation_pending_with_frozen_clean_sequence",
+                self._frozen_clean_frame,
+            )
+        if panel_confirmed and self._frozen_clean_sequence:
+            per_key = self._frozen_clean_confidence
+            confidence = sum(per_key) / len(per_key) if per_key else observation.sequence_confidence
+            return PressSequenceAggregation(
+                True,
+                self._panel_frames,
+                len(self._frozen_clean_sequence),
+                self._frozen_clean_sequence,
+                True,
+                round(confidence, 4),
+                tuple(round(value, 4) for value in per_key),
+                "earliest_clean_arrow_sequence_frozen",
+                self._frozen_clean_frame,
+            )
         frames = self._consistent_frames()
         candidate, per_key = self._aggregate_sequence(frames)
         stable_count = len(candidate)
@@ -182,4 +238,5 @@ class PressSequenceTemporalAggregator:
             round(confidence, 4),
             tuple(round(value, 4) for value in per_key),
             reason,
+            self._frozen_clean_frame,
         )

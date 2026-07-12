@@ -20,10 +20,12 @@
     ],
     "panel_present": 24,
     "sequence_ready": 0,
+    "clean_arrow_candidate_frames": 17,
     "total": 24,
     "rejection_reason_counts": {
-      "sequence_confidence": 24,
-      "temporal_sequence_consensus_required": 24
+      "panel_confirmation_required_for_arrow_freeze": 17,
+      "temporal_sequence_consensus_required": 7,
+      "sequence_confidence": 1
     },
     "frame_428": {
       "frame": 428,
@@ -35,15 +37,17 @@
       "sequence": [
         "W",
         "W",
-        "S",
-        "W",
+        "D",
+        "A",
         "A",
         "D",
         "A",
-        "S"
+        "D"
       ],
       "sequence_ready": false,
-      "sequence_confidence": 0.5927,
+      "clean_frame_eligible": true,
+      "arrow_sequence_ready": false,
+      "sequence_confidence": 0.6572,
       "key_boxes": [
         {
           "key": "W",
@@ -242,13 +246,15 @@
         "press_panel_candidate",
         "press_panel",
         "key_cells",
+        "occupied_slots",
+        "arrow_directions",
         "letter_templates"
       ],
       "dark_panel_ratio": 0.6485,
       "colour_mode": "mixed_live",
       "detector_threshold": 0.65,
       "rejection_reasons": [
-        "sequence_confidence:0.5927<0.68",
+        "sequence_confidence:0.6572<0.68",
         "temporal_sequence_consensus_required"
       ]
     },

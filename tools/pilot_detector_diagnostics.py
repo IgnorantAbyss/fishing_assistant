@@ -108,7 +108,11 @@ def _press_rejections(result: dict[str, Any]) -> list[str]:
     if result["sequence_confidence"] < 0.68:
         reasons.append(f"sequence_confidence:{result['sequence_confidence']:.4f}<0.68")
     if result["panel_present"] and not result["sequence_ready"]:
-        reasons.append("temporal_sequence_consensus_required")
+        reasons.append(
+            "panel_confirmation_required_for_arrow_freeze"
+            if result["debug"].get("arrow_sequence_ready")
+            else "temporal_sequence_consensus_required"
+        )
     return reasons or ["panel_and_sequence_ready"]
 
 
@@ -195,6 +199,8 @@ def run(session_path: Path, output: Path) -> dict[str, Any]:
                 "panel_qualification_reason": raw_press["panel_qualification_reason"],
                 "sequence": raw_press["sequence_candidate"],
                 "sequence_ready": raw_press["sequence_ready"],
+                "clean_frame_eligible": raw_press["clean_frame_eligible"],
+                "arrow_sequence_ready": raw_press["debug"].get("arrow_sequence_ready", False),
                 "sequence_confidence": raw_press["sequence_confidence"],
                 "key_boxes": raw_press["key_boxes"],
                 "matched_features": raw_press["matched_features"],
@@ -286,6 +292,7 @@ def run(session_path: Path, output: Path) -> dict[str, Any]:
             "range": [415, 438],
             "panel_present": sum(item["panel_present"] for item in press_rows),
             "sequence_ready": sum(item["sequence_ready"] for item in press_rows),
+            "clean_arrow_candidate_frames": sum(item["arrow_sequence_ready"] for item in press_rows),
             "total": len(press_rows),
             "rejection_reason_counts": dict(press_reason_counts),
             "frame_428": {key: value for key, value in press_428.items() if key != "frame_path"},
@@ -319,6 +326,7 @@ def run(session_path: Path, output: Path) -> dict[str, Any]:
         "- Hook qualification: raw detected + `bar_fill` + positive `fill_ratio` + strong confidence; divider is optional.",
         f"- PRESS panel present: **{summary['press']['panel_present']}/{summary['press']['total']}**",
         f"- PRESS sequence ready (single-frame tool): **{summary['press']['sequence_ready']}/{summary['press']['total']}**",
+        f"- PRESS clean arrow candidate frames: **{summary['press']['clean_arrow_candidate_frames']}/{summary['press']['total']}**",
         f"- PRESS rejection counts: `{dict(press_reason_counts)}`",
         f"- Frame 428: panel_confidence={press_428['confidence']}, sequence_candidate={press_428['sequence']}, sequence_confidence={press_428['sequence_confidence']}, boxes={len(press_428['key_boxes'])}, reasons=`{press_428['rejection_reasons']}`.",
         "- Runtime sequence readiness is temporal; see `press_detector_diagnostics_summary.md` and the manual review bundle.",

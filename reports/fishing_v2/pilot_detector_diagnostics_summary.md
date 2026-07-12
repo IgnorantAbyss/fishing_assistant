@@ -8,8 +8,9 @@
 - Hook qualification: raw detected + `bar_fill` + positive `fill_ratio` + strong confidence; divider is optional.
 - PRESS panel present: **24/24**
 - PRESS sequence ready (single-frame tool): **0/24**
-- PRESS rejection counts: `{'sequence_confidence': 24, 'temporal_sequence_consensus_required': 24}`
-- Frame 428: panel_confidence=0.9702, sequence_candidate=['W', 'W', 'S', 'W', 'A', 'D', 'A', 'S'], sequence_confidence=0.5927, boxes=8, reasons=`['sequence_confidence:0.5927<0.68', 'temporal_sequence_consensus_required']`.
+- PRESS clean arrow candidate frames: **17/24**
+- PRESS rejection counts: `{'panel_confirmation_required_for_arrow_freeze': 17, 'temporal_sequence_consensus_required': 7, 'sequence_confidence': 1}`
+- Frame 428: panel_confidence=0.9702, sequence_candidate=['W', 'W', 'D', 'A', 'A', 'D', 'A', 'D'], sequence_confidence=0.6572, boxes=8, reasons=`['sequence_confidence:0.6572<0.68', 'temporal_sequence_consensus_required']`.
 - Runtime sequence readiness is temporal; see `press_detector_diagnostics_summary.md` and the manual review bundle.
 - GET original baseline: **0/19**; the fixed whole-ROI template comparison was misaligned with the live panel scale and position.
 - GET detected in visual panel range 440-458: **19/19**

@@ -1,9 +1,9 @@
 ﻿session_id,press_start,press_end,review_frame,predicted_sequence,manually_confirmed_sequence,review_status,notes
-session_20260709_192315,472,483,474,,,pending_manual_review,sequence_not_recoverable_from_replay
-session_20260710_061220,507,517,514,,,pending_manual_review,sequence_not_recoverable_from_replay
-session_20260710_123210,574,583,577,,,pending_manual_review,sequence_not_recoverable_from_replay
-session_20260710_124419,334,355,351,,,pending_manual_review,sequence_not_recoverable_from_replay
-session_20260710_125441,396,419,413,,,pending_manual_review,sequence_not_recoverable_from_replay
-session_20260710_130308,415,438,430,,,pending_manual_review,sequence_not_recoverable_from_replay
-session_20260710_131254,225,249,239,,,pending_manual_review,sequence_not_recoverable_from_replay
-session_20260710_131254,554,576,564,,,pending_manual_review,sequence_not_recoverable_from_replay
+session_20260709_192315,472,483,472,ASDWWDWS,ASDWWDWS,confirmed,完整 panel，尚未開始輸入
+session_20260710_061220,507,517,507,AWSA,AWSA,confirmed,完整 panel，尚未開始輸入
+session_20260710_123210,574,583,574,DW,DW,confirmed,完整 panel，尚未開始輸入
+session_20260710_124419,334,355,344,,DSWSS,confirmed,完整 panel，尚未開始輸入
+session_20260710_125441,396,419,417,,WASASDD,confirmed,完整 panel，尚未開始輸入
+session_20260710_130308,415,438,415,WWDDWWSS,WWDDWWSS,confirmed,完整 panel，尚未開始輸入
+session_20260710_131254,225,249,225,WDASADS,WDASADS,confirmed,完整 panel，尚未開始輸入
+session_20260710_131254,554,576,564,,WAAASA,confirmed,完整 panel，尚未開始輸入

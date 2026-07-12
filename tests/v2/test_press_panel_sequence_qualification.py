@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 
 from src.detectors.press_detector import detect_press_sequence
 from src.fishing_v2.domain.observations import (
@@ -78,13 +79,33 @@ def _bundle(press: PressObservation) -> ObservationBundle:
     )
 
 
+def _with_arrow_phase(
+    observation: PressObservation,
+    *,
+    clean: bool,
+    input_effect: bool,
+) -> PressObservation:
+    slots = [
+        {"occupancy": "OCCUPIED", "arrow_confidence": 0.9}
+        for _ in observation.sequence_candidate
+    ]
+    return replace(observation, evidence={
+        **observation.evidence,
+        "clean_frame_eligible": clean,
+        "input_effect_detected": input_effect,
+        "arrow_sequence_ready": clean,
+        "slots": slots,
+    })
+
+
 def test_real_pilot_panel_presence_does_not_depend_on_glyph_threshold() -> None:
     result = detect_press_sequence(PILOT_FRAMES / "000415.jpg", save_debug=False)
     assert result["panel_candidate"] is True
     assert result["panel_present"] is True
     assert result["detected"] is True
     assert result["sequence_ready"] is False
-    assert result["sequence_confidence"] < 0.68
+    assert result["clean_frame_eligible"] is True
+    assert "".join(result["sequence_candidate"]) == "WWDDWWSS"
 
 
 def test_non_press_frame_has_no_structural_panel() -> None:
@@ -156,3 +177,32 @@ def test_temporal_sequence_supports_variable_length_without_padding() -> None:
     assert final.sequence_ready is True
     assert final.sequence == tuple("WASDW")
     assert final.stable_key_box_count == 5
+
+
+def test_earliest_clean_arrow_sequence_freezes_before_later_input_effect() -> None:
+    qualifier = DetectorEvidenceQualifier(EvidenceQualificationConfig(
+        press_panel_confirmation_frames=2,
+        press_sequence_consensus_frames=3,
+    ))
+    first = _with_arrow_phase(_press(1, panel=True, sequence="WASD"), clean=True, input_effect=False)
+    second = _with_arrow_phase(_press(2, panel=True, sequence="DDDD"), clean=False, input_effect=True)
+    qualifier.qualify(_bundle(first), _activation())
+    result = qualifier.qualify(_bundle(second), _activation())
+    assert result.bundle.press is not None
+    assert result.bundle.press.sequence_ready is True
+    assert result.bundle.press.sequence == tuple("WASD")
+    assert result.bundle.press.evidence["selected_clean_frame"] == 1
+
+
+def test_clean_looking_frame_after_input_effect_is_never_frozen() -> None:
+    qualifier = DetectorEvidenceQualifier(EvidenceQualificationConfig(
+        press_panel_confirmation_frames=1,
+        press_sequence_consensus_frames=3,
+    ))
+    first = _with_arrow_phase(_press(1, panel=True, sequence="WASD"), clean=False, input_effect=True)
+    later = _with_arrow_phase(_press(2, panel=True, sequence="WASD"), clean=True, input_effect=False)
+    qualifier.qualify(_bundle(first), _activation())
+    result = qualifier.qualify(_bundle(later), _activation())
+    assert result.bundle.press is not None
+    assert result.bundle.press.sequence_ready is False
+    assert result.bundle.press.evidence["selected_clean_frame"] is None

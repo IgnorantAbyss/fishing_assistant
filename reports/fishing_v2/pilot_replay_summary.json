@@ -9,6 +9,7 @@
     "START_HOOK": 68,
     "HOOK_ACTION": 3,
     "CAST": 85,
+    "PRESS_SEQUENCE": 1,
     "COLLECT": 18
   },
   "actions_applied": 0,
@@ -35,8 +36,8 @@
     "raw_detected": 24,
     "qualified_detected": 23,
     "panel_present": 24,
-    "sequence_ready": 0,
-    "sequence_intents": 0
+    "sequence_ready": 23,
+    "sequence_intents": 1
   },
   "global_get": {
     "frames": 19,

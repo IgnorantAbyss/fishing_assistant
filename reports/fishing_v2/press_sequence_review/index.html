@@ -4,57 +4,2449 @@
 <body><h1>PRESS Sequence Review</h1><p>Manual fields live in <a href="review_items.csv">review_items.csv</a>. Blank manually_confirmed_sequence is intentional and is not ground truth.</p>
 <article>
   <h2>session_20260709_192315: 472-483</h2>
-  <p>review frame: 474 · panel first/confirmed: 472/473 · sequence ready: None</p>
-  <p>candidate: <code>WWWSSSSADD</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
-  <img src="images/session_20260709_192315_472_483.jpg" alt="PRESS review session_20260709_192315">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5335}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5035}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.3961}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5386}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5121}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4461}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5406}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5236}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4931}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.568}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5605}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.537}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5572}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5506}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.509}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5423}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5179}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5056}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5025}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4947}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4732}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5314}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5272}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5027}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5815}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5468}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5467}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5226}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4532}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4187}]]</pre></details>
+  <p>candidate/present/clean/input: 472/472/472/473</p>
+  <p>selected frame: <strong>472</strong> (earliest_clean_pre_input_frame) · phase: PANEL_CLEAN</p>
+  <p>slots total/occupied/empty/uncertain: 10/8/2/0 · layout conflict: False</p>
+  <p>predicted: <code>ASDWWDWS</code> · expected: <code>ASDWWDWS</code> · exact match: <strong>True</strong> · status: <strong>sequence_ready</strong></p>
+  <img src="images/session_20260709_192315_ASDWWDWS.jpg" alt="PRESS review session_20260709_192315">
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      125,
+      119,
+      163,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 309,
+    &quot;median_hue&quot;: 96.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.2626,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      139,
+      151,
+      149,
+      163
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7374
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      163,
+      119,
+      201,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 322,
+    &quot;median_hue&quot;: 96.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.2109,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      178,
+      151,
+      189,
+      161
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7891
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      201,
+      119,
+      239,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 349,
+    &quot;median_hue&quot;: 96.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.2782,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      216,
+      151,
+      228,
+      161
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7218
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      239,
+      119,
+      277,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 453,
+    &quot;median_hue&quot;: 96.5,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.3013,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      254,
+      151,
+      267,
+      160
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6987
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      277,
+      119,
+      315,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 453,
+    &quot;median_hue&quot;: 97.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.33,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      292,
+      151,
+      305,
+      160
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.67
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      315,
+      119,
+      352,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 350,
+    &quot;median_hue&quot;: 96.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.2109,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      332,
+      151,
+      343,
+      163
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7891
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      352,
+      119,
+      390,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 444,
+    &quot;median_hue&quot;: 97.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.2802,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      370,
+      151,
+      382,
+      160
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7198
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      390,
+      119,
+      428,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 320,
+    &quot;median_hue&quot;: 97.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 1.0,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.2577,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      408,
+      151,
+      419,
+      162
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 1.0
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7423
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      428,
+      119,
+      466,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 20.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      466,
+      119,
+      504,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 20.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6453}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6329}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.628}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6945}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6211}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6086}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6526}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6369}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6288}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.7334}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6239}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6024}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6907}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5927}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5815}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6323}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6103}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6101}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6386}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5887}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5881}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5954}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5769}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5758}]]</pre></details>
 </article>
 <article>
   <h2>session_20260710_061220: 507-517</h2>
-  <p>review frame: 514 · panel first/confirmed: 507/508 · sequence ready: None</p>
-  <p>candidate: <code>AWSA</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
+  <p>candidate/present/clean/input: 507/507/507/512</p>
+  <p>selected frame: <strong>507</strong> (earliest_clean_pre_input_frame) · phase: PANEL_CLEAN</p>
+  <p>slots total/occupied/empty/uncertain: 10/4/6/0 · layout conflict: False</p>
+  <p>predicted: <code>AWSA</code> · expected: <code>AWSA</code> · exact match: <strong>True</strong> · status: <strong>sequence_ready</strong></p>
   <img src="images/session_20260710_061220_507_517.jpg" alt="PRESS review session_20260710_061220">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6128}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6082}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.601}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5594}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5556}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5177}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.508}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4919}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.484}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5803}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5788}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5649}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6891}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6285}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6279}]]</pre></details>
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      113,
+      123,
+      151,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 230,
+    &quot;median_hue&quot;: 30.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 0.7534,
+    &quot;second_direction&quot;: &quot;UP&quot;,
+    &quot;ambiguity_margin&quot;: 0.0942,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      128,
+      158,
+      137,
+      168
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.7534
+      },
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.6592
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      151,
+      123,
+      189,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 319,
+    &quot;median_hue&quot;: 30.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.792,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1591,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      165,
+      157,
+      177,
+      167
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.792
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.633
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      189,
+      123,
+      227,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 216,
+    &quot;median_hue&quot;: 30.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.8757,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1264,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      204,
+      159,
+      214,
+      167
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.8757
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7493
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      227,
+      123,
+      265,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 213,
+    &quot;median_hue&quot;: 30.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 0.7698,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.0887,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      243,
+      158,
+      252,
+      168
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.7698
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.6811
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      265,
+      123,
+      303,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      303,
+      123,
+      340,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      340,
+      123,
+      378,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      378,
+      123,
+      416,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      416,
+      123,
+      454,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      454,
+      123,
+      492,
+      183
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 21.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5996}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5772}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5494}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6532}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6047}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5819}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6221}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5994}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5981}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6054}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5961}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5875}]]</pre></details>
 </article>
 <article>
   <h2>session_20260710_123210: 574-583</h2>
-  <p>review frame: 577 · panel first/confirmed: 574/575 · sequence ready: None</p>
-  <p>candidate: <code>AW</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
-  <img src="images/session_20260710_123210_574_583.jpg" alt="PRESS review session_20260710_123210">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5079}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5075}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4964}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4945}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4854}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4833}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6485}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5726}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5238}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.677}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6007}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5345}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6387}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6309}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.521}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5265}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5224}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4604}]]</pre></details>
+  <p>candidate/present/clean/input: 574/574/574/577</p>
+  <p>selected frame: <strong>574</strong> (earliest_clean_pre_input_frame) · phase: PANEL_CLEAN</p>
+  <p>slots total/occupied/empty/uncertain: 10/2/8/0 · layout conflict: False</p>
+  <p>predicted: <code>DW</code> · expected: <code>DW</code> · exact match: <strong>True</strong> · status: <strong>sequence_ready</strong></p>
+  <img src="images/session_20260710_123210_DW.jpg" alt="PRESS review session_20260710_123210">
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      110,
+      109,
+      148,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 419,
+    &quot;median_hue&quot;: 10.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 0.7567,
+    &quot;second_direction&quot;: &quot;UP&quot;,
+    &quot;ambiguity_margin&quot;: 0.0326,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      125,
+      141,
+      136,
+      155
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7567
+      },
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.7241
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      148,
+      109,
+      186,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 440,
+    &quot;median_hue&quot;: 9.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.8473,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.2267,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      163,
+      143,
+      175,
+      153
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.8473
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6206
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      186,
+      109,
+      224,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 103.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      224,
+      109,
+      262,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 12.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      262,
+      109,
+      300,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 12.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      300,
+      109,
+      337,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      337,
+      109,
+      375,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 12.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      375,
+      109,
+      413,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 10.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      413,
+      109,
+      451,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 10.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      451,
+      109,
+      489,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 12.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6367}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.606}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6017}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6218}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5916}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5587}]]</pre></details>
 </article>
 <article>
   <h2>session_20260710_124419: 334-355</h2>
-  <p>review frame: 351 · panel first/confirmed: 334/335 · sequence ready: None</p>
-  <p>candidate: <code>DDWDDAAAAA</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
+  <p>candidate/present/clean/input: 334/334/None/343</p>
+  <p>selected frame: <strong>344</strong> (fallback_visual_review_no_clean_frame) · phase: PANEL_CLEAN</p>
+  <p>slots total/occupied/empty/uncertain: 10/5/5/0 · layout conflict: False</p>
+  <p>predicted: <code>(not ready)</code> · expected: <code>DSWSS</code> · exact match: <strong>None</strong> · status: <strong>sequence_not_evaluable_from_existing_replay</strong></p>
   <img src="images/session_20260710_124419_334_355.jpg" alt="PRESS review session_20260710_124419">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5469}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5051}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4949}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6904}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6054}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5573}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6372}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6136}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6135}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6415}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6285}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5818}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.547}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5126}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4518}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5998}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5751}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5544}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6064}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5654}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5206}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6312}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5259}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4964}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}]]</pre></details>
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      125,
+      119,
+      163,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 1430,
+    &quot;median_hue&quot;: 16.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.6188,
+    &quot;second_direction&quot;: &quot;LEFT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1509,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      128,
+      151,
+      160,
+      175
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.6188
+      },
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.4678
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      163,
+      119,
+      201,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 1533,
+    &quot;median_hue&quot;: 15.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 0.4942,
+    &quot;second_direction&quot;: &quot;UP&quot;,
+    &quot;ambiguity_margin&quot;: 0.0087,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      166,
+      151,
+      198,
+      175
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.4942
+      },
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.4856
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      201,
+      119,
+      239,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 623,
+    &quot;median_hue&quot;: 17.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.7746,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1636,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      211,
+      160,
+      221,
+      169
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.7746
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.611
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      239,
+      119,
+      277,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 340,
+    &quot;median_hue&quot;: 96.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.7841,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1151,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      247,
+      159,
+      259,
+      170
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7841
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6689
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      277,
+      119,
+      315,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 397,
+    &quot;median_hue&quot;: 98.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.8065,
+    &quot;second_direction&quot;: &quot;LEFT&quot;,
+    &quot;ambiguity_margin&quot;: 0.0964,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      283,
+      159,
+      297,
+      171
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.8065
+      },
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.71
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      315,
+      119,
+      352,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      352,
+      119,
+      390,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      390,
+      119,
+      428,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      428,
+      119,
+      466,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      466,
+      119,
+      504,
+      179
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5531}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5013}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4996}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5358}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5046}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4794}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5926}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5625}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5572}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5196}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5039}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4959}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5641}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.562}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5579}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}]]</pre></details>
 </article>
 <article>
   <h2>session_20260710_125441: 396-419</h2>
-  <p>review frame: 413 · panel first/confirmed: 396/397 · sequence ready: None</p>
-  <p>candidate: <code>DDDDDDDSDA</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
+  <p>candidate/present/clean/input: 396/396/None/410</p>
+  <p>selected frame: <strong>417</strong> (fallback_visual_review_no_clean_frame) · phase: PANEL_INPUT_STARTED</p>
+  <p>slots total/occupied/empty/uncertain: 10/7/2/1 · layout conflict: False</p>
+  <p>predicted: <code>(not ready)</code> · expected: <code>WASASDD</code> · exact match: <strong>None</strong> · status: <strong>sequence_not_evaluable_from_existing_replay</strong></p>
   <img src="images/session_20260710_125441_396_419.jpg" alt="PRESS review session_20260710_125441">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6848}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.583}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5537}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6392}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6378}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6156}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5159}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4558}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4347}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6206}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5677}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5523}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5935}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.521}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5137}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5622}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5606}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5445}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5948}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5521}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5382}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5857}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5775}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5514}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5266}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5261}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5242}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5926}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5892}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5651}]]</pre></details>
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      117,
+      109,
+      155,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 329,
+    &quot;median_hue&quot;: 42.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 0.5749,
+    &quot;second_direction&quot;: &quot;UP&quot;,
+    &quot;ambiguity_margin&quot;: 0.0009,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      120,
+      141,
+      141,
+      159
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.5749
+      },
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.5741
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      155,
+      109,
+      193,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 209,
+    &quot;median_hue&quot;: 41.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.7798,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1376,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      160,
+      141,
+      176,
+      159
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.7798
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6422
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      193,
+      109,
+      231,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 616,
+    &quot;median_hue&quot;: 101.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.6023,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.0081,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      200,
+      141,
+      214,
+      159
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.6023
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.5942
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      231,
+      109,
+      269,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 849,
+    &quot;median_hue&quot;: 41.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.7483,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.0923,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      235,
+      141,
+      258,
+      159
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.7483
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.656
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      269,
+      109,
+      307,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 1001,
+    &quot;median_hue&quot;: 28.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.7573,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.0855,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      275,
+      141,
+      293,
+      160
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7573
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6718
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      307,
+      109,
+      344,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 799,
+    &quot;median_hue&quot;: 98.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.7671,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1104,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      312,
+      141,
+      332,
+      165
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7671
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6567
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      344,
+      109,
+      382,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 579,
+    &quot;median_hue&quot;: 100.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 0.5645,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.0157,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      354,
+      141,
+      369,
+      161
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.5645
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.5488
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      382,
+      109,
+      420,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;UNCERTAIN&quot;,
+    &quot;occupancy_confidence&quot;: 0.45,
+    &quot;coloured_pixel_count&quot;: 18,
+    &quot;median_hue&quot;: 101.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      420,
+      109,
+      458,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      458,
+      109,
+      496,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 0.75,
+    &quot;coloured_pixel_count&quot;: 2,
+    &quot;median_hue&quot;: 97.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4844}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.468}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4516}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5108}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4953}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4573}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4803}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4691}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4489}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.481}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.477}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4733}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4874}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4805}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4578}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5131}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4695}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.455}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5022}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4774}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4604}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5377}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5342}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.532}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5791}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5711}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5261}]]</pre></details>
 </article>
 <article>
   <h2>session_20260710_130308: 415-438</h2>
-  <p>review frame: 430 · panel first/confirmed: 415/416 · sequence ready: None</p>
-  <p>candidate: <code>AAAAAAAA</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
+  <p>candidate/present/clean/input: 415/415/415/427</p>
+  <p>selected frame: <strong>415</strong> (earliest_clean_pre_input_frame) · phase: PANEL_CLEAN</p>
+  <p>slots total/occupied/empty/uncertain: 10/8/2/0 · layout conflict: False</p>
+  <p>predicted: <code>WWDDWWSS</code> · expected: <code>WWDDWWSS</code> · exact match: <strong>True</strong> · status: <strong>sequence_ready</strong></p>
   <img src="images/session_20260710_130308_415_438.jpg" alt="PRESS review session_20260710_130308">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.7002}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6224}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5764}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6486}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5571}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5475}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6278}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6277}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6111}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6168}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5938}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5636}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5565}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5385}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5187}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6146}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4403}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4093}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5708}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5646}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5254}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.577}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.557}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5564}]]</pre></details>
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      108,
+      132,
+      146,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 509,
+    &quot;median_hue&quot;: 168.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.8663,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.2243,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      121,
+      166,
+      136,
+      176
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.8663
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.642
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      146,
+      132,
+      184,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 492,
+    &quot;median_hue&quot;: 170.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.8655,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1628,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      160,
+      166,
+      174,
+      176
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.8655
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7027
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      184,
+      132,
+      222,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 414,
+    &quot;median_hue&quot;: 162.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 0.8526,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.1728,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      200,
+      166,
+      211,
+      179
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.8526
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.6798
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      222,
+      132,
+      260,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 415,
+    &quot;median_hue&quot;: 148.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 0.8381,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.1104,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      238,
+      166,
+      250,
+      180
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.8381
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7277
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      260,
+      132,
+      298,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 503,
+    &quot;median_hue&quot;: 173.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.8213,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1863,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      275,
+      166,
+      290,
+      176
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.8213
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6351
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      298,
+      132,
+      335,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 484,
+    &quot;median_hue&quot;: 170.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.8828,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.2057,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      314,
+      166,
+      328,
+      176
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.8828
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.6771
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      335,
+      132,
+      373,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 323,
+    &quot;median_hue&quot;: 172.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.8753,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1285,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      352,
+      168,
+      365,
+      178
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.8753
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7468
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      373,
+      132,
+      411,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 349,
+    &quot;median_hue&quot;: 128.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.9074,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1241,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      392,
+      168,
+      403,
+      178
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.9074
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7833
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      411,
+      132,
+      449,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      449,
+      132,
+      487,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 119.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5816}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.521}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4237}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5885}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5234}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4144}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6184}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5477}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.445}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6368}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5398}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.3542}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5993}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5786}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4025}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5942}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5317}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.3688}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5858}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5624}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4247}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6325}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6116}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4239}]]</pre></details>
 </article>
 <article>
   <h2>session_20260710_131254: 225-249</h2>
-  <p>review frame: 239 · panel first/confirmed: 225/226 · sequence ready: None</p>
-  <p>candidate: <code>AAAAAAA</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
+  <p>candidate/present/clean/input: 225/225/225/226</p>
+  <p>selected frame: <strong>225</strong> (earliest_clean_pre_input_frame) · phase: PANEL_CLEAN</p>
+  <p>slots total/occupied/empty/uncertain: 10/7/3/0 · layout conflict: False</p>
+  <p>predicted: <code>WDASADS</code> · expected: <code>WDASADS</code> · exact match: <strong>True</strong> · status: <strong>sequence_ready</strong></p>
   <img src="images/session_20260710_131254_225_249.jpg" alt="PRESS review session_20260710_131254">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6542}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5422}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5217}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6614}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.646}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6281}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5978}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.562}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5442}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6218}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.6069}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5934}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.4901}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4253}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4236}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.6413}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6382}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.581}]]</pre></details>
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      117,
+      109,
+      155,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 476,
+    &quot;median_hue&quot;: 164.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.8712,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1459,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      126,
+      142,
+      139,
+      153
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.8712
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7252
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      155,
+      109,
+      193,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 379,
+    &quot;median_hue&quot;: 148.5,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 0.7975,
+    &quot;second_direction&quot;: &quot;UP&quot;,
+    &quot;ambiguity_margin&quot;: 0.1038,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      166,
+      141,
+      177,
+      154
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7975
+      },
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.6937
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      193,
+      109,
+      231,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 365,
+    &quot;median_hue&quot;: 164.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 0.7927,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.1609,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      202,
+      142,
+      214,
+      155
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.7927
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.6318
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      231,
+      109,
+      269,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 352,
+    &quot;median_hue&quot;: 139.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.869,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.098,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      242,
+      144,
+      254,
+      154
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.869
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.771
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      269,
+      109,
+      307,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 355,
+    &quot;median_hue&quot;: 174.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 0.7389,
+    &quot;second_direction&quot;: &quot;UP&quot;,
+    &quot;ambiguity_margin&quot;: 0.1201,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      281,
+      142,
+      291,
+      154
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.7389
+      },
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.6188
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      307,
+      109,
+      344,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 380,
+    &quot;median_hue&quot;: 166.0,
+    &quot;arrow_direction&quot;: &quot;RIGHT&quot;,
+    &quot;arrow_confidence&quot;: 0.8094,
+    &quot;second_direction&quot;: &quot;UP&quot;,
+    &quot;ambiguity_margin&quot;: 0.1148,
+    &quot;mapped_key&quot;: &quot;D&quot;,
+    &quot;arrow_bbox&quot;: [
+      320,
+      141,
+      331,
+      155
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.8094
+      },
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.6946
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      344,
+      109,
+      382,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 341,
+    &quot;median_hue&quot;: 143.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.8784,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.1441,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      356,
+      144,
+      369,
+      154
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.8784
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7343
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      382,
+      109,
+      420,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 18.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      420,
+      109,
+      458,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: 133.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      458,
+      109,
+      496,
+      169
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 0.75,
+    &quot;coloured_pixel_count&quot;: 2,
+    &quot;median_hue&quot;: 21.0,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5502}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5006}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4323}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5572}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4918}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4317}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5784}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4695}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.3548}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.545}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5345}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.3979}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.643}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5199}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.3697}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6155}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.543}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.3281}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5988}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5232}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.4107}]]</pre></details>
 </article>
 <article>
   <h2>session_20260710_131254: 554-576</h2>
-  <p>review frame: 564 · panel first/confirmed: 554/555 · sequence ready: None</p>
-  <p>candidate: <code>AAAAAA</code> · predicted: <code>(not ready)</code> · status: <strong>sequence_not_recoverable_from_replay</strong></p>
+  <p>candidate/present/clean/input: 554/554/None/554</p>
+  <p>selected frame: <strong>564</strong> (fallback_visual_review_no_clean_frame) · phase: PANEL_INPUT_STARTED</p>
+  <p>slots total/occupied/empty/uncertain: 10/7/3/0 · layout conflict: False</p>
+  <p>predicted: <code>(not ready)</code> · expected: <code>WAAASA</code> · exact match: <strong>None</strong> · status: <strong>sequence_not_evaluable_from_existing_replay</strong></p>
   <img src="images/session_20260710_131254_554_576.jpg" alt="PRESS review session_20260710_131254">
-  <details><summary>Per-box top-3 glyph candidates</summary><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.7481}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5921}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5921}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6879}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.643}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6199}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5618}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5261}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5206}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5549}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4698}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.3931}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5464}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5018}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4839}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6424}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5871}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5707}]]</pre></details>
+  <details><summary>Arrow occupancy and auxiliary glyph candidates</summary><pre>[
+  {
+    &quot;index&quot;: 0,
+    &quot;bbox&quot;: [
+      117,
+      132,
+      155,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 487,
+    &quot;median_hue&quot;: 42.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.747,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.2197,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      128,
+      167,
+      141,
+      177
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.747
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.5272
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 1,
+    &quot;bbox&quot;: [
+      155,
+      132,
+      193,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 324,
+    &quot;median_hue&quot;: 42.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.6716,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.0115,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      168,
+      166,
+      178,
+      179
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.6716
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.6601
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 2,
+    &quot;bbox&quot;: [
+      193,
+      132,
+      231,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 1134,
+    &quot;median_hue&quot;: 15.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 0.7291,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.1429,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      204,
+      164,
+      228,
+      188
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.7291
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.5863
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 3,
+    &quot;bbox&quot;: [
+      231,
+      132,
+      269,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 1784,
+    &quot;median_hue&quot;: 15.0,
+    &quot;arrow_direction&quot;: &quot;LEFT&quot;,
+    &quot;arrow_confidence&quot;: 0.5,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: &quot;A&quot;,
+    &quot;arrow_bbox&quot;: [
+      234,
+      164,
+      266,
+      188
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.5
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.5
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 4,
+    &quot;bbox&quot;: [
+      269,
+      132,
+      307,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 862,
+    &quot;median_hue&quot;: 28.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.5915,
+    &quot;second_direction&quot;: &quot;LEFT&quot;,
+    &quot;ambiguity_margin&quot;: 0.0853,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      279,
+      164,
+      304,
+      188
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.5915
+      },
+      {
+        &quot;key&quot;: &quot;A&quot;,
+        &quot;direction&quot;: &quot;LEFT&quot;,
+        &quot;confidence&quot;: 0.5062
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 5,
+    &quot;bbox&quot;: [
+      307,
+      132,
+      344,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 1570,
+    &quot;median_hue&quot;: 14.0,
+    &quot;arrow_direction&quot;: &quot;UP&quot;,
+    &quot;arrow_confidence&quot;: 0.4122,
+    &quot;second_direction&quot;: &quot;DOWN&quot;,
+    &quot;ambiguity_margin&quot;: 0.0175,
+    &quot;mapped_key&quot;: &quot;W&quot;,
+    &quot;arrow_bbox&quot;: [
+      310,
+      164,
+      341,
+      188
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;W&quot;,
+        &quot;direction&quot;: &quot;UP&quot;,
+        &quot;confidence&quot;: 0.4122
+      },
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.3946
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 6,
+    &quot;bbox&quot;: [
+      344,
+      132,
+      382,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;OCCUPIED&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 916,
+    &quot;median_hue&quot;: 13.0,
+    &quot;arrow_direction&quot;: &quot;DOWN&quot;,
+    &quot;arrow_confidence&quot;: 0.7247,
+    &quot;second_direction&quot;: &quot;RIGHT&quot;,
+    &quot;ambiguity_margin&quot;: 0.0135,
+    &quot;mapped_key&quot;: &quot;S&quot;,
+    &quot;arrow_bbox&quot;: [
+      347,
+      164,
+      361,
+      188
+    ],
+    &quot;arrow_top_candidates&quot;: [
+      {
+        &quot;key&quot;: &quot;S&quot;,
+        &quot;direction&quot;: &quot;DOWN&quot;,
+        &quot;confidence&quot;: 0.7247
+      },
+      {
+        &quot;key&quot;: &quot;D&quot;,
+        &quot;direction&quot;: &quot;RIGHT&quot;,
+        &quot;confidence&quot;: 0.7112
+      }
+    ]
+  },
+  {
+    &quot;index&quot;: 7,
+    &quot;bbox&quot;: [
+      382,
+      132,
+      420,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 8,
+    &quot;bbox&quot;: [
+      420,
+      132,
+      458,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  },
+  {
+    &quot;index&quot;: 9,
+    &quot;bbox&quot;: [
+      458,
+      132,
+      496,
+      192
+    ],
+    &quot;occupancy&quot;: &quot;EMPTY&quot;,
+    &quot;occupancy_confidence&quot;: 1.0,
+    &quot;coloured_pixel_count&quot;: 0,
+    &quot;median_hue&quot;: null,
+    &quot;arrow_direction&quot;: null,
+    &quot;arrow_confidence&quot;: 0.0,
+    &quot;second_direction&quot;: null,
+    &quot;ambiguity_margin&quot;: 0.0,
+    &quot;mapped_key&quot;: null,
+    &quot;arrow_bbox&quot;: null,
+    &quot;arrow_top_candidates&quot;: []
+  }
+]</pre><pre>[[{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.7481}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5921}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5921}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.6879}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.643}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6199}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.5618}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5261}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5206}], [{&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5}, {&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5549}, {&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.4698}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.3931}], [{&quot;key&quot;: &quot;D&quot;, &quot;confidence&quot;: 0.5464}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5018}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.4839}], [{&quot;key&quot;: &quot;W&quot;, &quot;confidence&quot;: 0.6424}, {&quot;key&quot;: &quot;S&quot;, &quot;confidence&quot;: 0.5871}, {&quot;key&quot;: &quot;A&quot;, &quot;confidence&quot;: 0.5707}]]</pre></details>
 </article></body></html>

@@ -8,11 +8,11 @@
 - Proposed intents are reported separately from action_applied.
 - recorded_observation validates recorded perception/Fusion/state flow; it is not real action execution.
 - Final frame/state: 600 / `WAITING`
-- Proposed intents: `{'START_HOOK': 68, 'HOOK_ACTION': 3, 'CAST': 85, 'COLLECT': 18}`
+- Proposed intents: `{'START_HOOK': 68, 'HOOK_ACTION': 3, 'CAST': 85, 'PRESS_SEQUENCE': 1, 'COLLECT': 18}`
 - Actions applied: **0**
 - SYNC_REQUIRED frames: **0**
 - Detector raw/qualified counts: `{'hook': {'raw_detected': 219, 'qualified_detected': 50, 'used_by_fusion': 50}, 'press': {'raw_detected': 24, 'qualified_detected': 23, 'used_by_fusion': 23}, 'get': {'raw_detected': 59, 'qualified_detected': 19, 'used_by_fusion': 19}}`
 - Global PRESS raw/qualified: **24/23** of 24
 - Global PRESS panel present: **24/24**
-- Global PRESS sequence ready frames/intents: **0/0**
+- Global PRESS sequence ready frames/intents: **23/1**
 - Global GET raw/qualified: **19/19** of 19
