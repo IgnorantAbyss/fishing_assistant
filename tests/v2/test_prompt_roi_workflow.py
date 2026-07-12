@@ -191,9 +191,20 @@ def test_runtime_modules_do_not_consume_prompt_id() -> None:
     assert "prompt_id" not in runtime_source
 
 
-def test_only_pilot_prompt_ground_truth_exists() -> None:
+def test_all_formal_prompt_ground_truth_exists() -> None:
     prompt_gt = list((ROOT / "assets" / "replay" / "sessions").glob("session_*/prompt_ground_truth.yaml"))
-    assert [path.parent.name for path in prompt_gt] == ["session_20260710_130308"]
+    actual_sessions = {path.parent.name for path in prompt_gt}
+    expected_sessions = {
+        "session_20260709_192315",
+        "session_20260710_061220",
+        "session_20260710_123210",
+        "session_20260710_124419",
+        "session_20260710_125441",
+        "session_20260710_130308",
+        "session_20260710_131254",
+    }
+    assert actual_sessions == expected_sessions
+    assert "session_20260709_192231" not in actual_sessions
 
 
 def test_phase_does_not_materialize_prompt_dataset() -> None:

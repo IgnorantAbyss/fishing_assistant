@@ -1,0 +1,221 @@
+{
+  "session": "session_20260710_124419",
+  "annotation": {
+    "valid": true,
+    "total_frames": 600,
+    "coverage_frames": 600,
+    "coverage_percentage": 100.0,
+    "label_frame_counts": {
+      "HOOK_INSTRUCTION": 25,
+      "IDLE_CAST": 72,
+      "IGNORE": 15,
+      "PRESS_INSTRUCTION": 22,
+      "READY_BITE": 52,
+      "WAITING_IN_PROGRESS": 414
+    },
+    "segment_count": 8
+  },
+  "replay_completed": true,
+  "frame_count": 600,
+  "final_frame": 600,
+  "final_state": "SYNC_REQUIRED",
+  "transitions": [
+    {
+      "frame": 10,
+      "from": "SYNCING",
+      "to": "IDLE",
+      "reason": "prompt_consensus"
+    },
+    {
+      "frame": 46,
+      "from": "IDLE",
+      "to": "WAITING",
+      "reason": "stable_highest_supported_candidate"
+    },
+    {
+      "frame": 258,
+      "from": "WAITING",
+      "to": "READY",
+      "reason": "stable_highest_supported_candidate"
+    },
+    {
+      "frame": 309,
+      "from": "READY",
+      "to": "HOOK_PENDING",
+      "reason": "recorded_hook_instruction_acknowledgement"
+    },
+    {
+      "frame": 315,
+      "from": "HOOK_PENDING",
+      "to": "HOOK",
+      "reason": "stable_strong_hook_evidence"
+    },
+    {
+      "frame": 316,
+      "from": "HOOK",
+      "to": "GET",
+      "reason": "get_panel_priority"
+    },
+    {
+      "frame": 349,
+      "from": "GET",
+      "to": "COLLECT_PENDING",
+      "reason": "get_panel_disappeared"
+    },
+    {
+      "frame": 369,
+      "from": "COLLECT_PENDING",
+      "to": "SYNC_REQUIRED",
+      "reason": "collect_pending_timeout"
+    }
+  ],
+  "proposed_intents": {
+    "CAST": 35,
+    "START_HOOK": 50,
+    "COLLECT": 32
+  },
+  "actions_applied": 0,
+  "sync_required_frames": 232,
+  "first_sync_required_frame": 369,
+  "first_sync_required_reason": "collect_pending_timeout",
+  "hook": {
+    "support_frames": 25,
+    "raw_detected": 9,
+    "qualified_detected": 2,
+    "used_by_fusion": 2,
+    "missed_qualified_frames": 23,
+    "missed_qualified_frame_samples": [
+      309,
+      310,
+      311,
+      312,
+      313,
+      316,
+      317,
+      318,
+      319,
+      320
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": []
+  },
+  "press": {
+    "support_frames": 22,
+    "raw_detected": 22,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 22,
+    "missed_qualified_frame_samples": [
+      334,
+      335,
+      336,
+      337,
+      338,
+      339,
+      340,
+      341,
+      342,
+      343
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": [],
+    "panel_candidate_frames": 22,
+    "panel_present_frames": 22,
+    "sequence_ready_frames": 0,
+    "sequence_intent_count": 0,
+    "frozen_sequence_candidate": [],
+    "clean_pre_input_frame": null,
+    "false_panel_candidate_frames": 540,
+    "false_panel_candidate_frame_samples": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "false_panel_present_frames": 1,
+    "false_panel_present_frame_samples": [
+      204
+    ]
+  },
+  "get": {
+    "support_frames": 23,
+    "raw_detected": 1,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 23,
+    "missed_qualified_frame_samples": [
+      356,
+      357,
+      358,
+      359,
+      360,
+      361,
+      362,
+      363,
+      364,
+      365
+    ],
+    "false_qualified_frames": 33,
+    "false_qualified_frame_samples": [
+      316,
+      317,
+      318,
+      319,
+      320,
+      321,
+      322,
+      323,
+      324,
+      325
+    ]
+  },
+  "false_action_intents": {
+    "CAST": [],
+    "START_HOOK": [],
+    "HOOK_ACTION": [],
+    "PRESS_SEQUENCE": []
+  },
+  "detector_warnings": {
+    "hook": [
+      "qualified miss 23/25 HOOK frames"
+    ],
+    "press": [
+      "no clean pre-input sequence frame",
+      "panel candidate on 540 non-PRESS frames",
+      "panel present on 1 non-PRESS frames"
+    ],
+    "get": [
+      "qualified miss 23/23 GET frames",
+      "false qualified on 33 non-GET frames"
+    ]
+  },
+  "unexplained_runtime_transitions": [
+    {
+      "frame": 316,
+      "from": "HOOK",
+      "to": "GET",
+      "reason": "get_panel_priority",
+      "global_ground_truth": "HOOK",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "frame": 600,
+      "from": "SYNC_REQUIRED",
+      "to": "WAITING",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "WAITING",
+      "issue": "terminal_runtime_state_mismatch"
+    }
+  ],
+  "failure_reasons": [
+    "sync_required",
+    "unexplained_runtime_transition"
+  ],
+  "result": "FAIL"
+}

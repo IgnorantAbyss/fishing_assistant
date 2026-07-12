@@ -1,0 +1,172 @@
+{
+  "session": "session_20260710_123210",
+  "annotation": {
+    "valid": true,
+    "total_frames": 600,
+    "coverage_frames": 600,
+    "coverage_percentage": 100.0,
+    "label_frame_counts": {
+      "HOOK_INSTRUCTION": 17,
+      "IDLE_CAST": 48,
+      "IGNORE": 17,
+      "PRESS_INSTRUCTION": 10,
+      "READY_BITE": 55,
+      "WAITING_IN_PROGRESS": 453
+    },
+    "segment_count": 6
+  },
+  "replay_completed": true,
+  "frame_count": 600,
+  "final_frame": 600,
+  "final_state": "PRESS",
+  "transitions": [
+    {
+      "frame": 10,
+      "from": "SYNCING",
+      "to": "IDLE",
+      "reason": "prompt_consensus"
+    },
+    {
+      "frame": 50,
+      "from": "IDLE",
+      "to": "WAITING",
+      "reason": "stable_highest_supported_candidate"
+    },
+    {
+      "frame": 503,
+      "from": "WAITING",
+      "to": "READY",
+      "reason": "stable_highest_supported_candidate"
+    },
+    {
+      "frame": 557,
+      "from": "READY",
+      "to": "HOOK_PENDING",
+      "reason": "recorded_hook_instruction_acknowledgement"
+    },
+    {
+      "frame": 563,
+      "from": "HOOK_PENDING",
+      "to": "HOOK",
+      "reason": "stable_strong_hook_evidence"
+    },
+    {
+      "frame": 574,
+      "from": "HOOK",
+      "to": "RESULT_PENDING",
+      "reason": "recorded_hook_result_prompt_acknowledgement"
+    },
+    {
+      "frame": 576,
+      "from": "RESULT_PENDING",
+      "to": "PRESS",
+      "reason": "stable_strong_press_evidence"
+    }
+  ],
+  "proposed_intents": {
+    "CAST": 39,
+    "START_HOOK": 53,
+    "HOOK_ACTION": 4,
+    "PRESS_SEQUENCE": 1
+  },
+  "actions_applied": 0,
+  "sync_required_frames": 0,
+  "first_sync_required_frame": null,
+  "first_sync_required_reason": null,
+  "hook": {
+    "support_frames": 17,
+    "raw_detected": 6,
+    "qualified_detected": 6,
+    "used_by_fusion": 6,
+    "missed_qualified_frames": 11,
+    "missed_qualified_frame_samples": [
+      557,
+      558,
+      559,
+      560,
+      561,
+      564,
+      565,
+      566,
+      567,
+      572
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": []
+  },
+  "press": {
+    "support_frames": 10,
+    "raw_detected": 10,
+    "qualified_detected": 9,
+    "used_by_fusion": 9,
+    "missed_qualified_frames": 1,
+    "missed_qualified_frame_samples": [
+      574
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": [],
+    "panel_candidate_frames": 10,
+    "panel_present_frames": 10,
+    "sequence_ready_frames": 9,
+    "sequence_intent_count": 1,
+    "frozen_sequence_candidate": [
+      "D",
+      "W"
+    ],
+    "clean_pre_input_frame": 574,
+    "false_panel_candidate_frames": 489,
+    "false_panel_candidate_frame_samples": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "false_panel_present_frames": 0,
+    "false_panel_present_frame_samples": []
+  },
+  "get": {
+    "support_frames": 0,
+    "raw_detected": 0,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 0,
+    "missed_qualified_frame_samples": [],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": []
+  },
+  "false_action_intents": {
+    "CAST": [],
+    "START_HOOK": [],
+    "HOOK_ACTION": [],
+    "PRESS_SEQUENCE": []
+  },
+  "detector_warnings": {
+    "hook": [
+      "qualified miss 11/17 HOOK frames"
+    ],
+    "press": [
+      "panel candidate on 489 non-PRESS frames"
+    ],
+    "get": []
+  },
+  "unexplained_runtime_transitions": [
+    {
+      "frame": 600,
+      "from": "PRESS",
+      "to": "IDLE",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "IDLE",
+      "issue": "terminal_runtime_state_mismatch"
+    }
+  ],
+  "failure_reasons": [
+    "unexplained_runtime_transition"
+  ],
+  "result": "FAIL"
+}

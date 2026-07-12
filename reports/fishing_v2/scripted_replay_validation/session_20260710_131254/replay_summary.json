@@ -1,0 +1,186 @@
+{
+  "session": "session_20260710_131254",
+  "annotation": {
+    "valid": true,
+    "total_frames": 600,
+    "coverage_frames": 600,
+    "coverage_percentage": 100.0,
+    "label_frame_counts": {
+      "HOOK_INSTRUCTION": 62,
+      "IDLE_CAST": 72,
+      "IGNORE": 32,
+      "PRESS_INSTRUCTION": 48,
+      "READY_BITE": 97,
+      "WAITING_IN_PROGRESS": 289
+    },
+    "segment_count": 12
+  },
+  "replay_completed": true,
+  "frame_count": 600,
+  "final_frame": 600,
+  "final_state": "SYNC_REQUIRED",
+  "transitions": [
+    {
+      "frame": 1,
+      "from": "SYNCING",
+      "to": "GET",
+      "reason": "strong_get_startup_evidence"
+    },
+    {
+      "frame": 13,
+      "from": "GET",
+      "to": "COLLECT_PENDING",
+      "reason": "get_panel_disappeared"
+    },
+    {
+      "frame": 24,
+      "from": "COLLECT_PENDING",
+      "to": "SYNC_REQUIRED",
+      "reason": "persistent_conflicting_or_illegal_evidence"
+    }
+  ],
+  "proposed_intents": {
+    "COLLECT": 12
+  },
+  "actions_applied": 0,
+  "sync_required_frames": 577,
+  "first_sync_required_frame": 24,
+  "first_sync_required_reason": "persistent_conflicting_or_illegal_evidence",
+  "hook": {
+    "support_frames": 62,
+    "raw_detected": 49,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 62,
+    "missed_qualified_frame_samples": [
+      190,
+      191,
+      192,
+      193,
+      194,
+      195,
+      196,
+      197,
+      198,
+      199
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": []
+  },
+  "press": {
+    "support_frames": 48,
+    "raw_detected": 48,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 48,
+    "missed_qualified_frame_samples": [
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      231,
+      232,
+      233,
+      234
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": [],
+    "panel_candidate_frames": 48,
+    "panel_present_frames": 48,
+    "sequence_ready_frames": 0,
+    "sequence_intent_count": 0,
+    "frozen_sequence_candidate": [],
+    "clean_pre_input_frame": null,
+    "false_panel_candidate_frames": 546,
+    "false_panel_candidate_frame_samples": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "false_panel_present_frames": 0,
+    "false_panel_present_frame_samples": []
+  },
+  "get": {
+    "support_frames": 23,
+    "raw_detected": 22,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 23,
+    "missed_qualified_frame_samples": [
+      251,
+      252,
+      253,
+      254,
+      255,
+      256,
+      257,
+      258,
+      259,
+      260
+    ],
+    "false_qualified_frames": 12,
+    "false_qualified_frame_samples": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  },
+  "false_action_intents": {
+    "CAST": [],
+    "START_HOOK": [],
+    "HOOK_ACTION": [],
+    "PRESS_SEQUENCE": []
+  },
+  "detector_warnings": {
+    "hook": [
+      "qualified miss 62/62 HOOK frames"
+    ],
+    "press": [
+      "no clean pre-input sequence frame",
+      "panel candidate on 546 non-PRESS frames"
+    ],
+    "get": [
+      "qualified miss 23/23 GET frames",
+      "false qualified on 12 non-GET frames"
+    ]
+  },
+  "unexplained_runtime_transitions": [
+    {
+      "frame": 1,
+      "from": "SYNCING",
+      "to": "GET",
+      "reason": "strong_get_startup_evidence",
+      "global_ground_truth": "WAITING",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "frame": 600,
+      "from": "SYNC_REQUIRED",
+      "to": "IDLE",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "IDLE",
+      "issue": "terminal_runtime_state_mismatch"
+    }
+  ],
+  "failure_reasons": [
+    "sync_required",
+    "unexplained_runtime_transition"
+  ],
+  "result": "FAIL"
+}

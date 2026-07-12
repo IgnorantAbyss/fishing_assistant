@@ -1,0 +1,1534 @@
+{
+  "formal_sessions": [
+    "session_20260709_192315",
+    "session_20260710_061220",
+    "session_20260710_123210",
+    "session_20260710_124419",
+    "session_20260710_125441",
+    "session_20260710_130308",
+    "session_20260710_131254"
+  ],
+  "trial_excluded": "session_20260709_192231",
+  "annotation_pass_count": 7,
+  "replay_complete_count": 7,
+  "result_counts": {
+    "PASS": 0,
+    "PASS_WITH_WARNINGS": 3,
+    "FAIL": 4
+  },
+  "actions_applied_total": 0,
+  "sync_required_frames_total": 987,
+  "detector_totals": {
+    "hook": {
+      "support_frames": 259,
+      "raw_detected": 177,
+      "qualified_detected": 108,
+      "used_by_fusion": 108
+    },
+    "press": {
+      "support_frames": 151,
+      "raw_detected": 147,
+      "qualified_detected": 49,
+      "used_by_fusion": 49,
+      "panel_candidate_frames": 148,
+      "panel_present_frames": 147,
+      "sequence_ready_frames": 49,
+      "sequence_intent_count": 4
+    },
+    "get": {
+      "support_frames": 99,
+      "raw_detected": 42,
+      "qualified_detected": 19,
+      "used_by_fusion": 19
+    }
+  },
+  "false_action_intents_present": false,
+  "unexplained_runtime_transitions": [
+    {
+      "session": "session_20260710_123210",
+      "frame": 600,
+      "from": "PRESS",
+      "to": "IDLE",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "IDLE",
+      "issue": "terminal_runtime_state_mismatch"
+    },
+    {
+      "session": "session_20260710_124419",
+      "frame": 316,
+      "from": "HOOK",
+      "to": "GET",
+      "reason": "get_panel_priority",
+      "global_ground_truth": "HOOK",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "session": "session_20260710_124419",
+      "frame": 600,
+      "from": "SYNC_REQUIRED",
+      "to": "WAITING",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "WAITING",
+      "issue": "terminal_runtime_state_mismatch"
+    },
+    {
+      "session": "session_20260710_125441",
+      "frame": 9,
+      "from": "SYNCING",
+      "to": "GET",
+      "reason": "strong_get_startup_evidence",
+      "global_ground_truth": "IDLE",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "session": "session_20260710_125441",
+      "frame": 394,
+      "from": "HOOK",
+      "to": "GET",
+      "reason": "get_panel_priority",
+      "global_ground_truth": "HOOK",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "session": "session_20260710_125441",
+      "frame": 600,
+      "from": "SYNC_REQUIRED",
+      "to": "WAITING",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "WAITING",
+      "issue": "terminal_runtime_state_mismatch"
+    },
+    {
+      "session": "session_20260710_131254",
+      "frame": 1,
+      "from": "SYNCING",
+      "to": "GET",
+      "reason": "strong_get_startup_evidence",
+      "global_ground_truth": "WAITING",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "session": "session_20260710_131254",
+      "frame": 600,
+      "from": "SYNC_REQUIRED",
+      "to": "IDLE",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "IDLE",
+      "issue": "terminal_runtime_state_mismatch"
+    }
+  ],
+  "specialized_detector_warnings_do_not_block_prompt_observer_gate": true,
+  "specialized_detector_warning_impact": "Warnings remain relevant to Runtime Fusion, but do not invalidate future PromptObserver prediction scoring against independent human Prompt annotations.",
+  "ready_for_prompt_observer": false,
+  "sessions": [
+    {
+      "session": "session_20260709_192315",
+      "annotation": {
+        "valid": true,
+        "total_frames": 600,
+        "coverage_frames": 600,
+        "coverage_percentage": 100.0,
+        "label_frame_counts": {
+          "HOOK_INSTRUCTION": 18,
+          "IDLE_CAST": 53,
+          "IGNORE": 15,
+          "PRESS_INSTRUCTION": 12,
+          "READY_BITE": 11,
+          "WAITING_IN_PROGRESS": 491
+        },
+        "segment_count": 8
+      },
+      "replay_completed": true,
+      "frame_count": 600,
+      "final_frame": 600,
+      "final_state": "WAITING",
+      "transitions": [
+        {
+          "frame": 10,
+          "from": "SYNCING",
+          "to": "IDLE",
+          "reason": "prompt_consensus"
+        },
+        {
+          "frame": 27,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 444,
+          "from": "WAITING",
+          "to": "READY",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 454,
+          "from": "READY",
+          "to": "HOOK_PENDING",
+          "reason": "recorded_hook_instruction_acknowledgement"
+        },
+        {
+          "frame": 460,
+          "from": "HOOK_PENDING",
+          "to": "HOOK",
+          "reason": "stable_strong_hook_evidence"
+        },
+        {
+          "frame": 472,
+          "from": "HOOK",
+          "to": "RESULT_PENDING",
+          "reason": "recorded_hook_result_prompt_acknowledgement"
+        },
+        {
+          "frame": 474,
+          "from": "RESULT_PENDING",
+          "to": "PRESS",
+          "reason": "stable_strong_press_evidence"
+        },
+        {
+          "frame": 499,
+          "from": "PRESS",
+          "to": "RESULT_PENDING",
+          "reason": "recorded_press_result_prompt_acknowledgement"
+        },
+        {
+          "frame": 501,
+          "from": "RESULT_PENDING",
+          "to": "IDLE",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 528,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        }
+      ],
+      "proposed_intents": {
+        "CAST": 41,
+        "START_HOOK": 9,
+        "HOOK_ACTION": 8,
+        "PRESS_SEQUENCE": 1
+      },
+      "actions_applied": 0,
+      "sync_required_frames": 0,
+      "first_sync_required_frame": null,
+      "first_sync_required_reason": null,
+      "hook": {
+        "support_frames": 17,
+        "raw_detected": 13,
+        "qualified_detected": 13,
+        "used_by_fusion": 13,
+        "missed_qualified_frames": 4,
+        "missed_qualified_frame_samples": [
+          455,
+          456,
+          457,
+          458
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "press": {
+        "support_frames": 12,
+        "raw_detected": 11,
+        "qualified_detected": 10,
+        "used_by_fusion": 10,
+        "missed_qualified_frames": 2,
+        "missed_qualified_frame_samples": [
+          472,
+          483
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": [],
+        "panel_candidate_frames": 12,
+        "panel_present_frames": 11,
+        "sequence_ready_frames": 10,
+        "sequence_intent_count": 1,
+        "frozen_sequence_candidate": [
+          "A",
+          "S",
+          "D",
+          "W",
+          "W",
+          "D",
+          "W",
+          "S"
+        ],
+        "clean_pre_input_frame": 472,
+        "false_panel_candidate_frames": 588,
+        "false_panel_candidate_frame_samples": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "false_panel_present_frames": 0,
+        "false_panel_present_frame_samples": []
+      },
+      "get": {
+        "support_frames": 16,
+        "raw_detected": 0,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 16,
+        "missed_qualified_frame_samples": [
+          484,
+          485,
+          486,
+          487,
+          488,
+          489,
+          490,
+          491,
+          492,
+          493
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "false_action_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": []
+      },
+      "detector_warnings": {
+        "hook": [
+          "qualified miss 4/17 HOOK frames"
+        ],
+        "press": [
+          "panel present 11/12 PRESS frames",
+          "panel candidate on 588 non-PRESS frames"
+        ],
+        "get": [
+          "qualified miss 16/16 GET frames"
+        ]
+      },
+      "unexplained_runtime_transitions": [],
+      "failure_reasons": [],
+      "result": "PASS_WITH_WARNINGS"
+    },
+    {
+      "session": "session_20260710_061220",
+      "annotation": {
+        "valid": true,
+        "total_frames": 600,
+        "coverage_frames": 600,
+        "coverage_percentage": 100.0,
+        "label_frame_counts": {
+          "HOOK_INSTRUCTION": 27,
+          "IDLE_CAST": 29,
+          "IGNORE": 15,
+          "PRESS_INSTRUCTION": 8,
+          "READY_BITE": 28,
+          "WAITING_IN_PROGRESS": 493
+        },
+        "segment_count": 7
+      },
+      "replay_completed": true,
+      "frame_count": 600,
+      "final_frame": 600,
+      "final_state": "WAITING",
+      "transitions": [
+        {
+          "frame": 10,
+          "from": "SYNCING",
+          "to": "WAITING",
+          "reason": "prompt_consensus"
+        },
+        {
+          "frame": 453,
+          "from": "WAITING",
+          "to": "READY",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 480,
+          "from": "READY",
+          "to": "HOOK_PENDING",
+          "reason": "recorded_hook_instruction_acknowledgement"
+        },
+        {
+          "frame": 487,
+          "from": "HOOK_PENDING",
+          "to": "HOOK",
+          "reason": "stable_strong_hook_evidence"
+        },
+        {
+          "frame": 507,
+          "from": "HOOK",
+          "to": "RESULT_PENDING",
+          "reason": "recorded_hook_result_prompt_acknowledgement"
+        },
+        {
+          "frame": 509,
+          "from": "RESULT_PENDING",
+          "to": "PRESS",
+          "reason": "stable_strong_press_evidence"
+        },
+        {
+          "frame": 515,
+          "from": "PRESS",
+          "to": "RESULT_PENDING",
+          "reason": "press_panel_disappeared"
+        },
+        {
+          "frame": 531,
+          "from": "RESULT_PENDING",
+          "to": "IDLE",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 560,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        }
+      ],
+      "proposed_intents": {
+        "START_HOOK": 26,
+        "HOOK_ACTION": 12,
+        "PRESS_SEQUENCE": 1,
+        "CAST": 27
+      },
+      "actions_applied": 0,
+      "sync_required_frames": 0,
+      "first_sync_required_frame": null,
+      "first_sync_required_reason": null,
+      "hook": {
+        "support_frames": 27,
+        "raw_detected": 20,
+        "qualified_detected": 20,
+        "used_by_fusion": 20,
+        "missed_qualified_frames": 7,
+        "missed_qualified_frame_samples": [
+          480,
+          481,
+          482,
+          483,
+          484,
+          485,
+          489
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "press": {
+        "support_frames": 11,
+        "raw_detected": 8,
+        "qualified_detected": 7,
+        "used_by_fusion": 7,
+        "missed_qualified_frames": 4,
+        "missed_qualified_frame_samples": [
+          507,
+          515,
+          516,
+          517
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": [],
+        "panel_candidate_frames": 8,
+        "panel_present_frames": 8,
+        "sequence_ready_frames": 7,
+        "sequence_intent_count": 1,
+        "frozen_sequence_candidate": [
+          "A",
+          "W",
+          "S",
+          "A"
+        ],
+        "clean_pre_input_frame": 507,
+        "false_panel_candidate_frames": 12,
+        "false_panel_candidate_frame_samples": [
+          157,
+          161,
+          209,
+          261,
+          426,
+          450,
+          497,
+          504,
+          546,
+          547
+        ],
+        "false_panel_present_frames": 0,
+        "false_panel_present_frame_samples": []
+      },
+      "get": {
+        "support_frames": 0,
+        "raw_detected": 0,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 0,
+        "missed_qualified_frame_samples": [],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "false_action_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": []
+      },
+      "detector_warnings": {
+        "hook": [
+          "qualified miss 7/27 HOOK frames"
+        ],
+        "press": [
+          "panel present 8/11 PRESS frames",
+          "panel candidate on 12 non-PRESS frames"
+        ],
+        "get": []
+      },
+      "unexplained_runtime_transitions": [],
+      "failure_reasons": [],
+      "result": "PASS_WITH_WARNINGS"
+    },
+    {
+      "session": "session_20260710_123210",
+      "annotation": {
+        "valid": true,
+        "total_frames": 600,
+        "coverage_frames": 600,
+        "coverage_percentage": 100.0,
+        "label_frame_counts": {
+          "HOOK_INSTRUCTION": 17,
+          "IDLE_CAST": 48,
+          "IGNORE": 17,
+          "PRESS_INSTRUCTION": 10,
+          "READY_BITE": 55,
+          "WAITING_IN_PROGRESS": 453
+        },
+        "segment_count": 6
+      },
+      "replay_completed": true,
+      "frame_count": 600,
+      "final_frame": 600,
+      "final_state": "PRESS",
+      "transitions": [
+        {
+          "frame": 10,
+          "from": "SYNCING",
+          "to": "IDLE",
+          "reason": "prompt_consensus"
+        },
+        {
+          "frame": 50,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 503,
+          "from": "WAITING",
+          "to": "READY",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 557,
+          "from": "READY",
+          "to": "HOOK_PENDING",
+          "reason": "recorded_hook_instruction_acknowledgement"
+        },
+        {
+          "frame": 563,
+          "from": "HOOK_PENDING",
+          "to": "HOOK",
+          "reason": "stable_strong_hook_evidence"
+        },
+        {
+          "frame": 574,
+          "from": "HOOK",
+          "to": "RESULT_PENDING",
+          "reason": "recorded_hook_result_prompt_acknowledgement"
+        },
+        {
+          "frame": 576,
+          "from": "RESULT_PENDING",
+          "to": "PRESS",
+          "reason": "stable_strong_press_evidence"
+        }
+      ],
+      "proposed_intents": {
+        "CAST": 39,
+        "START_HOOK": 53,
+        "HOOK_ACTION": 4,
+        "PRESS_SEQUENCE": 1
+      },
+      "actions_applied": 0,
+      "sync_required_frames": 0,
+      "first_sync_required_frame": null,
+      "first_sync_required_reason": null,
+      "hook": {
+        "support_frames": 17,
+        "raw_detected": 6,
+        "qualified_detected": 6,
+        "used_by_fusion": 6,
+        "missed_qualified_frames": 11,
+        "missed_qualified_frame_samples": [
+          557,
+          558,
+          559,
+          560,
+          561,
+          564,
+          565,
+          566,
+          567,
+          572
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "press": {
+        "support_frames": 10,
+        "raw_detected": 10,
+        "qualified_detected": 9,
+        "used_by_fusion": 9,
+        "missed_qualified_frames": 1,
+        "missed_qualified_frame_samples": [
+          574
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": [],
+        "panel_candidate_frames": 10,
+        "panel_present_frames": 10,
+        "sequence_ready_frames": 9,
+        "sequence_intent_count": 1,
+        "frozen_sequence_candidate": [
+          "D",
+          "W"
+        ],
+        "clean_pre_input_frame": 574,
+        "false_panel_candidate_frames": 489,
+        "false_panel_candidate_frame_samples": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "false_panel_present_frames": 0,
+        "false_panel_present_frame_samples": []
+      },
+      "get": {
+        "support_frames": 0,
+        "raw_detected": 0,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 0,
+        "missed_qualified_frame_samples": [],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "false_action_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": []
+      },
+      "detector_warnings": {
+        "hook": [
+          "qualified miss 11/17 HOOK frames"
+        ],
+        "press": [
+          "panel candidate on 489 non-PRESS frames"
+        ],
+        "get": []
+      },
+      "unexplained_runtime_transitions": [
+        {
+          "frame": 600,
+          "from": "PRESS",
+          "to": "IDLE",
+          "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+          "global_ground_truth": "IDLE",
+          "issue": "terminal_runtime_state_mismatch"
+        }
+      ],
+      "failure_reasons": [
+        "unexplained_runtime_transition"
+      ],
+      "result": "FAIL"
+    },
+    {
+      "session": "session_20260710_124419",
+      "annotation": {
+        "valid": true,
+        "total_frames": 600,
+        "coverage_frames": 600,
+        "coverage_percentage": 100.0,
+        "label_frame_counts": {
+          "HOOK_INSTRUCTION": 25,
+          "IDLE_CAST": 72,
+          "IGNORE": 15,
+          "PRESS_INSTRUCTION": 22,
+          "READY_BITE": 52,
+          "WAITING_IN_PROGRESS": 414
+        },
+        "segment_count": 8
+      },
+      "replay_completed": true,
+      "frame_count": 600,
+      "final_frame": 600,
+      "final_state": "SYNC_REQUIRED",
+      "transitions": [
+        {
+          "frame": 10,
+          "from": "SYNCING",
+          "to": "IDLE",
+          "reason": "prompt_consensus"
+        },
+        {
+          "frame": 46,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 258,
+          "from": "WAITING",
+          "to": "READY",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 309,
+          "from": "READY",
+          "to": "HOOK_PENDING",
+          "reason": "recorded_hook_instruction_acknowledgement"
+        },
+        {
+          "frame": 315,
+          "from": "HOOK_PENDING",
+          "to": "HOOK",
+          "reason": "stable_strong_hook_evidence"
+        },
+        {
+          "frame": 316,
+          "from": "HOOK",
+          "to": "GET",
+          "reason": "get_panel_priority"
+        },
+        {
+          "frame": 349,
+          "from": "GET",
+          "to": "COLLECT_PENDING",
+          "reason": "get_panel_disappeared"
+        },
+        {
+          "frame": 369,
+          "from": "COLLECT_PENDING",
+          "to": "SYNC_REQUIRED",
+          "reason": "collect_pending_timeout"
+        }
+      ],
+      "proposed_intents": {
+        "CAST": 35,
+        "START_HOOK": 50,
+        "COLLECT": 32
+      },
+      "actions_applied": 0,
+      "sync_required_frames": 232,
+      "first_sync_required_frame": 369,
+      "first_sync_required_reason": "collect_pending_timeout",
+      "hook": {
+        "support_frames": 25,
+        "raw_detected": 9,
+        "qualified_detected": 2,
+        "used_by_fusion": 2,
+        "missed_qualified_frames": 23,
+        "missed_qualified_frame_samples": [
+          309,
+          310,
+          311,
+          312,
+          313,
+          316,
+          317,
+          318,
+          319,
+          320
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "press": {
+        "support_frames": 22,
+        "raw_detected": 22,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 22,
+        "missed_qualified_frame_samples": [
+          334,
+          335,
+          336,
+          337,
+          338,
+          339,
+          340,
+          341,
+          342,
+          343
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": [],
+        "panel_candidate_frames": 22,
+        "panel_present_frames": 22,
+        "sequence_ready_frames": 0,
+        "sequence_intent_count": 0,
+        "frozen_sequence_candidate": [],
+        "clean_pre_input_frame": null,
+        "false_panel_candidate_frames": 540,
+        "false_panel_candidate_frame_samples": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "false_panel_present_frames": 1,
+        "false_panel_present_frame_samples": [
+          204
+        ]
+      },
+      "get": {
+        "support_frames": 23,
+        "raw_detected": 1,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 23,
+        "missed_qualified_frame_samples": [
+          356,
+          357,
+          358,
+          359,
+          360,
+          361,
+          362,
+          363,
+          364,
+          365
+        ],
+        "false_qualified_frames": 33,
+        "false_qualified_frame_samples": [
+          316,
+          317,
+          318,
+          319,
+          320,
+          321,
+          322,
+          323,
+          324,
+          325
+        ]
+      },
+      "false_action_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": []
+      },
+      "detector_warnings": {
+        "hook": [
+          "qualified miss 23/25 HOOK frames"
+        ],
+        "press": [
+          "no clean pre-input sequence frame",
+          "panel candidate on 540 non-PRESS frames",
+          "panel present on 1 non-PRESS frames"
+        ],
+        "get": [
+          "qualified miss 23/23 GET frames",
+          "false qualified on 33 non-GET frames"
+        ]
+      },
+      "unexplained_runtime_transitions": [
+        {
+          "frame": 316,
+          "from": "HOOK",
+          "to": "GET",
+          "reason": "get_panel_priority",
+          "global_ground_truth": "HOOK",
+          "issue": "specialized_state_entered_outside_global_support"
+        },
+        {
+          "frame": 600,
+          "from": "SYNC_REQUIRED",
+          "to": "WAITING",
+          "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+          "global_ground_truth": "WAITING",
+          "issue": "terminal_runtime_state_mismatch"
+        }
+      ],
+      "failure_reasons": [
+        "sync_required",
+        "unexplained_runtime_transition"
+      ],
+      "result": "FAIL"
+    },
+    {
+      "session": "session_20260710_125441",
+      "annotation": {
+        "valid": true,
+        "total_frames": 600,
+        "coverage_frames": 600,
+        "coverage_percentage": 100.0,
+        "label_frame_counts": {
+          "HOOK_INSTRUCTION": 35,
+          "IDLE_CAST": 81,
+          "IGNORE": 16,
+          "PRESS_INSTRUCTION": 24,
+          "READY_BITE": 87,
+          "WAITING_IN_PROGRESS": 357
+        },
+        "segment_count": 8
+      },
+      "replay_completed": true,
+      "frame_count": 600,
+      "final_frame": 600,
+      "final_state": "SYNC_REQUIRED",
+      "transitions": [
+        {
+          "frame": 9,
+          "from": "SYNCING",
+          "to": "GET",
+          "reason": "strong_get_startup_evidence"
+        },
+        {
+          "frame": 11,
+          "from": "GET",
+          "to": "COLLECT_PENDING",
+          "reason": "get_panel_disappeared"
+        },
+        {
+          "frame": 13,
+          "from": "COLLECT_PENDING",
+          "to": "IDLE",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 60,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 275,
+          "from": "WAITING",
+          "to": "READY",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 361,
+          "from": "READY",
+          "to": "HOOK_PENDING",
+          "reason": "recorded_hook_instruction_acknowledgement"
+        },
+        {
+          "frame": 367,
+          "from": "HOOK_PENDING",
+          "to": "HOOK",
+          "reason": "stable_strong_hook_evidence"
+        },
+        {
+          "frame": 394,
+          "from": "HOOK",
+          "to": "GET",
+          "reason": "get_panel_priority"
+        },
+        {
+          "frame": 403,
+          "from": "GET",
+          "to": "COLLECT_PENDING",
+          "reason": "get_panel_disappeared"
+        },
+        {
+          "frame": 423,
+          "from": "COLLECT_PENDING",
+          "to": "SYNC_REQUIRED",
+          "reason": "collect_pending_timeout"
+        }
+      ],
+      "proposed_intents": {
+        "COLLECT": 10,
+        "CAST": 45,
+        "START_HOOK": 85
+      },
+      "actions_applied": 0,
+      "sync_required_frames": 178,
+      "first_sync_required_frame": 423,
+      "first_sync_required_reason": "collect_pending_timeout",
+      "hook": {
+        "support_frames": 35,
+        "raw_detected": 17,
+        "qualified_detected": 17,
+        "used_by_fusion": 17,
+        "missed_qualified_frames": 18,
+        "missed_qualified_frame_samples": [
+          361,
+          362,
+          363,
+          364,
+          365,
+          369,
+          377,
+          378,
+          386,
+          387
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "press": {
+        "support_frames": 24,
+        "raw_detected": 24,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 24,
+        "missed_qualified_frame_samples": [
+          396,
+          397,
+          398,
+          399,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": [],
+        "panel_candidate_frames": 24,
+        "panel_present_frames": 24,
+        "sequence_ready_frames": 0,
+        "sequence_intent_count": 0,
+        "frozen_sequence_candidate": [],
+        "clean_pre_input_frame": null,
+        "false_panel_candidate_frames": 550,
+        "false_panel_candidate_frame_samples": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "false_panel_present_frames": 0,
+        "false_panel_present_frame_samples": []
+      },
+      "get": {
+        "support_frames": 18,
+        "raw_detected": 0,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 18,
+        "missed_qualified_frame_samples": [
+          421,
+          422,
+          423,
+          424,
+          425,
+          426,
+          427,
+          428,
+          429,
+          430
+        ],
+        "false_qualified_frames": 11,
+        "false_qualified_frame_samples": [
+          9,
+          10,
+          394,
+          395,
+          396,
+          397,
+          398,
+          399,
+          400,
+          401
+        ]
+      },
+      "false_action_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": []
+      },
+      "detector_warnings": {
+        "hook": [
+          "qualified miss 18/35 HOOK frames"
+        ],
+        "press": [
+          "no clean pre-input sequence frame",
+          "panel candidate on 550 non-PRESS frames"
+        ],
+        "get": [
+          "qualified miss 18/18 GET frames",
+          "false qualified on 11 non-GET frames"
+        ]
+      },
+      "unexplained_runtime_transitions": [
+        {
+          "frame": 9,
+          "from": "SYNCING",
+          "to": "GET",
+          "reason": "strong_get_startup_evidence",
+          "global_ground_truth": "IDLE",
+          "issue": "specialized_state_entered_outside_global_support"
+        },
+        {
+          "frame": 394,
+          "from": "HOOK",
+          "to": "GET",
+          "reason": "get_panel_priority",
+          "global_ground_truth": "HOOK",
+          "issue": "specialized_state_entered_outside_global_support"
+        },
+        {
+          "frame": 600,
+          "from": "SYNC_REQUIRED",
+          "to": "WAITING",
+          "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+          "global_ground_truth": "WAITING",
+          "issue": "terminal_runtime_state_mismatch"
+        }
+      ],
+      "failure_reasons": [
+        "sync_required",
+        "unexplained_runtime_transition"
+      ],
+      "result": "FAIL"
+    },
+    {
+      "session": "session_20260710_130308",
+      "annotation": {
+        "valid": true,
+        "total_frames": 600,
+        "coverage_frames": 600,
+        "coverage_percentage": 100.0,
+        "label_frame_counts": {
+          "HOOK_INSTRUCTION": 61,
+          "IDLE_CAST": 96,
+          "IGNORE": 31,
+          "PRESS_INSTRUCTION": 24,
+          "READY_BITE": 79,
+          "WAITING_IN_PROGRESS": 309
+        },
+        "segment_count": 11
+      },
+      "replay_completed": true,
+      "frame_count": 600,
+      "final_frame": 600,
+      "final_state": "WAITING",
+      "transitions": [
+        {
+          "frame": 10,
+          "from": "SYNCING",
+          "to": "READY",
+          "reason": "prompt_consensus"
+        },
+        {
+          "frame": 21,
+          "from": "READY",
+          "to": "HOOK_PENDING",
+          "reason": "recorded_hook_instruction_acknowledgement"
+        },
+        {
+          "frame": 27,
+          "from": "HOOK_PENDING",
+          "to": "HOOK",
+          "reason": "stable_strong_hook_evidence"
+        },
+        {
+          "frame": 63,
+          "from": "HOOK",
+          "to": "RESULT_PENDING",
+          "reason": "recorded_hook_result_prompt_acknowledgement"
+        },
+        {
+          "frame": 65,
+          "from": "RESULT_PENDING",
+          "to": "IDLE",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 101,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 322,
+          "from": "WAITING",
+          "to": "READY",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 380,
+          "from": "READY",
+          "to": "HOOK_PENDING",
+          "reason": "recorded_hook_instruction_acknowledgement"
+        },
+        {
+          "frame": 388,
+          "from": "HOOK_PENDING",
+          "to": "HOOK",
+          "reason": "stable_strong_hook_evidence"
+        },
+        {
+          "frame": 415,
+          "from": "HOOK",
+          "to": "RESULT_PENDING",
+          "reason": "recorded_hook_result_prompt_acknowledgement"
+        },
+        {
+          "frame": 417,
+          "from": "RESULT_PENDING",
+          "to": "PRESS",
+          "reason": "stable_strong_press_evidence"
+        },
+        {
+          "frame": 439,
+          "from": "PRESS",
+          "to": "RESULT_PENDING",
+          "reason": "press_panel_disappeared"
+        },
+        {
+          "frame": 440,
+          "from": "RESULT_PENDING",
+          "to": "GET",
+          "reason": "get_panel_priority"
+        },
+        {
+          "frame": 459,
+          "from": "GET",
+          "to": "COLLECT_PENDING",
+          "reason": "get_panel_disappeared"
+        },
+        {
+          "frame": 461,
+          "from": "COLLECT_PENDING",
+          "to": "IDLE",
+          "reason": "stable_highest_supported_candidate"
+        },
+        {
+          "frame": 514,
+          "from": "IDLE",
+          "to": "WAITING",
+          "reason": "stable_highest_supported_candidate"
+        }
+      ],
+      "proposed_intents": {
+        "START_HOOK": 68,
+        "HOOK_ACTION": 3,
+        "CAST": 85,
+        "PRESS_SEQUENCE": 1,
+        "COLLECT": 18
+      },
+      "actions_applied": 0,
+      "sync_required_frames": 0,
+      "first_sync_required_frame": null,
+      "first_sync_required_reason": null,
+      "hook": {
+        "support_frames": 76,
+        "raw_detected": 63,
+        "qualified_detected": 50,
+        "used_by_fusion": 50,
+        "missed_qualified_frames": 26,
+        "missed_qualified_frame_samples": [
+          21,
+          22,
+          23,
+          24,
+          25,
+          28,
+          30,
+          33,
+          37,
+          58
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "press": {
+        "support_frames": 24,
+        "raw_detected": 24,
+        "qualified_detected": 23,
+        "used_by_fusion": 23,
+        "missed_qualified_frames": 1,
+        "missed_qualified_frame_samples": [
+          415
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": [],
+        "panel_candidate_frames": 24,
+        "panel_present_frames": 24,
+        "sequence_ready_frames": 23,
+        "sequence_intent_count": 1,
+        "frozen_sequence_candidate": [
+          "W",
+          "W",
+          "D",
+          "D",
+          "W",
+          "W",
+          "S",
+          "S"
+        ],
+        "clean_pre_input_frame": 415,
+        "false_panel_candidate_frames": 483,
+        "false_panel_candidate_frame_samples": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "false_panel_present_frames": 0,
+        "false_panel_present_frame_samples": []
+      },
+      "get": {
+        "support_frames": 19,
+        "raw_detected": 19,
+        "qualified_detected": 19,
+        "used_by_fusion": 19,
+        "missed_qualified_frames": 0,
+        "missed_qualified_frame_samples": [],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "false_action_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": []
+      },
+      "detector_warnings": {
+        "hook": [
+          "qualified miss 26/76 HOOK frames"
+        ],
+        "press": [
+          "panel candidate on 483 non-PRESS frames"
+        ],
+        "get": []
+      },
+      "unexplained_runtime_transitions": [],
+      "failure_reasons": [],
+      "result": "PASS_WITH_WARNINGS"
+    },
+    {
+      "session": "session_20260710_131254",
+      "annotation": {
+        "valid": true,
+        "total_frames": 600,
+        "coverage_frames": 600,
+        "coverage_percentage": 100.0,
+        "label_frame_counts": {
+          "HOOK_INSTRUCTION": 62,
+          "IDLE_CAST": 72,
+          "IGNORE": 32,
+          "PRESS_INSTRUCTION": 48,
+          "READY_BITE": 97,
+          "WAITING_IN_PROGRESS": 289
+        },
+        "segment_count": 12
+      },
+      "replay_completed": true,
+      "frame_count": 600,
+      "final_frame": 600,
+      "final_state": "SYNC_REQUIRED",
+      "transitions": [
+        {
+          "frame": 1,
+          "from": "SYNCING",
+          "to": "GET",
+          "reason": "strong_get_startup_evidence"
+        },
+        {
+          "frame": 13,
+          "from": "GET",
+          "to": "COLLECT_PENDING",
+          "reason": "get_panel_disappeared"
+        },
+        {
+          "frame": 24,
+          "from": "COLLECT_PENDING",
+          "to": "SYNC_REQUIRED",
+          "reason": "persistent_conflicting_or_illegal_evidence"
+        }
+      ],
+      "proposed_intents": {
+        "COLLECT": 12
+      },
+      "actions_applied": 0,
+      "sync_required_frames": 577,
+      "first_sync_required_frame": 24,
+      "first_sync_required_reason": "persistent_conflicting_or_illegal_evidence",
+      "hook": {
+        "support_frames": 62,
+        "raw_detected": 49,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 62,
+        "missed_qualified_frame_samples": [
+          190,
+          191,
+          192,
+          193,
+          194,
+          195,
+          196,
+          197,
+          198,
+          199
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": []
+      },
+      "press": {
+        "support_frames": 48,
+        "raw_detected": 48,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 48,
+        "missed_qualified_frame_samples": [
+          225,
+          226,
+          227,
+          228,
+          229,
+          230,
+          231,
+          232,
+          233,
+          234
+        ],
+        "false_qualified_frames": 0,
+        "false_qualified_frame_samples": [],
+        "panel_candidate_frames": 48,
+        "panel_present_frames": 48,
+        "sequence_ready_frames": 0,
+        "sequence_intent_count": 0,
+        "frozen_sequence_candidate": [],
+        "clean_pre_input_frame": null,
+        "false_panel_candidate_frames": 546,
+        "false_panel_candidate_frame_samples": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "false_panel_present_frames": 0,
+        "false_panel_present_frame_samples": []
+      },
+      "get": {
+        "support_frames": 23,
+        "raw_detected": 22,
+        "qualified_detected": 0,
+        "used_by_fusion": 0,
+        "missed_qualified_frames": 23,
+        "missed_qualified_frame_samples": [
+          251,
+          252,
+          253,
+          254,
+          255,
+          256,
+          257,
+          258,
+          259,
+          260
+        ],
+        "false_qualified_frames": 12,
+        "false_qualified_frame_samples": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      },
+      "false_action_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": []
+      },
+      "detector_warnings": {
+        "hook": [
+          "qualified miss 62/62 HOOK frames"
+        ],
+        "press": [
+          "no clean pre-input sequence frame",
+          "panel candidate on 546 non-PRESS frames"
+        ],
+        "get": [
+          "qualified miss 23/23 GET frames",
+          "false qualified on 12 non-GET frames"
+        ]
+      },
+      "unexplained_runtime_transitions": [
+        {
+          "frame": 1,
+          "from": "SYNCING",
+          "to": "GET",
+          "reason": "strong_get_startup_evidence",
+          "global_ground_truth": "WAITING",
+          "issue": "specialized_state_entered_outside_global_support"
+        },
+        {
+          "frame": 600,
+          "from": "SYNC_REQUIRED",
+          "to": "IDLE",
+          "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+          "global_ground_truth": "IDLE",
+          "issue": "terminal_runtime_state_mismatch"
+        }
+      ],
+      "failure_reasons": [
+        "sync_required",
+        "unexplained_runtime_transition"
+      ],
+      "result": "FAIL"
+    }
+  ]
+}

@@ -1,0 +1,238 @@
+{
+  "session": "session_20260710_125441",
+  "annotation": {
+    "valid": true,
+    "total_frames": 600,
+    "coverage_frames": 600,
+    "coverage_percentage": 100.0,
+    "label_frame_counts": {
+      "HOOK_INSTRUCTION": 35,
+      "IDLE_CAST": 81,
+      "IGNORE": 16,
+      "PRESS_INSTRUCTION": 24,
+      "READY_BITE": 87,
+      "WAITING_IN_PROGRESS": 357
+    },
+    "segment_count": 8
+  },
+  "replay_completed": true,
+  "frame_count": 600,
+  "final_frame": 600,
+  "final_state": "SYNC_REQUIRED",
+  "transitions": [
+    {
+      "frame": 9,
+      "from": "SYNCING",
+      "to": "GET",
+      "reason": "strong_get_startup_evidence"
+    },
+    {
+      "frame": 11,
+      "from": "GET",
+      "to": "COLLECT_PENDING",
+      "reason": "get_panel_disappeared"
+    },
+    {
+      "frame": 13,
+      "from": "COLLECT_PENDING",
+      "to": "IDLE",
+      "reason": "stable_highest_supported_candidate"
+    },
+    {
+      "frame": 60,
+      "from": "IDLE",
+      "to": "WAITING",
+      "reason": "stable_highest_supported_candidate"
+    },
+    {
+      "frame": 275,
+      "from": "WAITING",
+      "to": "READY",
+      "reason": "stable_highest_supported_candidate"
+    },
+    {
+      "frame": 361,
+      "from": "READY",
+      "to": "HOOK_PENDING",
+      "reason": "recorded_hook_instruction_acknowledgement"
+    },
+    {
+      "frame": 367,
+      "from": "HOOK_PENDING",
+      "to": "HOOK",
+      "reason": "stable_strong_hook_evidence"
+    },
+    {
+      "frame": 394,
+      "from": "HOOK",
+      "to": "GET",
+      "reason": "get_panel_priority"
+    },
+    {
+      "frame": 403,
+      "from": "GET",
+      "to": "COLLECT_PENDING",
+      "reason": "get_panel_disappeared"
+    },
+    {
+      "frame": 423,
+      "from": "COLLECT_PENDING",
+      "to": "SYNC_REQUIRED",
+      "reason": "collect_pending_timeout"
+    }
+  ],
+  "proposed_intents": {
+    "COLLECT": 10,
+    "CAST": 45,
+    "START_HOOK": 85
+  },
+  "actions_applied": 0,
+  "sync_required_frames": 178,
+  "first_sync_required_frame": 423,
+  "first_sync_required_reason": "collect_pending_timeout",
+  "hook": {
+    "support_frames": 35,
+    "raw_detected": 17,
+    "qualified_detected": 17,
+    "used_by_fusion": 17,
+    "missed_qualified_frames": 18,
+    "missed_qualified_frame_samples": [
+      361,
+      362,
+      363,
+      364,
+      365,
+      369,
+      377,
+      378,
+      386,
+      387
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": []
+  },
+  "press": {
+    "support_frames": 24,
+    "raw_detected": 24,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 24,
+    "missed_qualified_frame_samples": [
+      396,
+      397,
+      398,
+      399,
+      400,
+      401,
+      402,
+      403,
+      404,
+      405
+    ],
+    "false_qualified_frames": 0,
+    "false_qualified_frame_samples": [],
+    "panel_candidate_frames": 24,
+    "panel_present_frames": 24,
+    "sequence_ready_frames": 0,
+    "sequence_intent_count": 0,
+    "frozen_sequence_candidate": [],
+    "clean_pre_input_frame": null,
+    "false_panel_candidate_frames": 550,
+    "false_panel_candidate_frame_samples": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "false_panel_present_frames": 0,
+    "false_panel_present_frame_samples": []
+  },
+  "get": {
+    "support_frames": 18,
+    "raw_detected": 0,
+    "qualified_detected": 0,
+    "used_by_fusion": 0,
+    "missed_qualified_frames": 18,
+    "missed_qualified_frame_samples": [
+      421,
+      422,
+      423,
+      424,
+      425,
+      426,
+      427,
+      428,
+      429,
+      430
+    ],
+    "false_qualified_frames": 11,
+    "false_qualified_frame_samples": [
+      9,
+      10,
+      394,
+      395,
+      396,
+      397,
+      398,
+      399,
+      400,
+      401
+    ]
+  },
+  "false_action_intents": {
+    "CAST": [],
+    "START_HOOK": [],
+    "HOOK_ACTION": [],
+    "PRESS_SEQUENCE": []
+  },
+  "detector_warnings": {
+    "hook": [
+      "qualified miss 18/35 HOOK frames"
+    ],
+    "press": [
+      "no clean pre-input sequence frame",
+      "panel candidate on 550 non-PRESS frames"
+    ],
+    "get": [
+      "qualified miss 18/18 GET frames",
+      "false qualified on 11 non-GET frames"
+    ]
+  },
+  "unexplained_runtime_transitions": [
+    {
+      "frame": 9,
+      "from": "SYNCING",
+      "to": "GET",
+      "reason": "strong_get_startup_evidence",
+      "global_ground_truth": "IDLE",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "frame": 394,
+      "from": "HOOK",
+      "to": "GET",
+      "reason": "get_panel_priority",
+      "global_ground_truth": "HOOK",
+      "issue": "specialized_state_entered_outside_global_support"
+    },
+    {
+      "frame": 600,
+      "from": "SYNC_REQUIRED",
+      "to": "WAITING",
+      "reason": "replay_ended_in_state_inconsistent_with_global_ground_truth",
+      "global_ground_truth": "WAITING",
+      "issue": "terminal_runtime_state_mismatch"
+    }
+  ],
+  "failure_reasons": [
+    "sync_required",
+    "unexplained_runtime_transition"
+  ],
+  "result": "FAIL"
+}
