@@ -82,6 +82,29 @@ press_detector:
 
 get_detector:
   armed_fps: 5
+  panel_confirmation_frames: 2
+  localizer:
+    search_width_ratio: 0.78
+    geometry:
+      x1_min: 0.18
+      x1_max: 0.42
+      y1_min: 0.15
+      y1_max: 0.36
+      width_min: 0.55
+      width_max: 0.82
+      height_min: 0.48
+      height_max: 0.72
+      x2_min: 0.90
+      y2_min: 0.70
+      y2_max: 0.92
+  dark_scene_fallback:
+    x1_ratio: 0.26
+    y1_ratio: 0.23
+    y2_ratio: 0.83
+    min_grid_cells: 8
+    min_title_bright_ratio: 0.015
+    min_button_bright_ratio: 0.012
+    min_dark_ratio: 0.80
   retry_interval_seconds: 0.4
   max_attempts: 12
   max_duration_seconds: 5.0

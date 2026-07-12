@@ -63,6 +63,7 @@ def _config_objects(config_path: Path):
         hook_strong_confidence=data["fusion"]["hook_strong_threshold"],
         press_strong_confidence=data["fusion"]["press_strong_threshold"],
         get_strong_confidence=data["fusion"]["get_strong_threshold"],
+        get_panel_confirmation_frames=data["get_detector"]["panel_confirmation_frames"],
         press_panel_confirmation_frames=press["panel_confirmation_frames"],
         press_panel_geometry_tolerance=press["panel_geometry_tolerance"],
         press_sequence_window_frames=press["sequence_window_frames"],

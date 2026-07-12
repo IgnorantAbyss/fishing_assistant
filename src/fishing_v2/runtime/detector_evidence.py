@@ -58,6 +58,7 @@ class EvidenceQualificationConfig:
     hook_strong_confidence: float = 0.85
     press_strong_confidence: float = 0.85
     get_strong_confidence: float = 0.85
+    get_panel_confirmation_frames: int = 2
     press_panel_confirmation_frames: int = 2
     press_panel_geometry_tolerance: float = 0.12
     press_sequence_window_frames: int = 5
@@ -79,6 +80,8 @@ class DetectorEvidenceQualifier:
                 sequence_min_aggregated_confidence=self.config.press_sequence_min_aggregated_confidence,
             )
         )
+        self._get_confirmed_frames = 0
+        self._get_last_frame: int | None = None
 
     def qualify(
         self,
@@ -87,9 +90,7 @@ class DetectorEvidenceQualifier:
     ) -> QualifiedObservationBundle:
         hook_observation, hook = self._hook(raw.hook, activation.hook)
         press_observation, press = self._press(raw.press, activation.press)
-        get_observation, get = self._simple(
-            "get", raw.get, activation.get, self.config.get_strong_confidence
-        )
+        get_observation, get = self._get(raw.get, activation.get)
         return QualifiedObservationBundle(
             ObservationBundle(
                 raw.frame_index,
@@ -110,6 +111,63 @@ class DetectorEvidenceQualifier:
         mode: DetectorActivationMode,
     ) -> tuple[HookObservation | None, EvidenceQualification]:
         return self._hook(observation, mode)
+
+    def qualify_get(
+        self,
+        observation: GetObservation | None,
+        mode: DetectorActivationMode,
+    ) -> tuple[GetObservation | None, EvidenceQualification]:
+        return self._get(observation, mode)
+
+    def _get(
+        self,
+        observation: GetObservation | None,
+        mode: DetectorActivationMode,
+    ) -> tuple[GetObservation | None, EvidenceQualification]:
+        raw_detected = bool(observation and observation.detected)
+        diagnostic_only = mode == DetectorActivationMode.OFF
+        strong = bool(
+            raw_detected
+            and observation is not None
+            and observation.confidence >= self.config.get_strong_confidence
+        )
+        if diagnostic_only or not strong:
+            self._get_confirmed_frames = 0
+            self._get_last_frame = observation.frame_index if observation is not None else None
+        elif observation is not None and observation.frame_index != self._get_last_frame:
+            self._get_confirmed_frames += 1
+            self._get_last_frame = observation.frame_index
+        qualified = bool(
+            strong
+            and not diagnostic_only
+            and self._get_confirmed_frames >= self.config.get_panel_confirmation_frames
+        )
+        if diagnostic_only:
+            reason = "activation_off_diagnostic_only"
+        elif not raw_detected:
+            reason = "raw_not_detected"
+        elif not strong:
+            reason = "below_strong_confidence"
+        elif not qualified:
+            reason = "get_panel_temporal_confirmation_pending"
+        else:
+            reason = "strong_get_panel_temporally_qualified"
+        sanitized = (
+            replace(
+                observation,
+                detected=qualified,
+                evidence={
+                    **observation.evidence,
+                    "get_confirmation_frames": self._get_confirmed_frames,
+                    "get_confirmation_required": self.config.get_panel_confirmation_frames,
+                },
+            )
+            if observation is not None else None
+        )
+        return sanitized, EvidenceQualification(
+            "get", mode, raw_detected, qualified, reason,
+            qualified, diagnostic_only,
+        )
 
     def _press(
         self,

@@ -28,6 +28,7 @@ reports/fishing_v2/pilot_replay/
 reports/fishing_v2/pilot_replay_baseline/
 reports/fishing_v2/pilot_detector_diagnostics/
 reports/fishing_v2/press_sequence_review/images/
+reports/fishing_v2/get_cross_session_diagnostics/
 datasets/prompt_observation_v1/
 *.mp4
 *.avi

@@ -116,8 +116,16 @@ def test_recorded_hook_prompt_then_qualified_bar_advances_visually() -> None:
 
 
 def test_get_panel_outranks_idle_cast_in_recorded_replay() -> None:
-    result = _controller(RuntimeState.RESULT_PENDING).process(
-        _bundle(454, PromptObservationKind.IDLE_CAST, get=True),
+    controller = _controller(RuntimeState.RESULT_PENDING)
+    pending = controller.process(
+        _bundle(1, PromptObservationKind.UNKNOWN, get=True),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+    )
+    assert pending.qualified.get.qualified_detected is False
+    result = controller.process(
+        _bundle(2, PromptObservationKind.IDLE_CAST, get=True),
         foreground=True,
         runtime_environment_supported=True,
         action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
@@ -127,7 +135,15 @@ def test_get_panel_outranks_idle_cast_in_recorded_replay() -> None:
 
 
 def test_get_panel_outranks_recorded_press_prompt() -> None:
-    result = _controller(RuntimeState.HOOK).process(
+    controller = _controller(RuntimeState.HOOK)
+    pending = controller.process(
+        _bundle(439, PromptObservationKind.PRESS_INSTRUCTION, get=True),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+    )
+    assert pending.qualified.get.qualified_detected is False
+    result = controller.process(
         _bundle(440, PromptObservationKind.PRESS_INSTRUCTION, get=True),
         foreground=True,
         runtime_environment_supported=True,

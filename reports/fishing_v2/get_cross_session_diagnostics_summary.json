@@ -1,0 +1,39 @@
+{
+  "scope": "GET detector cross-session stabilization",
+  "threshold_or_feature_weight_changed": false,
+  "get_config_change": {"panel_confirmation_frames": 2},
+  "before": {
+    "true_get": {"support": 99, "raw": 42, "qualified": 19, "used_by_fusion": 19},
+    "qualified_false_positive_frames": 56,
+    "sync_required_frames": 987,
+    "results": {"PASS": 0, "PASS_WITH_WARNINGS": 3, "FAIL": 4}
+  },
+  "after": {
+    "true_get": {"support": 99, "raw": 95, "qualified": 90, "used_by_fusion": 90},
+    "qualified_false_positive_frames": 0,
+    "sync_required_frames": 0,
+    "actions_applied": 0,
+    "results": {"PASS": 0, "PASS_WITH_WARNINGS": 6, "FAIL": 1}
+  },
+  "known_false_positive_frames": [
+    {"session": "session_20260710_124419", "frame": 316, "after_raw": false, "after_qualified": false, "after_used_by_fusion": false},
+    {"session": "session_20260710_125441", "frame": 9, "after_raw": false, "after_qualified": false, "after_used_by_fusion": false},
+    {"session": "session_20260710_125441", "frame": 394, "after_raw": false, "after_qualified": false, "after_used_by_fusion": false},
+    {"session": "session_20260710_131254", "frame": 1, "after_raw": false, "after_qualified": false, "after_used_by_fusion": false}
+  ],
+  "sessions": [
+    {"session": "session_20260709_192315", "get": "15/14/14/16", "false_qualified": 0, "result": "PASS_WITH_WARNINGS", "final_state": "WAITING", "sync_required_frames": 0},
+    {"session": "session_20260710_061220", "get": "0/0/0/0", "false_qualified": 0, "result": "PASS_WITH_WARNINGS", "final_state": "WAITING", "sync_required_frames": 0},
+    {"session": "session_20260710_123210", "get": "0/0/0/0", "false_qualified": 0, "result": "FAIL", "final_state": "PRESS", "sync_required_frames": 0},
+    {"session": "session_20260710_124419", "get": "22/21/21/23", "false_qualified": 0, "result": "PASS_WITH_WARNINGS", "final_state": "WAITING", "sync_required_frames": 0},
+    {"session": "session_20260710_125441", "get": "17/16/16/18", "false_qualified": 0, "result": "PASS_WITH_WARNINGS", "final_state": "WAITING", "sync_required_frames": 0},
+    {"session": "session_20260710_130308", "get": "19/18/18/19", "false_qualified": 0, "result": "PASS_WITH_WARNINGS", "final_state": "WAITING", "sync_required_frames": 0},
+    {"session": "session_20260710_131254", "get": "22/21/21/23", "false_qualified": 0, "result": "PASS_WITH_WARNINGS", "final_state": "IDLE", "sync_required_frames": 0}
+  ],
+  "remaining_issues": [
+    "session_20260710_123210 still ends in PRESS",
+    "HOOK recall warnings remain out of scope",
+    "first visible GET frame is intentionally held for two-frame confirmation"
+  ],
+  "ready_for_prompt_observer": false
+}
