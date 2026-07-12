@@ -1,0 +1,23 @@
+version: 1
+segments:
+- start: 1
+  end: 451
+  observation: WAITING_IN_PROGRESS
+- start: 452
+  end: 479
+  observation: READY_BITE
+- start: 480
+  end: 506
+  observation: HOOK_INSTRUCTION
+- start: 507
+  end: 514
+  observation: PRESS_INSTRUCTION
+- start: 515
+  end: 529
+  observation: IGNORE
+- start: 530
+  end: 558
+  observation: IDLE_CAST
+- start: 559
+  end: 600
+  observation: WAITING_IN_PROGRESS
