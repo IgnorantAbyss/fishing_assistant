@@ -50,6 +50,7 @@ def _config_objects(config_path: Path):
         "get_retry_interval_seconds": data["get_detector"]["retry_interval_seconds"],
         "get_max_attempts": data["get_detector"]["max_attempts"],
         "get_max_duration_seconds": data["get_detector"]["max_duration_seconds"],
+        "recorded_press_exit_idle_frames": data["press_detector"]["recorded_exit_idle_frames"],
     })
     activation = DetectorActivationConfig(
         hook_armed_fps=data["hook_detector"]["armed_fps"],
@@ -65,6 +66,7 @@ def _config_objects(config_path: Path):
         get_strong_confidence=data["fusion"]["get_strong_threshold"],
         get_panel_confirmation_frames=data["get_detector"]["panel_confirmation_frames"],
         press_panel_confirmation_frames=press["panel_confirmation_frames"],
+        press_panel_disappearance_frames=press["panel_disappearance_frames"],
         press_panel_geometry_tolerance=press["panel_geometry_tolerance"],
         press_sequence_window_frames=press["sequence_window_frames"],
         press_sequence_consensus_frames=press["sequence_consensus_frames"],

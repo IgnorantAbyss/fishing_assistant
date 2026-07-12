@@ -12,6 +12,7 @@ from src.fishing_v2.domain.observations import PressObservation
 @dataclass(frozen=True)
 class PressSequenceAggregationConfig:
     panel_confirmation_frames: int = 2
+    panel_disappearance_frames: int = 2
     panel_geometry_tolerance: float = 0.12
     sequence_window_frames: int = 5
     sequence_consensus_frames: int = 3
@@ -21,6 +22,8 @@ class PressSequenceAggregationConfig:
     def __post_init__(self) -> None:
         if self.panel_confirmation_frames < 1:
             raise ValueError("panel_confirmation_frames must be positive")
+        if self.panel_disappearance_frames < 1:
+            raise ValueError("panel_disappearance_frames must be positive")
         if not 0.0 <= self.panel_geometry_tolerance <= 0.5:
             raise ValueError("panel_geometry_tolerance must be within 0..0.5")
         if self.sequence_window_frames < self.sequence_consensus_frames or self.sequence_consensus_frames < 1:
@@ -42,6 +45,8 @@ class PressSequenceAggregation:
     per_key_confidence: tuple[float, ...]
     qualification_reason: str
     selected_clean_frame: int | None = None
+    absent_panel_frames: int = 0
+    panel_disappeared: bool = False
 
 
 class PressSequenceTemporalAggregator:
@@ -56,15 +61,22 @@ class PressSequenceTemporalAggregator:
         self._frozen_clean_confidence: tuple[float, ...] = ()
         self._frozen_clean_frame: int | None = None
         self._input_effect_seen = False
+        self._panel_seen = False
+        self._panel_exit_latched = False
 
-    def reset(self) -> None:
+    def _clear_panel_episode(self) -> None:
         self._panel_frames = 0
-        self._missing_frames = 0
         self._window.clear()
         self._frozen_clean_sequence = None
         self._frozen_clean_confidence = ()
         self._frozen_clean_frame = None
         self._input_effect_seen = False
+
+    def reset(self) -> None:
+        self._clear_panel_episode()
+        self._missing_frames = 0
+        self._panel_seen = False
+        self._panel_exit_latched = False
 
     @staticmethod
     def _boxes(observation: PressObservation) -> list[dict[str, Any]]:
@@ -153,6 +165,8 @@ class PressSequenceTemporalAggregator:
 
     def update(self, observation: PressObservation) -> PressSequenceAggregation:
         if observation.panel_present:
+            self._panel_seen = True
+            self._panel_exit_latched = False
             self._panel_frames += 1
             self._missing_frames = 0
             self._window.append(observation)
@@ -177,10 +191,17 @@ class PressSequenceTemporalAggregator:
                 self._frozen_clean_frame = observation.frame_index
         else:
             self._missing_frames += 1
-            if self._missing_frames >= self.config.panel_confirmation_frames:
-                self.reset()
+            absent_frames = self._missing_frames
+            if self._panel_seen and absent_frames >= self.config.panel_disappearance_frames:
+                self._panel_exit_latched = True
+                self._panel_seen = False
+                self._clear_panel_episode()
+            disappeared = self._panel_exit_latched
             return PressSequenceAggregation(
-                False, self._panel_frames, 0, (), False, 0.0, (), "panel_not_present"
+                False, self._panel_frames, 0, (), False, 0.0, (),
+                "panel_disappeared" if disappeared else "panel_disappearance_pending",
+                absent_panel_frames=absent_frames,
+                panel_disappeared=disappeared,
             )
 
         panel_confirmed = self._panel_frames >= self.config.panel_confirmation_frames

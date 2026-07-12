@@ -74,6 +74,8 @@ press_detector:
   armed_fps: 5
   burst_fps: 20
   panel_confirmation_frames: 2
+  panel_disappearance_frames: 2
+  recorded_exit_idle_frames: 4
   panel_geometry_tolerance: 0.12
   sequence_window_frames: 5
   sequence_consensus_frames: 3

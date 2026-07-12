@@ -60,6 +60,7 @@ class EvidenceQualificationConfig:
     get_strong_confidence: float = 0.85
     get_panel_confirmation_frames: int = 2
     press_panel_confirmation_frames: int = 2
+    press_panel_disappearance_frames: int = 2
     press_panel_geometry_tolerance: float = 0.12
     press_sequence_window_frames: int = 5
     press_sequence_consensus_frames: int = 3
@@ -73,6 +74,7 @@ class DetectorEvidenceQualifier:
         self.press_aggregator = PressSequenceTemporalAggregator(
             PressSequenceAggregationConfig(
                 panel_confirmation_frames=self.config.press_panel_confirmation_frames,
+                panel_disappearance_frames=self.config.press_panel_disappearance_frames,
                 panel_geometry_tolerance=self.config.press_panel_geometry_tolerance,
                 sequence_window_frames=self.config.press_sequence_window_frames,
                 sequence_consensus_frames=self.config.press_sequence_consensus_frames,
@@ -275,6 +277,8 @@ class DetectorEvidenceQualifier:
                 "stable_panel_frames": aggregation.stable_panel_frames,
                 "per_key_aggregated_confidence": list(aggregation.per_key_confidence),
                 "selected_clean_frame": aggregation.selected_clean_frame,
+                "panel_absent_frames": aggregation.absent_panel_frames,
+                "panel_disappeared": aggregation.panel_disappeared,
             },
         )
         return sanitized, EvidenceQualification(

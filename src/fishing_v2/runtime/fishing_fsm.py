@@ -25,6 +25,7 @@ class FSMConfig:
     get_retry_interval_seconds: float = 0.4
     get_max_attempts: int = 12
     get_max_duration_seconds: float = 5.0
+    recorded_press_exit_idle_frames: int = 4
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.hook_safe_zone_start < self.hook_safe_zone_end <= 1.0:
@@ -33,6 +34,8 @@ class FSMConfig:
             raise ValueError("GET retry interval must remain within the reviewed 0.3..0.5 second range")
         if self.get_max_attempts < 1 or self.get_max_duration_seconds <= 0:
             raise ValueError("GET retry limits must be positive")
+        if self.recorded_press_exit_idle_frames < 2:
+            raise ValueError("recorded_press_exit_idle_frames must be at least two")
 
 
 @dataclass(frozen=True)
@@ -309,12 +312,19 @@ class FishingFSM:
                 visual_acknowledgement="qualified_get_panel_present",
             )
 
+        press_panel = bundle.press if bundle else None
+        press_disappeared = bool(
+            press_panel
+            and press_panel.evidence.get("panel_disappeared") is True
+        )
         if (
             self.state == RuntimeState.PRESS
-            and bundle
-            and bundle.press is not None
-            and not bundle.press.detected
-            and not bundle.press.panel_candidate
+            and press_panel is not None
+            and not press_panel.detected
+            and (
+                press_disappeared if recorded_observation
+                else not press_panel.panel_candidate
+            )
         ):
             return self._transition(
                 RuntimeState.RESULT_PENDING,
@@ -341,12 +351,29 @@ class FishingFSM:
                     "recorded_hook_result_prompt_acknowledgement",
                     visual_acknowledgement=prompt.value,
                 )
-            if self.state == RuntimeState.PRESS and prompt == PromptObservationKind.IDLE_CAST:
+            if (
+                self.state == RuntimeState.PRESS
+                and prompt == PromptObservationKind.IDLE_CAST
+                and press_disappeared
+            ):
                 return self._transition(
                     RuntimeState.RESULT_PENDING,
                     timestamp,
                     "recorded_press_result_prompt_acknowledgement",
                     visual_acknowledgement=prompt.value,
+                )
+            if (
+                self.state == RuntimeState.RESULT_PENDING
+                and press_panel is not None
+                and not press_panel.detected
+                and int(press_panel.evidence.get("panel_absent_frames", 0))
+                >= self.config.recorded_press_exit_idle_frames
+            ):
+                return self._transition(
+                    RuntimeState.IDLE,
+                    timestamp,
+                    "recorded_press_panel_exit_without_result_panel",
+                    visual_acknowledgement="qualified_press_panel_stably_absent",
                 )
 
         timeout_limits = {
