@@ -42,7 +42,8 @@ SUMMARY_MD = ROOT / "reports" / "fishing_v2" / "press_detector_diagnostics_summa
 SUMMARY_JSON = ROOT / "reports" / "fishing_v2" / "press_detector_diagnostics_summary.json"
 REVIEW_FIELDS = (
     "session_id", "press_start", "press_end", "review_frame",
-    "predicted_sequence", "manually_confirmed_sequence", "review_status", "notes",
+    "predicted_sequence", "manually_confirmed_sequence", "review_status",
+    "source_yaml", "notes",
 )
 
 
@@ -262,7 +263,7 @@ def _write_review(
     document = f"""<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><title>PRESS Sequence Review</title>
 <style>body{{font-family:system-ui;margin:2rem;background:#111;color:#eee}}article{{margin:2rem 0;padding:1rem;background:#222}}img{{max-width:100%;height:auto}}code,pre{{white-space:pre-wrap;color:#9ee}}a{{color:#8cf}}</style></head>
-<body><h1>PRESS Sequence Review</h1><p>Manual fields live in <a href="review_items.csv">review_items.csv</a>. Blank manually_confirmed_sequence is intentional and is not ground truth.</p>{''.join(sections)}</body></html>"""
+<body><h1>PRESS Sequence Review</h1><p>The CSV is derived from the human-confirmed YAML source of truth. It is never loaded as ground truth.</p>{''.join(sections)}</body></html>"""
     (root / "index.html").write_text(document, encoding="utf-8")
 
 
@@ -273,26 +274,17 @@ def run(
     sequence_ground_truth_path: Path = DEFAULT_SEQUENCE_GROUND_TRUTH,
 ) -> dict[str, Any]:
     aggregation_config = _aggregation_config(config_path)
-    sequence_ground_truth = load_press_sequence_ground_truth(sequence_ground_truth_path)
+    sequence_ground_truth = load_press_sequence_ground_truth(
+        sequence_ground_truth_path, session_root=session_root
+    )
     expected_by_episode = {
         (item.session_id, item.press_start, item.press_end): "".join(item.sequence)
         for item in sequence_ground_truth
     }
-    existing_manual: dict[tuple[str, int, int], dict[str, str]] = {}
-    existing_csv = review_root / "review_items.csv"
-    if existing_csv.is_file():
-        with existing_csv.open(encoding="utf-8-sig", newline="") as file:
-            for item in csv.DictReader(file):
-                identity = (
-                    str(item.get("session_id", "")),
-                    int(item.get("press_start", 0)),
-                    int(item.get("press_end", 0)),
-                )
-                existing_manual[identity] = dict(item)
-    sessions = sorted(
-        path for path in session_root.glob("session_*")
-        if path.is_dir() and (path / "ground_truth.yaml").is_file()
-    )
+    ground_truth_by_session: dict[str, list[Any]] = defaultdict(list)
+    for item in sequence_ground_truth:
+        ground_truth_by_session[item.session_id].append(item)
+    sessions = [session_root / session_id for session_id in sorted(ground_truth_by_session)]
     if not sessions:
         raise FileNotFoundError(f"No ground-truth replay sessions under {session_root}")
     all_episodes: list[dict[str, Any]] = []
@@ -320,7 +312,11 @@ def run(
                 "aggregation": aggregation,
             }
             rows.append(row)
-            if replay_frame.global_ground_truth not in {"PRESS", "IGNORE"}:
+            in_confirmed_press = any(
+                item.press_start <= replay_frame.context.frame_index <= item.press_end
+                for item in ground_truth_by_session[session_path.name]
+            )
+            if not in_confirmed_press and replay_frame.global_ground_truth != "IGNORE":
                 if raw.panel_present:
                     false_positive_raw[replay_frame.global_ground_truth] += 1
                     false_positive_frames.append({
@@ -334,7 +330,8 @@ def run(
                 if aggregation.panel_confirmed and raw.panel_present:
                     false_positive_confirmed[replay_frame.global_ground_truth] += 1
         episodes = []
-        for start, end in _ranges(source.global_labels, "PRESS"):
+        for annotation in ground_truth_by_session[session_path.name]:
+            start, end = annotation.press_start, annotation.press_end
             episode_rows = [row for row in rows if start <= row["frame"] <= end]
             identity = (session_path.name, start, end)
             expected_sequence = expected_by_episode.get(identity)
@@ -354,24 +351,27 @@ def run(
             )
             episode["review_image_name"] = image_name
             _review_image(selected["path"], selected["raw"], review_root / "images" / image_name)
-            prior = existing_manual.get(identity, {})
             review_rows.append({
                 "session_id": session_path.name,
                 "press_start": start,
                 "press_end": end,
                 "review_frame": episode["selected_review_frame"],
                 "predicted_sequence": episode["predicted_sequence"],
-                "manually_confirmed_sequence": (
-                    prior.get("manually_confirmed_sequence") or expected_sequence or ""
-                ),
-                "review_status": prior.get("review_status") or (
-                    "confirmed" if expected_sequence else "pending_manual_review"
-                ),
-                "notes": prior.get("notes") or episode["sequence_status"],
+                "manually_confirmed_sequence": expected_sequence or "",
+                "review_status": "human_confirmed_adjusted",
+                "source_yaml": sequence_ground_truth_path.as_posix(),
+                "notes": episode["sequence_status"],
             })
-        support = sum(end - start + 1 for start, end in _ranges(source.global_labels, "PRESS"))
+        support = sum(
+            item.press_end - item.press_start + 1
+            for item in ground_truth_by_session[session_path.name]
+        )
         present = sum(
-            row["raw"].panel_present for row in rows if row["state"] == "PRESS"
+            row["raw"].panel_present for row in rows
+            if any(
+                item.press_start <= row["frame"] <= item.press_end
+                for item in ground_truth_by_session[session_path.name]
+            )
         )
         session_summaries.append({
             "session_id": session_path.name,

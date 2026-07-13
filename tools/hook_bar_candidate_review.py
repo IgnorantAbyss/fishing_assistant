@@ -16,7 +16,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SESSION_ROOT = ROOT / "assets" / "replay" / "sessions"
 OUTPUT_ROOT = ROOT / "reports" / "fishing_v2" / "hook_bar_candidate_review"
-CANDIDATE_PATH = ROOT / "data" / "annotations" / "hook_bar_ground_truth.yaml"
+CANDIDATE_PATH = ROOT / "data" / "annotations" / "hook_bar_ground_truth_candidate.yaml"
 
 FORMAL_SESSIONS = (
     "session_20260709_192315",

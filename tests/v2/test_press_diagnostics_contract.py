@@ -48,6 +48,7 @@ def test_review_bundle_keeps_manual_sequence_blank(tmp_path: Path) -> None:
         "predicted_sequence": "",
         "manually_confirmed_sequence": "",
         "review_status": "pending_manual_review",
+        "source_yaml": "data/annotations/press_sequence_ground_truth.yaml",
         "notes": "sequence_not_recoverable_from_replay",
     }
     _write_review(tmp_path, [episode], [review])
@@ -56,4 +57,4 @@ def test_review_bundle_keeps_manual_sequence_blank(tmp_path: Path) -> None:
     assert tuple(rows[0]) == REVIEW_FIELDS
     assert rows[0]["manually_confirmed_sequence"] == ""
     assert rows[0]["review_status"] == "pending_manual_review"
-    assert "not ground truth" in (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "never loaded as ground truth" in (tmp_path / "index.html").read_text(encoding="utf-8")

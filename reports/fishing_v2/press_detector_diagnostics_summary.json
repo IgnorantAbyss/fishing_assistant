@@ -1,6 +1,7 @@
 {
   "config": {
     "panel_confirmation_frames": 2,
+    "panel_disappearance_frames": 2,
     "panel_geometry_tolerance": 0.12,
     "sequence_window_frames": 5,
     "sequence_consensus_frames": 3,
@@ -9,9 +10,9 @@
   },
   "session_count": 7,
   "episode_count": 8,
-  "press_frame_support": 151,
+  "press_frame_support": 148,
   "panel_present_frames": 147,
-  "panel_presence_recall": 0.9735,
+  "panel_presence_recall": 0.9932,
   "false_positive_raw_by_state": {
     "IDLE": 0,
     "WAITING": 1,
@@ -61,9 +62,9 @@
       "session_id": "session_20260710_061220",
       "frame_count": 600,
       "press_episode_count": 1,
-      "press_frame_support": 11,
+      "press_frame_support": 8,
       "panel_present_frames": 8,
-      "panel_presence_recall": 0.7273,
+      "panel_presence_recall": 1.0,
       "sequence_ready_episodes": 1,
       "sequence_evaluable_episodes": 1,
       "sequence_exact_matches": 1
@@ -647,8 +648,8 @@
     {
       "session_id": "session_20260710_061220",
       "press_start": 507,
-      "press_end": 517,
-      "support": 11,
+      "press_end": 514,
+      "support": 8,
       "panel_candidate_first_frame": 507,
       "panel_present_first_frame": 507,
       "panel_confirmed_first_frame": 508,
@@ -659,7 +660,7 @@
       "selected_review_reason": "earliest_clean_pre_input_frame",
       "panel_detection_latency_frames": 1,
       "panel_detection_latency_seconds": 0.2,
-      "panel_presence_recall": 0.7273,
+      "panel_presence_recall": 1.0,
       "key_box_counts": [
         4,
         4,
@@ -668,10 +669,7 @@
         4,
         4,
         4,
-        5,
-        0,
-        0,
-        0
+        5
       ],
       "grid_match_counts": [
         9,
@@ -681,10 +679,7 @@
         9,
         9,
         9,
-        7,
-        0,
-        0,
-        0
+        7
       ],
       "glyph_confidence": {
         "count": 33,
@@ -1039,7 +1034,7 @@
           }
         ]
       ],
-      "review_image_name": "session_20260710_061220_507_517.jpg"
+      "review_image_name": "session_20260710_061220_507_514.jpg"
     },
     {
       "session_id": "session_20260710_123210",

@@ -1,55 +1,36 @@
 from pathlib import Path
 
-import yaml
+from src.fishing_v2.data.hook_bar_ground_truth import (
+    FORMAL_SESSION_IDS,
+    load_hook_bar_ground_truth,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CANDIDATE_PATH = ROOT / "data" / "annotations" / "hook_bar_ground_truth.yaml"
-FORMAL_SESSIONS = {
-    "session_20260709_192315",
-    "session_20260710_061220",
-    "session_20260710_123210",
-    "session_20260710_124419",
-    "session_20260710_125441",
-    "session_20260710_130308",
-    "session_20260710_131254",
-}
-TRIAL_SESSION = "session_20260709_192231"
+GROUND_TRUTH = ROOT / "data" / "annotations" / "hook_bar_ground_truth.yaml"
+SESSION_ROOT = ROOT / "assets" / "replay" / "sessions"
 
 
-def _load_candidate():
-    return yaml.safe_load(CANDIDATE_PATH.read_text(encoding="utf-8"))
+def test_human_confirmed_hook_bar_ground_truth_schema() -> None:
+    episodes = load_hook_bar_ground_truth(GROUND_TRUTH, session_root=SESSION_ROOT)
+
+    assert len(episodes) == 9
+    assert {item.session_id for item in episodes} == set(FORMAL_SESSION_IDS)
+    assert all(item.visible_start <= item.first_clear_frame <= item.last_clear_frame <= item.visible_end for item in episodes)
 
 
-def test_hook_bar_candidate_has_formal_sessions_and_excludes_trial():
-    data = _load_candidate()
+def test_prompt_phase_can_precede_human_visible_bar_range() -> None:
+    episodes = load_hook_bar_ground_truth(GROUND_TRUTH, session_root=SESSION_ROOT)
 
-    assert data["status"] == "auto_candidate"
-    assert set(data["sessions"]) == FORMAL_SESSIONS
-    assert TRIAL_SESSION not in data["sessions"]
-    assert TRIAL_SESSION in data["excluded_sessions"]
+    assert all(item.global_hook_start <= item.visible_start for item in episodes)
+    assert any(item.global_hook_start < item.visible_start for item in episodes)
 
 
-def test_hook_bar_candidate_ranges_are_valid():
-    data = _load_candidate()
+def test_hook_ground_truth_records_visual_review_without_detector_output() -> None:
+    import yaml
 
-    for session in data["sessions"].values():
-        for episode in session["episodes"]:
-            start = episode["visible_start"]
-            end = episode["visible_end"]
-            first_clear = episode["first_clear_frame"]
-            last_clear = episode["last_clear_frame"]
-
-            assert start <= first_clear <= last_clear <= end
-            assert episode["confidence"] in {"high", "medium", "low"}
-            assert episode["global_hook_start"] - 5 <= start
-            assert end <= episode["global_hook_end"] + 5
-            assert all(start <= frame <= end for frame in episode["uncertain_frames"])
-
-
-def test_hook_bar_candidate_is_visual_only():
-    data = _load_candidate()
-
-    assert data["source"] == "codex_visual_review"
+    data = yaml.safe_load(GROUND_TRUTH.read_text(encoding="utf-8"))
+    assert data["status"] == "human_confirmed"
+    assert "human_review" in data["source"]
     assert data["review_method"]["image_source"] == "raw_replay_frames"
     assert data["review_method"]["detector_output_used"] is False

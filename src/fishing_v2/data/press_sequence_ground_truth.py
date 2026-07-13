@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 import yaml
@@ -20,16 +21,27 @@ class PressSequenceGroundTruth:
 
 def load_press_sequence_ground_truth(
     path: str | Path,
+    *,
+    session_root: str | Path | None = None,
 ) -> tuple[PressSequenceGroundTruth, ...]:
     source = Path(path)
     data = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError("PRESS sequence ground truth requires version: 1")
+    if data.get("status") != "human_confirmed":
+        raise ValueError("PRESS sequence ground truth must be human_confirmed")
+    if "manual" not in str(data.get("source", "")):
+        raise ValueError("PRESS sequence source must record manual review")
+    review_notes = data.get("review_notes", {})
+    if review_notes.get("ignore_tail_policy") != "prompt_and_panel_absent_frames_excluded":
+        raise ValueError("PRESS ground truth must exclude prompt/panel-absent IGNORE tails")
     episodes = data.get("episodes")
     if not isinstance(episodes, list) or not episodes:
         raise ValueError("PRESS sequence ground truth requires episodes")
     parsed: list[PressSequenceGroundTruth] = []
     seen: set[tuple[str, int, int]] = set()
+    previous_end_by_session: dict[str, int] = {}
+    root = Path(session_root) if session_root is not None else None
     for raw in episodes:
         if not isinstance(raw, dict):
             raise ValueError("Every PRESS sequence episode must be a mapping")
@@ -51,6 +63,16 @@ def load_press_sequence_ground_truth(
         if identity in seen:
             raise ValueError(f"Duplicate PRESS sequence episode: {identity}")
         seen.add(identity)
+        if start <= previous_end_by_session.get(session_id, 0):
+            raise ValueError(f"Overlapping PRESS sequence episode: {identity}")
+        previous_end_by_session[session_id] = end
+        if root is not None:
+            manifest = root / session_id / "manifest.json"
+            if not manifest.is_file():
+                raise ValueError(f"Missing replay manifest for {session_id}: {manifest}")
+            frame_count = int(json.loads(manifest.read_text(encoding="utf-8"))["frame_count"])
+            if end > frame_count:
+                raise ValueError(f"PRESS range exceeds {session_id} frame count: {identity}")
         parsed.append(PressSequenceGroundTruth(
             session_id, start, end, tuple(sequence), status, annotation_source
         ))

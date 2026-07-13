@@ -17,7 +17,7 @@ def test_all_user_confirmed_press_sequences_are_preserved() -> None:
     episodes = load_press_sequence_ground_truth(GROUND_TRUTH)
     assert [(item.session_id, item.press_start, item.press_end, "".join(item.sequence)) for item in episodes] == [
         ("session_20260709_192315", 472, 483, "ASDWWDWS"),
-        ("session_20260710_061220", 507, 517, "AWSA"),
+        ("session_20260710_061220", 507, 514, "AWSA"),
         ("session_20260710_123210", 574, 583, "DW"),
         ("session_20260710_124419", 334, 355, "DSWSS"),
         ("session_20260710_125441", 396, 419, "WASASDD"),
@@ -98,4 +98,5 @@ def test_review_csv_preserves_all_manual_confirmations() -> None:
         "ASDWWDWS", "AWSA", "DW", "DSWSS",
         "WASASDD", "WWDDWWSS", "WDASADS", "WAAASA",
     ]
-    assert all(row["review_status"] == "confirmed" for row in rows)
+    assert all(row["review_status"] == "human_confirmed_adjusted" for row in rows)
+    assert all(row["source_yaml"].endswith("press_sequence_ground_truth.yaml") for row in rows)

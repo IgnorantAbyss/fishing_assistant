@@ -1,10 +1,10 @@
-﻿session_id,episode_index,proposed_start,proposed_end,confidence,uncertain_frames,human_confirmed_start,human_confirmed_end,review_status,notes
-session_20260709_192315,1,459,471,high,,,,,Frame 458 無讀條；459 外框與填充皆清楚；472 已切換為 PRESS。
-session_20260710_061220,1,486,506,high,,,,,Frame 485 無讀條；486 外框與填充皆清楚；507 已切換為 PRESS。
-session_20260710_123210,1,562,573,high,,,,,Frame 561 無讀條；562 外框與填充皆清楚；574 已切換為 PRESS。
-session_20260710_124419,1,314,333,high,,,,,Frame 313 無讀條；314 外框與填充皆清楚；334 已切換為 PRESS。
-session_20260710_125441,1,366,395,high,,,,,Frame 365 無讀條；366 外框與填充皆清楚；396 已切換為 PRESS。
-session_20260710_130308,1,26,61,high,,,,,Frame 25 無讀條；26 外框與填充皆清楚；62 讀條已消失。
-session_20260710_130308,2,385,414,high,,,,,Frame 384 無讀條；385 外框與填充皆清楚；415 已切換為 PRESS。
-session_20260710_131254,1,195,224,high,,,,,Frame 194 無讀條；195 外框與填充皆清楚；225 已切換為 PRESS。
-session_20260710_131254,2,532,553,high,,,,,Frame 531 無讀條；532 外框與填充皆清楚；554 已切換為 PRESS。
+﻿session_id,episode_index,global_hook_start,global_hook_end,proposed_start,proposed_end,first_clear_frame,last_clear_frame,confidence,uncertain_frames,human_confirmed_start,human_confirmed_end,review_status,source_yaml,notes
+session_20260709_192315,1,454,471,459,471,459,471,high,,459,471,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 454出現PROMPT 修正原global_hook_start判定; 458 無讀條；459 外框與填充皆清楚；472 已切換為 PRESS。
+session_20260710_061220,1,480,506,486,506,486,506,high,,486,506,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 485 無讀條；486 外框與填充皆清楚；507 已切換為 PRESS。
+session_20260710_123210,1,557,573,562,573,562,573,high,,562,573,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 561 無讀條；562 外框與填充皆清楚；574 已切換為 PRESS。
+session_20260710_124419,1,309,333,314,333,314,333,high,,314,333,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 313 無讀條；314 外框與填充皆清楚；334 已切換為 PRESS。
+session_20260710_125441,1,361,395,366,395,366,395,high,,366,395,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 365 無讀條；366 外框與填充皆清楚；396 已切換為 PRESS。
+session_20260710_130308,1,21,61,26,61,26,61,high,,26,61,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 25 無讀條；26 外框與填充皆清楚；62 讀條已消失。
+session_20260710_130308,2,380,414,385,414,385,414,high,,385,414,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 384 無讀條；385 外框與填充皆清楚；415 已切換為 PRESS。
+session_20260710_131254,1,190,224,195,224,195,224,high,,195,224,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 194 無讀條；195 外框與填充皆清楚；225 已切換為 PRESS。
+session_20260710_131254,2,527,553,532,553,532,553,high,,532,553,human_confirmed,D:/project/fishing_assistant/data/annotations/hook_bar_ground_truth.yaml,Frame 531 無讀條；532 外框與填充皆清楚；554 已切換為 PRESS。

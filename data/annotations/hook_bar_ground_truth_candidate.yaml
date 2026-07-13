@@ -1,0 +1,114 @@
+version: 1
+source: codex_visual_review
+status: auto_candidate
+
+review_method:
+  image_source: raw_replay_frames
+  search_window: global HOOK episode plus at least 5 frames before and after
+  detector_output_used: false
+
+excluded_sessions:
+  - session_20260709_192231
+
+sessions:
+  session_20260709_192315:
+    episodes:
+      - global_hook_start: 455
+        global_hook_end: 471
+        visible_start: 459
+        visible_end: 471
+        confidence: high
+        first_clear_frame: 459
+        last_clear_frame: 471
+        uncertain_frames: []
+        notes: "Frame 458 無讀條；459 外框與填充皆清楚；472 已切換為 PRESS。"
+
+  session_20260710_061220:
+    episodes:
+      - global_hook_start: 480
+        global_hook_end: 506
+        visible_start: 486
+        visible_end: 506
+        confidence: high
+        first_clear_frame: 486
+        last_clear_frame: 506
+        uncertain_frames: []
+        notes: "Frame 485 無讀條；486 外框與填充皆清楚；507 已切換為 PRESS。"
+
+  session_20260710_123210:
+    episodes:
+      - global_hook_start: 557
+        global_hook_end: 573
+        visible_start: 562
+        visible_end: 573
+        confidence: high
+        first_clear_frame: 562
+        last_clear_frame: 573
+        uncertain_frames: []
+        notes: "Frame 561 無讀條；562 外框與填充皆清楚；574 已切換為 PRESS。"
+
+  session_20260710_124419:
+    episodes:
+      - global_hook_start: 309
+        global_hook_end: 333
+        visible_start: 314
+        visible_end: 333
+        confidence: high
+        first_clear_frame: 314
+        last_clear_frame: 333
+        uncertain_frames: []
+        notes: "Frame 313 無讀條；314 外框與填充皆清楚；334 已切換為 PRESS。"
+
+  session_20260710_125441:
+    episodes:
+      - global_hook_start: 361
+        global_hook_end: 395
+        visible_start: 366
+        visible_end: 395
+        confidence: high
+        first_clear_frame: 366
+        last_clear_frame: 395
+        uncertain_frames: []
+        notes: "Frame 365 無讀條；366 外框與填充皆清楚；396 已切換為 PRESS。"
+
+  session_20260710_130308:
+    episodes:
+      - global_hook_start: 21
+        global_hook_end: 61
+        visible_start: 26
+        visible_end: 61
+        confidence: high
+        first_clear_frame: 26
+        last_clear_frame: 61
+        uncertain_frames: []
+        notes: "Frame 25 無讀條；26 外框與填充皆清楚；62 讀條已消失。"
+      - global_hook_start: 380
+        global_hook_end: 414
+        visible_start: 385
+        visible_end: 414
+        confidence: high
+        first_clear_frame: 385
+        last_clear_frame: 414
+        uncertain_frames: []
+        notes: "Frame 384 無讀條；385 外框與填充皆清楚；415 已切換為 PRESS。"
+
+  session_20260710_131254:
+    episodes:
+      - global_hook_start: 190
+        global_hook_end: 224
+        visible_start: 195
+        visible_end: 224
+        confidence: high
+        first_clear_frame: 195
+        last_clear_frame: 224
+        uncertain_frames: []
+        notes: "Frame 194 無讀條；195 外框與填充皆清楚；225 已切換為 PRESS。"
+      - global_hook_start: 527
+        global_hook_end: 553
+        visible_start: 532
+        visible_end: 553
+        confidence: high
+        first_clear_frame: 532
+        last_clear_frame: 553
+        uncertain_frames: []
+        notes: "Frame 531 無讀條；532 外框與填充皆清楚；554 已切換為 PRESS。"
