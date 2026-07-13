@@ -1,0 +1,235 @@
+{
+  "policy": {
+    "type": "level_triggered_one_shot",
+    "divider_safety_margin_px": 10,
+    "fallback_trigger_threshold": 0.7,
+    "upper_bound": null,
+    "requires_crossing_edge_on_action_frame": false,
+    "requires_current_geometry": true,
+    "uses_stale_geometry": false
+  },
+  "hook_episode_latch": {
+    "introduced": true,
+    "activation": "formal Runtime transition into HOOK from qualified specialized evidence",
+    "not_activated_by": [
+      "global ground truth",
+      "rectangle-only candidate",
+      "single weak raw detection"
+    ],
+    "cleared_by": [
+      "HOOK_ACTION proposal",
+      "Runtime leaving HOOK",
+      "confirmed bar disappearance",
+      "episode timeout"
+    ]
+  },
+  "ratio_trust": {
+    "legacy_fill_ratio_trustworthy": false,
+    "legacy_fill_ratio_1_0_can_trigger_fallback": false,
+    "fallback_requires_explicit_trust": true
+  },
+  "target_125441": {
+    "session": "session_20260710_125441",
+    "range": [
+      360,
+      396
+    ],
+    "root_cause": "The old policy required qualified_active=true on the same frame as usable geometry. Frame 369 had fresh divider/fill geometry past the safety margin but qualified=false.",
+    "crossing_edge_lost": false,
+    "crossing_edge_is_action_gate": false,
+    "action_policy": "level_triggered_one_shot",
+    "stale_geometry_cached": false,
+    "first_usable_post_cross_evidence_frame": 369,
+    "first_hook_action_intent_frame": 369,
+    "legacy_fill_ratio_trustworthy": false
+  },
+  "episodes": [
+    {
+      "session_id": "session_20260709_192315",
+      "episode_index": 1,
+      "visible_range": [
+        459,
+        471
+      ],
+      "first_threshold_cross_frame": 461,
+      "first_margin_pass_frame": 461,
+      "first_usable_post_cross_evidence_frame": 461,
+      "first_hook_action_intent_frame": 461,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_061220",
+      "episode_index": 1,
+      "visible_range": [
+        486,
+        506
+      ],
+      "first_threshold_cross_frame": 488,
+      "first_margin_pass_frame": 488,
+      "first_usable_post_cross_evidence_frame": 488,
+      "first_hook_action_intent_frame": 488,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_123210",
+      "episode_index": 1,
+      "visible_range": [
+        562,
+        573
+      ],
+      "first_threshold_cross_frame": 564,
+      "first_margin_pass_frame": 564,
+      "first_usable_post_cross_evidence_frame": 564,
+      "first_hook_action_intent_frame": 564,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_124419",
+      "episode_index": 1,
+      "visible_range": [
+        314,
+        333
+      ],
+      "first_threshold_cross_frame": 316,
+      "first_margin_pass_frame": 316,
+      "first_usable_post_cross_evidence_frame": 316,
+      "first_hook_action_intent_frame": 316,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_125441",
+      "episode_index": 1,
+      "visible_range": [
+        366,
+        395
+      ],
+      "first_threshold_cross_frame": 368,
+      "first_margin_pass_frame": 369,
+      "first_usable_post_cross_evidence_frame": 369,
+      "first_hook_action_intent_frame": 369,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_130308",
+      "episode_index": 1,
+      "visible_range": [
+        26,
+        61
+      ],
+      "first_threshold_cross_frame": 28,
+      "first_margin_pass_frame": 28,
+      "first_usable_post_cross_evidence_frame": 28,
+      "first_hook_action_intent_frame": 28,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_130308",
+      "episode_index": 2,
+      "visible_range": [
+        385,
+        414
+      ],
+      "first_threshold_cross_frame": 387,
+      "first_margin_pass_frame": 387,
+      "first_usable_post_cross_evidence_frame": 396,
+      "first_hook_action_intent_frame": 396,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_131254",
+      "episode_index": 1,
+      "visible_range": [
+        195,
+        224
+      ],
+      "first_threshold_cross_frame": 198,
+      "first_margin_pass_frame": 198,
+      "first_usable_post_cross_evidence_frame": 198,
+      "first_hook_action_intent_frame": 198,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    },
+    {
+      "session_id": "session_20260710_131254",
+      "episode_index": 2,
+      "visible_range": [
+        532,
+        553
+      ],
+      "first_threshold_cross_frame": 535,
+      "first_margin_pass_frame": 535,
+      "first_usable_post_cross_evidence_frame": 535,
+      "first_hook_action_intent_frame": 535,
+      "latency_from_first_usable_post_cross_evidence": 0,
+      "pre_threshold_intent_count": 0,
+      "total_hook_action_intents": 1,
+      "duplicate_intent_count": 0,
+      "valid_raw_fill_once": true,
+      "valid_divider_geometry_once": true,
+      "fallback_used": false
+    }
+  ],
+  "intent_count": 9,
+  "pre_threshold_intent_count": 0,
+  "duplicate_intent_count": 0,
+  "outside_visible": {
+    "qualified_frames": 26,
+    "used_by_fusion": 0,
+    "action_ready": 0,
+    "hook_action_intents": 0
+  },
+  "actions_applied": 0,
+  "hook_detector_operationally_ready": true,
+  "live_detect_only_remaining": [
+    "Confirm fresh geometry remains stable at the real capture cadence.",
+    "Confirm disappearance/timeout latch clearing without applying input.",
+    "Validate ratio fallback only after a future source explicitly marks its ratio calibrated."
+  ]
+}

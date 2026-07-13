@@ -156,6 +156,7 @@ def test_failed_action_geometry_uses_ratio_fallback_not_legacy_divider() -> None
                 "divider_line_x": None,
                 "divider_confidence": 0.0,
                 "fill_endpoint_x": None,
+                "fallback_ratio_trustworthy": True,
             },
         ),
         recorded_observation=True,

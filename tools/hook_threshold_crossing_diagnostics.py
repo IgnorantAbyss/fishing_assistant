@@ -157,8 +157,9 @@ def _episode_summary(
         decision = policy.evaluate(
             _hook_observation(row["qualified_hook_observation"]),
             action_already_proposed=action_seen,
+            hook_episode_active=in_hook_state and not action_seen,
         )
-        action_ready = bool(in_hook_state and qualified and decision.action_ready)
+        action_ready = bool(in_hook_state and decision.action_ready)
         intent = row["proposed_intent"] == "HOOK_ACTION"
         detailed.append({
             "frame": row["frame_index"],

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
-from src.fishing_v2.domain.observations import PromptObservationKind
+from src.fishing_v2.domain.observations import HookObservation, PromptObservationKind
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import StateEvidence
 from src.fishing_v2.fusion.transition_policy import TransitionPolicy
@@ -26,6 +26,8 @@ class FSMConfig:
     sync_lost_timeout_sec: float = 2.0
     hook_divider_safety_margin_px: int = 10
     hook_fallback_trigger_threshold: float = 0.70
+    hook_episode_timeout_sec: float = 12.0
+    hook_disappearance_frames_required: int = 2
     get_retry_interval_seconds: float = 0.4
     get_max_attempts: int = 12
     get_max_duration_seconds: float = 5.0
@@ -36,6 +38,10 @@ class FSMConfig:
             self.hook_divider_safety_margin_px,
             self.hook_fallback_trigger_threshold,
         )
+        if self.hook_episode_timeout_sec <= 0:
+            raise ValueError("Hook episode timeout must be positive")
+        if self.hook_disappearance_frames_required < 1:
+            raise ValueError("Hook disappearance frames must be positive")
         if not 0.3 <= self.get_retry_interval_seconds <= 0.5:
             raise ValueError("GET retry interval must remain within the reviewed 0.3..0.5 second range")
         if self.get_max_attempts < 1 or self.get_max_duration_seconds <= 0:
@@ -82,6 +88,9 @@ class FishingFSM:
         self._press_waiting_for_clear = False
         self._press_intent_proposed = False
         self._hook_intent_proposed = False
+        self._hook_episode_active = initial_state == RuntimeState.HOOK
+        self._hook_episode_started_at = float(initial_timestamp) if self._hook_episode_active else None
+        self._hook_absent_frames = 0
         self._get_started_at: float | None = initial_timestamp if initial_state == RuntimeState.GET else None
         self._get_last_applied_at: float | None = None
         self._get_attempts = 0
@@ -121,6 +130,9 @@ class FishingFSM:
         self._pending_request = None
         self._press_intent_proposed = False
         self._hook_intent_proposed = False
+        self._hook_episode_active = state == RuntimeState.HOOK
+        self._hook_episode_started_at = float(timestamp) if self._hook_episode_active else None
+        self._hook_absent_frames = 0
         if state == RuntimeState.GET:
             self._reset_get_retry(timestamp)
         return FSMResult(previous, state, self._none(), reason, previous != state)
@@ -148,6 +160,13 @@ class FishingFSM:
             self._press_intent_proposed = False
         if target == RuntimeState.HOOK and previous != RuntimeState.HOOK:
             self._hook_intent_proposed = False
+            self._hook_episode_active = True
+            self._hook_episode_started_at = float(timestamp)
+            self._hook_absent_frames = 0
+        elif previous == RuntimeState.HOOK and target != RuntimeState.HOOK:
+            self._hook_episode_active = False
+            self._hook_episode_started_at = None
+            self._hook_absent_frames = 0
         if target == RuntimeState.IDLE and previous != RuntimeState.IDLE:
             self._actions_applied.clear()
             self._press_waiting_for_clear = False
@@ -178,7 +197,41 @@ class FishingFSM:
             self._press_intent_proposed = True
         elif intent == ActionIntent.HOOK_ACTION:
             self._hook_intent_proposed = True
+            self._hook_episode_active = False
+            self._hook_episode_started_at = None
+            self._hook_absent_frames = 0
         return request
+
+    def _refresh_hook_episode_latch(
+        self,
+        hook: HookObservation | None,
+        timestamp: float,
+    ) -> None:
+        if not self._hook_episode_active:
+            return
+        if (
+            self._hook_episode_started_at is not None
+            and float(timestamp) - self._hook_episode_started_at >= self.config.hook_episode_timeout_sec
+        ):
+            self._hook_episode_active = False
+            self._hook_episode_started_at = None
+            self._hook_absent_frames = 0
+            return
+        evidence = hook.evidence if hook is not None else {}
+        current_bar_present = bool(
+            hook
+            and (
+                hook.detected
+                or (
+                    evidence.get("crossing_geometry_version") == 1
+                    and evidence.get("divider_line_detected")
+                )
+            )
+        )
+        self._hook_absent_frames = 0 if current_bar_present else self._hook_absent_frames + 1
+        if self._hook_absent_frames >= self.config.hook_disappearance_frames_required:
+            self._hook_episode_active = False
+            self._hook_episode_started_at = None
 
     def discard_proposal(self) -> None:
         self._pending_request = None
@@ -486,9 +539,11 @@ class FishingFSM:
 
         if self.state == RuntimeState.HOOK:
             hook = bundle.hook if bundle else None
+            self._refresh_hook_episode_latch(hook, timestamp)
             decision = self.hook_action_policy.evaluate(
                 hook,
                 action_already_proposed=self._hook_intent_proposed,
+                hook_episode_active=self._hook_episode_active,
             )
             if decision.action_ready:
                 action = self._propose(

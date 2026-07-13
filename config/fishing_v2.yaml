@@ -73,6 +73,8 @@ hook_detector:
 hook:
   divider_safety_margin_px: 10
   fallback_trigger_threshold: 0.70
+  episode_timeout_sec: 12.0
+  disappearance_frames_required: 2
 
 press_detector:
   armed_fps: 5

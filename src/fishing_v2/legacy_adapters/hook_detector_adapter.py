@@ -32,6 +32,8 @@ class LegacyHookDetectorAdapter:
                     ),
                     "legacy_debug": dict(result.get("debug", {})),
                     "adapter": "legacy_hook_detector",
+                    "fallback_ratio_trustworthy": False,
+                    "fallback_ratio_reason": "legacy_fill_ratio_not_action_calibrated",
                     **crossing.evidence(),
                 },
             )

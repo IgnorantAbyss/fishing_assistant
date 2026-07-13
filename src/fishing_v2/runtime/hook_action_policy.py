@@ -22,6 +22,9 @@ class HookActionPolicyConfig:
 
 @dataclass(frozen=True)
 class HookActionDecision:
+    hook_episode_active: bool
+    qualified_active_hook_bar: bool
+    current_hook_geometry_is_usable: bool
     divider_line_detected: bool
     divider_line_x: float | None
     divider_confidence: float
@@ -29,8 +32,11 @@ class HookActionDecision:
     fill_ratio: float | None
     divider_crossed: bool
     divider_margin_passed: bool
+    threshold_currently_exceeded: bool
     fallback_used: bool
+    fallback_eligible: bool
     fallback_reason: str | None
+    fallback_rejection_reason: str | None
     action_ready: bool
     one_shot_guard_result: str
     reason: str
@@ -48,13 +54,14 @@ class HookActionPolicy:
         observation: HookObservation | None,
         *,
         action_already_proposed: bool,
+        hook_episode_active: bool,
     ) -> HookActionDecision:
         evidence = observation.evidence if observation else {}
         features = set(evidence.get("matched_features", ()))
         fill_ratio = observation.fill_ratio if observation is not None else None
+        qualified_active = bool(observation and observation.detected)
         raw_valid_fill = bool(
-            observation
-            and observation.detected
+            qualified_active
             and "bar_fill" in features
             and fill_ratio is not None
             and fill_ratio > 0.0
@@ -67,13 +74,10 @@ class HookActionPolicy:
             and float(evidence.get("divider_confidence", 0.0)) > 0.0
         )
         explicit_fill_x = evidence.get("fill_endpoint_x") if explicit_geometry else None
-        valid_fill = bool(
-            observation
-            and observation.detected
-            and (
-                explicit_fill_x is not None
-                or (not explicit_divider_valid and raw_valid_fill)
-            )
+        explicit_geometry_usable = bool(
+            hook_episode_active
+            and explicit_divider_valid
+            and explicit_fill_x is not None
         )
         bbox = evidence.get("bar_bbox")
         valid_bbox = bool(
@@ -94,6 +98,13 @@ class HookActionPolicy:
         divider_x = float(evidence["divider_line_x"]) if explicit_divider_valid else None
         divider_confidence = float(evidence.get("divider_confidence", 0.0)) if explicit_divider_valid else 0.0
         divider_valid = explicit_divider_valid or divider_valid
+        legacy_geometry_usable = bool(
+            hook_episode_active
+            and not explicit_geometry
+            and divider_valid
+            and raw_valid_fill
+        )
+        current_geometry_usable = explicit_geometry_usable or legacy_geometry_usable
         divider_crossed = margin_passed = False
         if not explicit_divider_valid and raw_valid_fill and valid_bbox:
             left, _, right, _ = (float(value) for value in bbox)
@@ -102,35 +113,60 @@ class HookActionPolicy:
             if divider_valid:
                 divider_x = left + float(divider_ratio) * width
                 divider_confidence = float(evidence.get("divider_confidence", 1.0))
-        if valid_fill and divider_valid and fill_x is not None and divider_x is not None:
+        if current_geometry_usable and fill_x is not None and divider_x is not None:
             divider_crossed = fill_x >= divider_x
             margin_passed = fill_x >= divider_x + self.config.divider_safety_margin_px
 
-        fallback_used = bool(valid_fill and not divider_valid)
+        ratio_trustworthy = bool(evidence.get("fallback_ratio_trustworthy", not explicit_geometry))
+        fallback_eligible = bool(
+            hook_episode_active
+            and qualified_active
+            and not divider_valid
+            and raw_valid_fill
+            and ratio_trustworthy
+        )
+        fallback_used = fallback_eligible
         fallback_reason = "divider_line_not_reliably_available" if fallback_used else None
+        if divider_valid:
+            fallback_rejection = None
+        elif not hook_episode_active:
+            fallback_rejection = "hook_episode_not_active"
+        elif not qualified_active:
+            fallback_rejection = "fallback_requires_qualified_active_hook_bar"
+        elif not raw_valid_fill:
+            fallback_rejection = "fallback_requires_positive_fill_ratio"
+        elif not ratio_trustworthy:
+            fallback_rejection = "fallback_ratio_not_trustworthy"
+        else:
+            fallback_rejection = None
         crossing_ready = bool(
-            margin_passed if divider_valid
-            else valid_fill and fill_ratio is not None
+            margin_passed if current_geometry_usable
+            else fallback_eligible and fill_ratio is not None
             and float(fill_ratio) >= self.config.fallback_trigger_threshold
         )
-        action_ready = crossing_ready and not action_already_proposed
-        if not observation or not observation.detected:
-            reason = "qualified_hook_bar_not_detected"
-        elif not valid_fill:
-            reason = "valid_positive_bar_fill_required"
+        action_ready = hook_episode_active and crossing_ready and not action_already_proposed
+        if not hook_episode_active:
+            reason = "hook_episode_not_active"
         elif action_already_proposed:
             reason = "hook_action_already_proposed_in_episode"
-        elif divider_valid and not divider_crossed:
+        elif current_geometry_usable and not divider_crossed:
             reason = "fill_has_not_crossed_divider"
-        elif divider_valid and not margin_passed:
+        elif current_geometry_usable and not margin_passed:
             reason = "fill_crossed_divider_but_margin_pending"
-        elif divider_valid:
+        elif current_geometry_usable:
             reason = "divider_margin_passed"
         elif crossing_ready:
             reason = "fallback_threshold_passed"
+        elif fallback_rejection is not None:
+            reason = fallback_rejection
+        elif explicit_divider_valid:
+            reason = "current_fill_geometry_unavailable"
         else:
             reason = "fallback_threshold_pending"
         return HookActionDecision(
+            hook_episode_active=hook_episode_active,
+            qualified_active_hook_bar=qualified_active,
+            current_hook_geometry_is_usable=current_geometry_usable,
             divider_line_detected=divider_valid,
             divider_line_x=divider_x,
             divider_confidence=divider_confidence,
@@ -138,8 +174,11 @@ class HookActionPolicy:
             fill_ratio=fill_ratio,
             divider_crossed=divider_crossed,
             divider_margin_passed=margin_passed,
+            threshold_currently_exceeded=crossing_ready,
             fallback_used=fallback_used,
+            fallback_eligible=fallback_eligible,
             fallback_reason=fallback_reason,
+            fallback_rejection_reason=fallback_rejection,
             action_ready=action_ready,
             one_shot_guard_result=(
                 "blocked_already_proposed" if action_already_proposed else "not_previously_proposed"

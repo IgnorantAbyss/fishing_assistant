@@ -47,6 +47,8 @@ def _config_objects(config_path: Path):
     fsm.update({
         "hook_divider_safety_margin_px": data["hook"]["divider_safety_margin_px"],
         "hook_fallback_trigger_threshold": data["hook"]["fallback_trigger_threshold"],
+        "hook_episode_timeout_sec": data["hook"]["episode_timeout_sec"],
+        "hook_disappearance_frames_required": data["hook"]["disappearance_frames_required"],
         "get_retry_interval_seconds": data["get_detector"]["retry_interval_seconds"],
         "get_max_attempts": data["get_detector"]["max_attempts"],
         "get_max_duration_seconds": data["get_detector"]["max_duration_seconds"],
