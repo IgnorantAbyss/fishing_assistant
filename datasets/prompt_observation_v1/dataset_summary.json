@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "dataset": "prompt_observation_v1",
+  "label_source": "prompt_ground_truth.yaml only",
+  "global_ground_truth_used": false,
+  "approved_roi": [
+    940,
+    36,
+    1620,
+    100
+  ],
+  "reference_resolution": [
+    2560,
+    1440
+  ],
+  "sessions": [
+    "session_20260709_192315",
+    "session_20260710_061220",
+    "session_20260710_123210",
+    "session_20260710_124419",
+    "session_20260710_125441",
+    "session_20260710_130308",
+    "session_20260710_131254"
+  ],
+  "excluded_sessions": [
+    "session_20260709_192231"
+  ],
+  "frame_count": 4200,
+  "session_label_counts": {
+    "session_20260709_192315": {
+      "HOOK_INSTRUCTION": 18,
+      "IDLE_CAST": 53,
+      "IGNORE": 15,
+      "PRESS_INSTRUCTION": 12,
+      "READY_BITE": 11,
+      "WAITING_IN_PROGRESS": 491
+    },
+    "session_20260710_061220": {
+      "HOOK_INSTRUCTION": 27,
+      "IDLE_CAST": 29,
+      "IGNORE": 15,
+      "PRESS_INSTRUCTION": 8,
+      "READY_BITE": 28,
+      "WAITING_IN_PROGRESS": 493
+    },
+    "session_20260710_123210": {
+      "HOOK_INSTRUCTION": 17,
+      "IDLE_CAST": 48,
+      "IGNORE": 17,
+      "PRESS_INSTRUCTION": 10,
+      "READY_BITE": 55,
+      "WAITING_IN_PROGRESS": 453
+    },
+    "session_20260710_124419": {
+      "HOOK_INSTRUCTION": 25,
+      "IDLE_CAST": 72,
+      "IGNORE": 15,
+      "PRESS_INSTRUCTION": 22,
+      "READY_BITE": 52,
+      "WAITING_IN_PROGRESS": 414
+    },
+    "session_20260710_125441": {
+      "HOOK_INSTRUCTION": 35,
+      "IDLE_CAST": 81,
+      "IGNORE": 16,
+      "PRESS_INSTRUCTION": 24,
+      "READY_BITE": 87,
+      "WAITING_IN_PROGRESS": 357
+    },
+    "session_20260710_130308": {
+      "HOOK_INSTRUCTION": 61,
+      "IDLE_CAST": 96,
+      "IGNORE": 31,
+      "PRESS_INSTRUCTION": 24,
+      "READY_BITE": 79,
+      "WAITING_IN_PROGRESS": 309
+    },
+    "session_20260710_131254": {
+      "HOOK_INSTRUCTION": 62,
+      "IDLE_CAST": 72,
+      "IGNORE": 32,
+      "PRESS_INSTRUCTION": 48,
+      "READY_BITE": 97,
+      "WAITING_IN_PROGRESS": 289
+    }
+  },
+  "label_counts": {
+    "HOOK_INSTRUCTION": 245,
+    "IDLE_CAST": 451,
+    "IGNORE": 141,
+    "PRESS_INSTRUCTION": 148,
+    "READY_BITE": 409,
+    "WAITING_IN_PROGRESS": 2806
+  },
+  "unique_image_hashes": 4160,
+  "duplicate_image_frames": 40,
+  "cross_non_ignore_label_conflicts": 0,
+  "crop_size": [
+    680,
+    64
+  ]
+}

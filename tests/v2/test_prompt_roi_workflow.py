@@ -207,8 +207,12 @@ def test_all_formal_prompt_ground_truth_exists() -> None:
     assert "session_20260709_192231" not in actual_sessions
 
 
-def test_phase_does_not_materialize_prompt_dataset() -> None:
-    assert not (ROOT / "datasets" / "prompt_observation_v1").exists()
+def test_prototype_phase_tracks_only_small_dataset_metadata() -> None:
+    dataset = ROOT / "datasets" / "prompt_observation_v1"
+    assert (dataset / "manifest.csv").is_file()
+    assert (dataset / "dataset_summary.json").is_file()
+    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "datasets/prompt_observation_v1/*" in ignore
 
 
 def test_review_tool_has_no_training_or_classifier_selection_path() -> None:

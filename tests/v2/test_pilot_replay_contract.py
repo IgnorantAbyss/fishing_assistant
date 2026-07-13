@@ -154,5 +154,9 @@ def test_get_panel_outranks_recorded_press_prompt() -> None:
     assert result.fsm.visual_acknowledgement == "qualified_get_panel_present"
 
 
-def test_no_prompt_dataset_is_materialized() -> None:
-    assert not (ROOT / "datasets" / "prompt_observation_v1").exists()
+def test_prompt_observation_dataset_tracks_manifest_not_bulk_crops() -> None:
+    dataset = ROOT / "datasets" / "prompt_observation_v1"
+    assert (dataset / "manifest.csv").is_file()
+    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "datasets/prompt_observation_v1/*" in ignore
+    assert "!datasets/prompt_observation_v1/manifest.csv" in ignore

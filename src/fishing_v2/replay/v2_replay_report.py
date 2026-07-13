@@ -8,7 +8,7 @@ from typing import Any, Sequence
 
 
 REPLAY_FIELDS = (
-    "frame_index", "global_ground_truth", "prompt_observation", "action_mode",
+    "frame_index", "global_ground_truth", "prompt_observation", "prompt_observer_raw", "action_mode",
     "detector_activation_mode", "raw_detected", "qualified_detected",
     "qualification_reason", "used_by_fusion", "diagnostic_only",
     "press_panel_candidate", "press_panel_present_raw", "press_panel_present_qualified",
@@ -118,7 +118,7 @@ def write_v2_replay_report(
         lines.append("- None")
     md_path = root / "v2_replay_report.md"
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    if action_mode == "recorded_observation":
+    if action_mode == "recorded_observation" and mode == "scripted_prompt":
         small_root = Path(report_dir).parent
         small_root.mkdir(parents=True, exist_ok=True)
         (small_root / "pilot_replay_summary.json").write_text(

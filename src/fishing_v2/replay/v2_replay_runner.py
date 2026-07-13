@@ -146,9 +146,14 @@ class V2ReplayRunner:
         start_state: RuntimeState | None = None,
         action_mode: ActionExecutionMode | str = ActionExecutionMode.STANDARD,
         flat_report: bool = False,
+        prompt_observer: Any | None = None,
     ) -> V2ReplayRun:
-        if mode not in {"scripted_prompt", "no_prompt"}:
-            raise ValueError("Replay mode must be scripted_prompt or no_prompt")
+        if mode not in {"scripted_prompt", "predicted_prompt", "no_prompt"}:
+            raise ValueError("Replay mode must be scripted_prompt, predicted_prompt, or no_prompt")
+        if mode == "predicted_prompt" and prompt_observer is None:
+            raise ValueError("predicted_prompt mode requires a Prompt observer")
+        if mode != "predicted_prompt" and prompt_observer is not None:
+            raise ValueError("Prompt observer injection is only valid in predicted_prompt mode")
         source = LegacyReplaySourceAdapter(session_path)
         action_mode = ActionExecutionMode(action_mode)
         prompt_labels = None
@@ -202,6 +207,8 @@ class V2ReplayRunner:
                     context.frame_index, context.timestamp,
                     {"annotation": annotation.value, "global_state_not_used": True},
                 )
+            elif mode == "predicted_prompt":
+                prompt = prompt_observer.observe(frame, context)
             raw_bundle = ObservationBundle(context.frame_index, context.timestamp, prompt, hook, press, get)
             sync_reason = None
             frame_start_state = fsm.state
@@ -228,6 +235,7 @@ class V2ReplayRunner:
                 "frame_index": context.frame_index,
                 "global_ground_truth": replay_frame.global_ground_truth,
                 "prompt_observation": prompt.kind.value if prompt else None,
+                "prompt_observer_raw": dict(prompt.evidence) if prompt and mode == "predicted_prompt" else None,
                 "action_mode": action_mode.value,
                 "detector_activation_mode": qualifications["activation"],
                 "raw_detected": qualifications["raw_detected"],
