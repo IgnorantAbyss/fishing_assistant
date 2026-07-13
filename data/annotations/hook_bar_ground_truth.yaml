@@ -1,6 +1,7 @@
 version: 1
-source: codex_visual_review
-status: auto_candidate
+source: codex_visual_review_then_human_review
+status: human_confirmed
+reviewed_from: hook_bar_ground_truth_candidate.yaml
 
 review_method:
   image_source: raw_replay_frames
@@ -13,7 +14,7 @@ excluded_sessions:
 sessions:
   session_20260709_192315:
     episodes:
-      - global_hook_start: 455
+      - global_hook_start: 454
         global_hook_end: 471
         visible_start: 459
         visible_end: 471
@@ -21,7 +22,7 @@ sessions:
         first_clear_frame: 459
         last_clear_frame: 471
         uncertain_frames: []
-        notes: "Frame 458 無讀條；459 外框與填充皆清楚；472 已切換為 PRESS。"
+        notes: "Frame 454出現PROMPT 修正原global_hook_start判定; 458 無讀條；459 外框與填充皆清楚；472 已切換為 PRESS。"
 
   session_20260710_061220:
     episodes:

@@ -1,4 +1,10 @@
 version: 1
+source: manual_original_frame_review_then_human_range_adjustment
+status: human_confirmed
+review_notes:
+  sequence_answers: human_confirmed
+  episode_ranges: human_adjusted
+  ignore_tail_policy: prompt_and_panel_absent_frames_excluded
 episodes:
   - session_id: session_20260709_192315
     press_start: 472
@@ -8,7 +14,7 @@ episodes:
     source: manual_original_frame_review
   - session_id: session_20260710_061220
     press_start: 507
-    press_end: 517
+    press_end: 514
     sequence: AWSA
     status: confirmed
     source: manual_original_frame_review
