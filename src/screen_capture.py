@@ -40,6 +40,14 @@ def get_monitors() -> list[dict[str, int]]:
         raise RuntimeError(f"Unable to enumerate monitors with mss: {exc}") from exc
 
 
+def mss_bgra_to_bgr(frame: Any) -> np.ndarray:
+    """Convert MSS BGRA to the canonical uint8 HxWx3 contiguous BGR contract."""
+    bgra = np.asarray(frame)
+    if bgra.dtype != np.uint8 or bgra.ndim != 3 or bgra.shape[2] != 4:
+        raise ValueError(f"MSS frame must be uint8 HxWx4 BGRA, got {bgra.dtype} {bgra.shape}")
+    return np.ascontiguousarray(bgra[:, :, :3])
+
+
 def capture_screen(monitor_index: int = 1) -> np.ndarray:
     """Capture one physical monitor as a BGR numpy array without sending input."""
     if monitor_index < 1:
@@ -50,13 +58,13 @@ def capture_screen(monitor_index: int = 1) -> np.ndarray:
             if monitor_index >= len(capture.monitors):
                 available = len(capture.monitors) - 1
                 raise ValueError(f"Monitor {monitor_index} does not exist; {available} physical monitor(s) available")
-            bgra = np.asarray(capture.grab(capture.monitors[monitor_index]))
+            bgra = capture.grab(capture.monitors[monitor_index])
     except ValueError:
         raise
     except Exception as exc:
         raise RuntimeError(f"Unable to capture monitor {monitor_index} with mss: {exc}") from exc
     # mss returns BGRA; discard alpha while retaining OpenCV-compatible BGR order.
-    return np.ascontiguousarray(bgra[:, :, :3])
+    return mss_bgra_to_bgr(bgra)
 
 
 def find_window_region(window_title: str) -> CaptureRegion:
@@ -126,10 +134,10 @@ class MSSCaptureSession:
         if self._capture is None or self.region is None:
             raise RuntimeError("Capture session is not open")
         try:
-            bgra = np.asarray(self._capture.grab(self.region.as_mss_monitor()))
+            bgra = self._capture.grab(self.region.as_mss_monitor())
         except Exception as exc:
             raise RuntimeError(f"Live capture failed: {exc}") from exc
-        return np.ascontiguousarray(bgra[:, :, :3])
+        return mss_bgra_to_bgr(bgra)
 
     def is_foreground(self) -> bool | None:
         if self.region is None or self.region.window_handle is None:

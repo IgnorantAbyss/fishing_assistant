@@ -3,8 +3,9 @@
 This runtime observes a supported game window and records what the frozen v2
 pipeline **would** do. It never emits keyboard or mouse input. The final Prompt
 bundle is immutable at runtime: thresholds, ambiguity margin, IDLE stability,
-ROI, preprocessing and all 35 session medoids are loaded from the verified
-artifact under `artifacts/prompt_observer/prototype_v1`.
+ROI, preprocessing, all 35 formal-session medoids, and the bounded reviewed
+Live calibration candidate set are loaded from the verified artifact under
+`artifacts/prompt_observer/prototype_v1`.
 
 ## Supported environment
 

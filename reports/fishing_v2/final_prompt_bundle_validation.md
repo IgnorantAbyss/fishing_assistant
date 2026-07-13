@@ -1,8 +1,8 @@
 # Final Prompt Bundle Deployment Validation
 
-- Bundle version: `prototype_v1_final_1`
-- Bundle SHA-256: `426dbdd152ce51521604be4893d9864dd3c6a4e4b4495bae08b7e4e1d914d851`
-- Prototypes: **35**
+- Bundle version: `prototype_v1_final_2`
+- Bundle SHA-256: `7a6eaff6fc96ea695f55f94daa77a3478f060d62b304e568692a12fbd985964e`
+- Prototypes: **36**
 - Threshold aggregation: per-class LOSO median; ambiguity LOSO median; IDLE stability LOSO maximum.
 - This all-session replay is deployment regression only; it does not replace LOSO generalization results.
 

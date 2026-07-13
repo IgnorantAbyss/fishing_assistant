@@ -1,7 +1,7 @@
 {
-  "bundle_version": "prototype_v1_final_1",
-  "bundle_sha256": "426dbdd152ce51521604be4893d9864dd3c6a4e4b4495bae08b7e4e1d914d851",
-  "prototype_count": 35,
+  "bundle_version": "prototype_v1_final_2",
+  "bundle_sha256": "7a6eaff6fc96ea695f55f94daa77a3478f060d62b304e568692a12fbd985964e",
+  "prototype_count": 36,
   "class_thresholds": {
     "IDLE_CAST": 0.18108483746647835,
     "WAITING_IN_PROGRESS": 0.092374726831913,
@@ -172,7 +172,9 @@
             100
           ],
           "idle_streak": 4,
-          "idle_stability_frames": 4
+          "idle_stability_frames": 4,
+          "input_contract": "uint8_hwc3_bgr_contiguous_0_255",
+          "feature_sha256": "3d223cf7db67aaf1d0f20e3f06decc2398b8fb1b4cefca6a19ae7932fa18ba34"
         }
       },
       "result": "PASS"
@@ -387,7 +389,9 @@
             100
           ],
           "idle_streak": 0,
-          "idle_stability_frames": 4
+          "idle_stability_frames": 4,
+          "input_contract": "uint8_hwc3_bgr_contiguous_0_255",
+          "feature_sha256": "b9c0f9561dd30f8cb3a184bbfb790ee03b26b7b30f78af950ff88c43b72710f8"
         }
       },
       "result": "PASS"
@@ -602,7 +606,9 @@
             100
           ],
           "idle_streak": 0,
-          "idle_stability_frames": 4
+          "idle_stability_frames": 4,
+          "input_contract": "uint8_hwc3_bgr_contiguous_0_255",
+          "feature_sha256": "efffa1013d00125191f8b7ad4cac43d1c2685427eccf4a766f003524b69b0970"
         }
       },
       "result": "PASS"
@@ -742,7 +748,9 @@
             100
           ],
           "idle_streak": 2,
-          "idle_stability_frames": 4
+          "idle_stability_frames": 4,
+          "input_contract": "uint8_hwc3_bgr_contiguous_0_255",
+          "feature_sha256": "e701c926ff9949b5b3749bddbdc33ea9effd29e6a3295e3b3a57279739642934"
         }
       },
       "result": "PASS"
@@ -891,7 +899,9 @@
             100
           ],
           "idle_streak": 0,
-          "idle_stability_frames": 4
+          "idle_stability_frames": 4,
+          "input_contract": "uint8_hwc3_bgr_contiguous_0_255",
+          "feature_sha256": "42df5109664f026135d750b72929a69eaecffa749410a3d239217bda3cce99ea"
         }
       },
       "result": "PASS"

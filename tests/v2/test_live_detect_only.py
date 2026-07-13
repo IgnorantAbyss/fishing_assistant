@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
+from src.fishing_v2.domain.frame_context import FrameContext
 from src.fishing_v2.domain.observations import GetObservation, HookObservation, PressObservation
 from src.fishing_v2.live.live_detect_only import (
     LiveDetectOnlyConfig,
@@ -19,6 +20,12 @@ from src.fishing_v2.live.live_detect_only import (
 )
 from src.fishing_v2.live.session_logger import LiveSessionLogger, create_live_session_directory
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle
+from src.fishing_v2.perception.prototype_prompt_observer import (
+    PrototypePromptModel,
+    extract_prompt_feature,
+    validate_prompt_input,
+)
+from src.screen_capture import mss_bgra_to_bgr
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -216,3 +223,63 @@ def test_live_runtime_imports_no_input_writer_and_never_loads_ground_truth() -> 
     assert "sendinput" not in attributes
     assert "ground_truth.yaml" not in combined
     assert "prompt_ground_truth" not in combined
+
+
+def test_mss_bgra_conversion_preserves_bgr_order_and_canonical_contract() -> None:
+    bgra = np.asarray([[[11, 22, 33, 44], [55, 66, 77, 88]]], dtype=np.uint8)
+    bgr = mss_bgra_to_bgr(bgra)
+    assert bgr.tolist() == [[[11, 22, 33], [55, 66, 77]]]
+    assert bgr.dtype == np.uint8
+    assert bgr.flags.c_contiguous
+    validate_prompt_input(bgr)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        np.zeros((2, 2, 4), dtype=np.uint8),
+        np.zeros((2, 2, 3), dtype=np.float32),
+        np.zeros((2, 4, 3), dtype=np.uint8)[:, ::2],
+    ],
+)
+def test_prompt_input_contract_rejects_noncanonical_frames(invalid: np.ndarray) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        validate_prompt_input(invalid)
+
+
+def test_confirmed_saved_live_idle_variant_is_covered_without_margin_relaxation() -> None:
+    import cv2
+
+    crop = cv2.imread(str(
+        ROOT / "assets" / "reference" / "prompt" / "live_idle_cast_20260713_000035.png"
+    ))
+    loaded = load_prompt_bundle(BUNDLE)
+    feature = extract_prompt_feature(crop)
+    base_model = PrototypePromptModel(
+        tuple(item for item in loaded.model.prototypes if item.source_session in loaded.model.training_sessions),
+        loaded.model.class_thresholds,
+        loaded.model.ambiguity_threshold,
+        loaded.model.training_sessions,
+        loaded.model.calibration_sessions,
+        loaded.model.idle_stability_frames,
+    )
+    baseline = base_model.predict_feature(feature)
+    assert baseline.predicted_label == "UNKNOWN"
+    assert baseline.prototype_id == "HOOK_INSTRUCTION:session_20260709_192315:000465"
+    assert baseline.second_label == "PRESS_INSTRUCTION"
+    corrected = loaded.model.predict_feature(feature)
+    assert corrected.predicted_label == "IDLE_CAST"
+    assert corrected.similarity == pytest.approx(1.0, abs=1e-6)
+    assert corrected.ambiguity_margin >= loaded.model.ambiguity_threshold
+
+    frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+    x1, y1, x2, y2 = loaded.roi.pixel
+    frame[y1:y2, x1:x2] = crop
+    labels = [
+        loaded.observer.observe(frame, FrameContext(index, index * 0.2)).kind.value
+        for index in range(1, 31)
+    ]
+    assert labels[:3] == ["UNKNOWN"] * 3  # Existing IDLE stability guard.
+    assert labels[3:] == ["IDLE_CAST"] * 27
+    assert "HOOK_INSTRUCTION" not in labels
+    assert "PRESS_INSTRUCTION" not in labels

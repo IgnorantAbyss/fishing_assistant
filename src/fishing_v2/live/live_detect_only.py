@@ -262,8 +262,9 @@ class LiveDetectOnlyRuntime:
                 f"Unsupported capture resolution {width}x{height}; expected 2560x1440"
             )
         self.prompt_bundle.roi.pixel_bounds(width, height)
-        if len(self.prompt_bundle.model.prototypes) != 35:
-            raise LivePreflightError("Final Prompt bundle must contain 35 prototypes")
+        expected_count = int(self.prompt_bundle.bundle.get("prototype_count", 0))
+        if len(self.prompt_bundle.model.prototypes) != expected_count or expected_count not in {36, 37}:
+            raise LivePreflightError("Final Prompt bundle must contain 35 medoids plus reviewed Live candidates")
         return frame
 
     @staticmethod

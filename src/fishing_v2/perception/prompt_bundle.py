@@ -8,7 +8,9 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import cv2
 import numpy as np
+import yaml
 
 from src.fishing_v2.data.dataset_lineage import sha256_file
 from src.fishing_v2.data.prompt_observation_dataset import (
@@ -25,10 +27,11 @@ from src.fishing_v2.perception.prototype_prompt_observer import (
     PrototypePromptModel,
     PrototypePromptObserver,
     build_prototypes,
+    extract_prompt_feature,
 )
 
 
-BUNDLE_VERSION = "prototype_v1_final_1"
+BUNDLE_VERSION = "prototype_v1_final_2"
 BUNDLE_JSON = "bundle.json"
 PROTOTYPES_FILE = "prototypes.npz"
 METADATA_JSON = "metadata.json"
@@ -43,6 +46,8 @@ PREPROCESSING = {
     "normalization": "per_channel_mean_center_l2_then_joint_l2",
     "similarity": "cosine_max_over_class_prototypes",
 }
+LIVE_CANDIDATE_STATUS = "live_calibration_candidate"
+LIVE_REVIEW_STATUS = "human_confirmed_live_candidate"
 
 
 class PromptBundleError(ValueError):
@@ -91,6 +96,67 @@ def _fold_calibration(summary_path: Path) -> tuple[dict[str, float], float, int,
     return thresholds, margin, idle_stability, folds
 
 
+def _load_live_calibration_candidates(
+    manifest_path: Path | None,
+    *,
+    project_root: Path,
+    expected_roi: tuple[int, int, int, int],
+) -> tuple[list[PromptPrototype], list[dict[str, Any]], str | None]:
+    if manifest_path is None:
+        return [], [], None
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or payload.get("status") != LIVE_CANDIDATE_STATUS:
+        raise PromptBundleError("Live Prompt candidate manifest has invalid status")
+    raw = payload.get("candidates")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 2:
+        raise PromptBundleError("Final bundle permits only one or two reviewed Live candidates")
+    prototypes: list[PromptPrototype] = []
+    metadata: list[dict[str, Any]] = []
+    candidate_ids: set[str] = set()
+    for item in raw:
+        if not isinstance(item, Mapping):
+            raise PromptBundleError("Each Live Prompt candidate must be a mapping")
+        candidate_id = str(item.get("candidate_id", ""))
+        label = str(item.get("label", ""))
+        if not candidate_id or candidate_id in candidate_ids:
+            raise PromptBundleError("Live Prompt candidate ids must be non-empty and unique")
+        if label not in OPERATIONAL_LABELS or item.get("review_status") != LIVE_REVIEW_STATUS:
+            raise PromptBundleError("Live Prompt candidate must have an operational label and human review")
+        if tuple(item.get("roi", ())) != expected_roi:
+            raise PromptBundleError("Live Prompt candidate ROI differs from the approved ROI")
+        image_path = (project_root / str(item.get("image_path", ""))).resolve()
+        if not image_path.is_relative_to(project_root.resolve()):
+            raise PromptBundleError("Live Prompt candidate image must remain inside the project")
+        expected_hash = str(item.get("image_sha256", ""))
+        if not image_path.is_file() or sha256_file(image_path) != expected_hash:
+            raise PromptBundleError("Live Prompt candidate image hash verification failed")
+        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if image is None or image.shape != (expected_roi[3] - expected_roi[1], expected_roi[2] - expected_roi[0], 3):
+            raise PromptBundleError("Live Prompt candidate image has an invalid shape")
+        feature = extract_prompt_feature(np.ascontiguousarray(image))
+        source_session = str(item.get("source_live_session", ""))
+        source_frame = int(item.get("source_frame", 0))
+        prototype_id = f"{label}:live_calibration_candidate:{candidate_id}"
+        prototypes.append(PromptPrototype(
+            prototype_id, label, source_session, source_frame, feature
+        ))
+        metadata.append({
+            "candidate_id": candidate_id,
+            "prototype_id": prototype_id,
+            "label": label,
+            "review_status": LIVE_REVIEW_STATUS,
+            "source_live_session": source_session,
+            "source_frame": source_frame,
+            "image_path": str(item["image_path"]),
+            "image_sha256": expected_hash,
+            "source_screenshot_sha256": str(item.get("source_screenshot_sha256", "")),
+            "used_for_threshold_calibration": False,
+            "used_as_ground_truth": False,
+        })
+        candidate_ids.add(candidate_id)
+    return prototypes, metadata, sha256_file(manifest_path)
+
+
 def build_final_prompt_bundle(
     *,
     config_path: str | Path,
@@ -100,6 +166,7 @@ def build_final_prompt_bundle(
     loso_summary_path: str | Path,
     output_dir: str | Path,
     feature_cache: str | Path | None = None,
+    live_candidate_manifest: str | Path | None = None,
 ) -> Path:
     config_path = Path(config_path)
     manifest_path = Path(manifest_path)
@@ -107,6 +174,7 @@ def build_final_prompt_bundle(
     session_root = Path(session_root)
     loso_summary_path = Path(loso_summary_path)
     output_dir = Path(output_dir)
+    candidate_manifest_path = Path(live_candidate_manifest) if live_candidate_manifest else None
     rows = read_prompt_observation_manifest(manifest_path)
     sessions = tuple(sorted({row["session_id"] for row in rows}))
     if sessions != tuple(sorted(FORMAL_SESSION_IDS)) or TRIAL_SESSION_ID in sessions:
@@ -115,9 +183,15 @@ def build_final_prompt_bundle(
     if roi is None or roi.pixel != (940, 36, 1620, 100):
         raise PromptBundleError("Final bundle requires approved Prompt ROI [940, 36, 1620, 100]")
     features = load_or_build_features(rows, dataset_root, cache_path=feature_cache)
-    prototypes = build_prototypes(rows, features, FORMAL_SESSION_IDS)
-    if len(prototypes) != len(OPERATIONAL_LABELS) * len(FORMAL_SESSION_IDS):
-        raise PromptBundleError(f"Expected 35 final prototypes, built {len(prototypes)}")
+    base_prototypes = build_prototypes(rows, features, FORMAL_SESSION_IDS)
+    if len(base_prototypes) != len(OPERATIONAL_LABELS) * len(FORMAL_SESSION_IDS):
+        raise PromptBundleError(f"Expected 35 formal-session prototypes, built {len(base_prototypes)}")
+    live_prototypes, live_candidates, candidate_manifest_hash = _load_live_calibration_candidates(
+        candidate_manifest_path,
+        project_root=config_path.resolve().parents[1],
+        expected_roi=roi.pixel,
+    )
+    prototypes = tuple(base_prototypes) + tuple(live_prototypes)
     thresholds, margin, idle_stability, folds = _fold_calibration(loso_summary_path)
     ground_truth_hashes = {
         session_id: sha256_file(session_root / session_id / "prompt_ground_truth.yaml")
@@ -130,6 +204,11 @@ def build_final_prompt_bundle(
             "label": item.label,
             "source_session": item.source_session,
             "source_frame": item.source_frame,
+            "provenance": (
+                "formal_session_medoid"
+                if item.source_session in FORMAL_SESSION_IDS
+                else LIVE_REVIEW_STATUS
+            ),
         }
         for index, item in enumerate(prototypes)
     ]
@@ -142,8 +221,11 @@ def build_final_prompt_bundle(
             "source": "config/fishing_v2.yaml user-approved pixel ROI",
         },
         "preprocessing": PREPROCESSING,
+        "base_prototype_count": len(base_prototypes),
+        "live_calibration_candidate_count": len(live_prototypes),
         "prototype_count": len(prototypes),
         "prototype_index": prototype_index,
+        "live_calibration_candidates": live_candidates,
         "class_thresholds": thresholds,
         "ambiguity_margin": margin,
         "idle_stability_frames": idle_stability,
@@ -153,11 +235,13 @@ def build_final_prompt_bundle(
             "ambiguity_margin": "median across seven held-out folds",
             "idle_stability_frames": "maximum across seven held-out folds",
             "runtime_adaptation": False,
+            "live_candidates_used_for_threshold_calibration": False,
         },
         "training_session_ids": list(FORMAL_SESSION_IDS),
         "excluded_session_ids": [TRIAL_SESSION_ID],
         "source_manifest_sha256": sha256_file(manifest_path),
         "source_loso_summary_sha256": sha256_file(loso_summary_path),
+        "live_candidate_manifest_sha256": candidate_manifest_hash,
         "prompt_ground_truth_sha256": ground_truth_hashes,
         "fold_calibration": [
             {
@@ -220,7 +304,17 @@ def load_prompt_bundle(path: str | Path) -> LoadedPromptBundle:
     except (OSError, ValueError, KeyError) as exc:
         raise PromptBundleError(f"Prompt prototypes could not be decoded: {exc}") from exc
     index = bundle.get("prototype_index")
-    if not isinstance(index, list) or len(index) != 35 or vectors.shape[0] != len(index):
+    expected_count = int(bundle.get("prototype_count", 0))
+    base_count = int(bundle.get("base_prototype_count", 0))
+    candidate_count = int(bundle.get("live_calibration_candidate_count", 0))
+    if (
+        not isinstance(index, list)
+        or base_count != 35
+        or candidate_count not in {1, 2}
+        or expected_count != base_count + candidate_count
+        or len(index) != expected_count
+        or vectors.shape[0] != len(index)
+    ):
         raise PromptBundleError("Prompt bundle prototype index/count mismatch")
     training_sessions = tuple(str(item) for item in bundle.get("training_session_ids", []))
     if training_sessions != FORMAL_SESSION_IDS or TRIAL_SESSION_ID in training_sessions:

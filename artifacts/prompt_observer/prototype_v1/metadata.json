@@ -1,10 +1,10 @@
 {
-  "bundle_json_sha256": "0c4cf345fa4f65da529ceb01e6fe7061a2196b7aa5b0a2781f75f28f8e818334",
-  "bundle_sha256": "426dbdd152ce51521604be4893d9864dd3c6a4e4b4495bae08b7e4e1d914d851",
-  "bundle_version": "prototype_v1_final_1",
+  "bundle_json_sha256": "7b618d5ad8678823a918cfde98826c16387b4f32fba2b50ba95121d0cec5abdf",
+  "bundle_sha256": "7a6eaff6fc96ea695f55f94daa77a3478f060d62b304e568692a12fbd985964e",
+  "bundle_version": "prototype_v1_final_2",
   "contains_fonts": false,
   "contains_neural_network_weights": false,
   "hash_definition": "sha256(domain_separator + bundle.json bytes + separator + prototypes.npz bytes)",
   "immutable_runtime_calibration": true,
-  "prototypes_sha256": "547c7181a5ae8cfc5b698918dd6bb4eb326d04e3261c63e5f60c1bdcb2975c54"
+  "prototypes_sha256": "46a8e4690e2d8b5dd009230c950c6e195f65cab0e334b2b51a61f2c737807c10"
 }

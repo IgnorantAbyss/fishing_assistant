@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -23,6 +24,18 @@ OPERATIONAL_LABELS = (
     "HOOK_INSTRUCTION",
     "PRESS_INSTRUCTION",
 )
+
+
+def validate_prompt_input(frame: np.ndarray) -> None:
+    """Enforce the shared Replay/Live input contract: uint8 HxWx3 BGR contiguous."""
+    if not isinstance(frame, np.ndarray):
+        raise TypeError("Prompt input must be a numpy array")
+    if frame.dtype != np.uint8:
+        raise ValueError(f"Prompt input dtype must be uint8, got {frame.dtype}")
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError(f"Prompt input must be HxWx3 BGR, got shape {frame.shape}")
+    if not frame.flags.c_contiguous:
+        raise ValueError("Prompt input must be C-contiguous")
 
 
 @dataclass(frozen=True)
@@ -318,6 +331,7 @@ class PrototypePromptObserver:
         self._idle_streak = 0
 
     def observe(self, frame: np.ndarray, context: FrameContext) -> PromptObservation:
+        validate_prompt_input(frame)
         x1, y1, x2, y2 = self.roi.pixel_bounds(frame.shape[1], frame.shape[0])
         feature = extract_prompt_feature(frame[y1:y2, x1:x2])
         prediction = self.model.predict_feature(feature)
@@ -350,5 +364,7 @@ class PrototypePromptObserver:
                 "approved_roi": list(self.roi.pixel),
                 "idle_streak": self._idle_streak,
                 "idle_stability_frames": self.model.idle_stability_frames,
+                "input_contract": "uint8_hwc3_bgr_contiguous_0_255",
+                "feature_sha256": hashlib.sha256(feature.tobytes()).hexdigest(),
             },
         )

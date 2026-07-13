@@ -20,6 +20,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--session-root", type=Path, default=PROJECT_ROOT / "assets" / "replay" / "sessions")
     parser.add_argument("--loso-summary", type=Path, default=PROJECT_ROOT / "reports" / "fishing_v2" / "prompt_observer_prototype_summary.json")
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "artifacts" / "prompt_observer" / "prototype_v1")
+    parser.add_argument(
+        "--live-candidates", type=Path,
+        default=PROJECT_ROOT / "data" / "annotations" / "live_prompt_calibration_candidates.yaml",
+    )
     return parser.parse_args()
 
 
@@ -33,6 +37,7 @@ def main() -> int:
         loso_summary_path=args.loso_summary,
         output_dir=args.output,
         feature_cache=args.dataset / "features_prototype_v1.npz",
+        live_candidate_manifest=args.live_candidates,
     )
     bundle = load_prompt_bundle(output)
     print(f"bundle: {output}")

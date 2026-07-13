@@ -13,7 +13,8 @@
     ],
     "source": "config/fishing_v2.yaml user-approved pixel ROI"
   },
-  "bundle_version": "prototype_v1_final_1",
+  "base_prototype_count": 35,
+  "bundle_version": "prototype_v1_final_2",
   "class_thresholds": {
     "HOOK_INSTRUCTION": -0.11282175779342651,
     "IDLE_CAST": 0.18108483746647835,
@@ -111,6 +112,23 @@
     }
   ],
   "idle_stability_frames": 4,
+  "live_calibration_candidate_count": 1,
+  "live_calibration_candidates": [
+    {
+      "candidate_id": "live_idle_cast_20260713_000035",
+      "image_path": "assets/reference/prompt/live_idle_cast_20260713_000035.png",
+      "image_sha256": "eb6f330da792344dcbeb2552e8aa2612791ca8b19c9217090221deb1f6c01822",
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:live_calibration_candidate:live_idle_cast_20260713_000035",
+      "review_status": "human_confirmed_live_candidate",
+      "source_frame": 35,
+      "source_live_session": "session_20260713_172154",
+      "source_screenshot_sha256": "1425e69030d54867edb1e0d7a81702d3c32a54a8427f1b088c8162460cf85e82",
+      "used_as_ground_truth": false,
+      "used_for_threshold_calibration": false
+    }
+  ],
+  "live_candidate_manifest_sha256": "dfc71fb932a6200be71a6326cd4440b30577c304087b5dd960ccd4c0c5fd9397",
   "observer_version": "prototype_v1",
   "preprocessing": {
     "background_normalization": {
@@ -154,11 +172,12 @@
     "session_20260710_130308": "eef99507f1f92d6f0f51e37856cbd8d2182944cb37d347b5b38ee6fcff1e0258",
     "session_20260710_131254": "528d32830ab5ce93023351695adcd5d1f285f962c8d3697072baf246bb356acd"
   },
-  "prototype_count": 35,
+  "prototype_count": 36,
   "prototype_index": [
     {
       "label": "IDLE_CAST",
       "prototype_id": "IDLE_CAST:session_20260709_192315:000515",
+      "provenance": "formal_session_medoid",
       "row": 0,
       "source_frame": 515,
       "source_session": "session_20260709_192315"
@@ -166,6 +185,7 @@
     {
       "label": "IDLE_CAST",
       "prototype_id": "IDLE_CAST:session_20260710_061220:000551",
+      "provenance": "formal_session_medoid",
       "row": 1,
       "source_frame": 551,
       "source_session": "session_20260710_061220"
@@ -173,6 +193,7 @@
     {
       "label": "IDLE_CAST",
       "prototype_id": "IDLE_CAST:session_20260710_123210:000037",
+      "provenance": "formal_session_medoid",
       "row": 2,
       "source_frame": 37,
       "source_session": "session_20260710_123210"
@@ -180,6 +201,7 @@
     {
       "label": "IDLE_CAST",
       "prototype_id": "IDLE_CAST:session_20260710_124419:000015",
+      "provenance": "formal_session_medoid",
       "row": 3,
       "source_frame": 15,
       "source_session": "session_20260710_124419"
@@ -187,6 +209,7 @@
     {
       "label": "IDLE_CAST",
       "prototype_id": "IDLE_CAST:session_20260710_125441:000451",
+      "provenance": "formal_session_medoid",
       "row": 4,
       "source_frame": 451,
       "source_session": "session_20260710_125441"
@@ -194,6 +217,7 @@
     {
       "label": "IDLE_CAST",
       "prototype_id": "IDLE_CAST:session_20260710_130308:000075",
+      "provenance": "formal_session_medoid",
       "row": 5,
       "source_frame": 75,
       "source_session": "session_20260710_130308"
@@ -201,6 +225,7 @@
     {
       "label": "IDLE_CAST",
       "prototype_id": "IDLE_CAST:session_20260710_131254:000315",
+      "provenance": "formal_session_medoid",
       "row": 6,
       "source_frame": 315,
       "source_session": "session_20260710_131254"
@@ -208,6 +233,7 @@
     {
       "label": "WAITING_IN_PROGRESS",
       "prototype_id": "WAITING_IN_PROGRESS:session_20260709_192315:000144",
+      "provenance": "formal_session_medoid",
       "row": 7,
       "source_frame": 144,
       "source_session": "session_20260709_192315"
@@ -215,6 +241,7 @@
     {
       "label": "WAITING_IN_PROGRESS",
       "prototype_id": "WAITING_IN_PROGRESS:session_20260710_061220:000275",
+      "provenance": "formal_session_medoid",
       "row": 8,
       "source_frame": 275,
       "source_session": "session_20260710_061220"
@@ -222,6 +249,7 @@
     {
       "label": "WAITING_IN_PROGRESS",
       "prototype_id": "WAITING_IN_PROGRESS:session_20260710_123210:000272",
+      "provenance": "formal_session_medoid",
       "row": 9,
       "source_frame": 272,
       "source_session": "session_20260710_123210"
@@ -229,6 +257,7 @@
     {
       "label": "WAITING_IN_PROGRESS",
       "prototype_id": "WAITING_IN_PROGRESS:session_20260710_124419:000573",
+      "provenance": "formal_session_medoid",
       "row": 10,
       "source_frame": 573,
       "source_session": "session_20260710_124419"
@@ -236,6 +265,7 @@
     {
       "label": "WAITING_IN_PROGRESS",
       "prototype_id": "WAITING_IN_PROGRESS:session_20260710_125441:000483",
+      "provenance": "formal_session_medoid",
       "row": 11,
       "source_frame": 483,
       "source_session": "session_20260710_125441"
@@ -243,6 +273,7 @@
     {
       "label": "WAITING_IN_PROGRESS",
       "prototype_id": "WAITING_IN_PROGRESS:session_20260710_130308:000297",
+      "provenance": "formal_session_medoid",
       "row": 12,
       "source_frame": 297,
       "source_session": "session_20260710_130308"
@@ -250,6 +281,7 @@
     {
       "label": "WAITING_IN_PROGRESS",
       "prototype_id": "WAITING_IN_PROGRESS:session_20260710_131254:000434",
+      "provenance": "formal_session_medoid",
       "row": 13,
       "source_frame": 434,
       "source_session": "session_20260710_131254"
@@ -257,6 +289,7 @@
     {
       "label": "READY_BITE",
       "prototype_id": "READY_BITE:session_20260709_192315:000450",
+      "provenance": "formal_session_medoid",
       "row": 14,
       "source_frame": 450,
       "source_session": "session_20260709_192315"
@@ -264,6 +297,7 @@
     {
       "label": "READY_BITE",
       "prototype_id": "READY_BITE:session_20260710_061220:000469",
+      "provenance": "formal_session_medoid",
       "row": 15,
       "source_frame": 469,
       "source_session": "session_20260710_061220"
@@ -271,6 +305,7 @@
     {
       "label": "READY_BITE",
       "prototype_id": "READY_BITE:session_20260710_123210:000526",
+      "provenance": "formal_session_medoid",
       "row": 16,
       "source_frame": 526,
       "source_session": "session_20260710_123210"
@@ -278,6 +313,7 @@
     {
       "label": "READY_BITE",
       "prototype_id": "READY_BITE:session_20260710_124419:000299",
+      "provenance": "formal_session_medoid",
       "row": 17,
       "source_frame": 299,
       "source_session": "session_20260710_124419"
@@ -285,6 +321,7 @@
     {
       "label": "READY_BITE",
       "prototype_id": "READY_BITE:session_20260710_125441:000286",
+      "provenance": "formal_session_medoid",
       "row": 18,
       "source_frame": 286,
       "source_session": "session_20260710_125441"
@@ -292,6 +329,7 @@
     {
       "label": "READY_BITE",
       "prototype_id": "READY_BITE:session_20260710_130308:000338",
+      "provenance": "formal_session_medoid",
       "row": 19,
       "source_frame": 338,
       "source_session": "session_20260710_130308"
@@ -299,6 +337,7 @@
     {
       "label": "READY_BITE",
       "prototype_id": "READY_BITE:session_20260710_131254:000186",
+      "provenance": "formal_session_medoid",
       "row": 20,
       "source_frame": 186,
       "source_session": "session_20260710_131254"
@@ -306,6 +345,7 @@
     {
       "label": "HOOK_INSTRUCTION",
       "prototype_id": "HOOK_INSTRUCTION:session_20260709_192315:000465",
+      "provenance": "formal_session_medoid",
       "row": 21,
       "source_frame": 465,
       "source_session": "session_20260709_192315"
@@ -313,6 +353,7 @@
     {
       "label": "HOOK_INSTRUCTION",
       "prototype_id": "HOOK_INSTRUCTION:session_20260710_061220:000500",
+      "provenance": "formal_session_medoid",
       "row": 22,
       "source_frame": 500,
       "source_session": "session_20260710_061220"
@@ -320,6 +361,7 @@
     {
       "label": "HOOK_INSTRUCTION",
       "prototype_id": "HOOK_INSTRUCTION:session_20260710_123210:000565",
+      "provenance": "formal_session_medoid",
       "row": 23,
       "source_frame": 565,
       "source_session": "session_20260710_123210"
@@ -327,6 +369,7 @@
     {
       "label": "HOOK_INSTRUCTION",
       "prototype_id": "HOOK_INSTRUCTION:session_20260710_124419:000322",
+      "provenance": "formal_session_medoid",
       "row": 24,
       "source_frame": 322,
       "source_session": "session_20260710_124419"
@@ -334,6 +377,7 @@
     {
       "label": "HOOK_INSTRUCTION",
       "prototype_id": "HOOK_INSTRUCTION:session_20260710_125441:000371",
+      "provenance": "formal_session_medoid",
       "row": 25,
       "source_frame": 371,
       "source_session": "session_20260710_125441"
@@ -341,6 +385,7 @@
     {
       "label": "HOOK_INSTRUCTION",
       "prototype_id": "HOOK_INSTRUCTION:session_20260710_130308:000045",
+      "provenance": "formal_session_medoid",
       "row": 26,
       "source_frame": 45,
       "source_session": "session_20260710_130308"
@@ -348,6 +393,7 @@
     {
       "label": "HOOK_INSTRUCTION",
       "prototype_id": "HOOK_INSTRUCTION:session_20260710_131254:000216",
+      "provenance": "formal_session_medoid",
       "row": 27,
       "source_frame": 216,
       "source_session": "session_20260710_131254"
@@ -355,6 +401,7 @@
     {
       "label": "PRESS_INSTRUCTION",
       "prototype_id": "PRESS_INSTRUCTION:session_20260709_192315:000479",
+      "provenance": "formal_session_medoid",
       "row": 28,
       "source_frame": 479,
       "source_session": "session_20260709_192315"
@@ -362,6 +409,7 @@
     {
       "label": "PRESS_INSTRUCTION",
       "prototype_id": "PRESS_INSTRUCTION:session_20260710_061220:000514",
+      "provenance": "formal_session_medoid",
       "row": 29,
       "source_frame": 514,
       "source_session": "session_20260710_061220"
@@ -369,6 +417,7 @@
     {
       "label": "PRESS_INSTRUCTION",
       "prototype_id": "PRESS_INSTRUCTION:session_20260710_123210:000577",
+      "provenance": "formal_session_medoid",
       "row": 30,
       "source_frame": 577,
       "source_session": "session_20260710_123210"
@@ -376,6 +425,7 @@
     {
       "label": "PRESS_INSTRUCTION",
       "prototype_id": "PRESS_INSTRUCTION:session_20260710_124419:000344",
+      "provenance": "formal_session_medoid",
       "row": 31,
       "source_frame": 344,
       "source_session": "session_20260710_124419"
@@ -383,6 +433,7 @@
     {
       "label": "PRESS_INSTRUCTION",
       "prototype_id": "PRESS_INSTRUCTION:session_20260710_125441:000410",
+      "provenance": "formal_session_medoid",
       "row": 32,
       "source_frame": 410,
       "source_session": "session_20260710_125441"
@@ -390,6 +441,7 @@
     {
       "label": "PRESS_INSTRUCTION",
       "prototype_id": "PRESS_INSTRUCTION:session_20260710_130308:000428",
+      "provenance": "formal_session_medoid",
       "row": 33,
       "source_frame": 428,
       "source_session": "session_20260710_130308"
@@ -397,18 +449,28 @@
     {
       "label": "PRESS_INSTRUCTION",
       "prototype_id": "PRESS_INSTRUCTION:session_20260710_131254:000235",
+      "provenance": "formal_session_medoid",
       "row": 34,
       "source_frame": 235,
       "source_session": "session_20260710_131254"
+    },
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:live_calibration_candidate:live_idle_cast_20260713_000035",
+      "provenance": "human_confirmed_live_candidate",
+      "row": 35,
+      "source_frame": 35,
+      "source_session": "session_20260713_172154"
     }
   ],
-  "prototypes_sha256": "547c7181a5ae8cfc5b698918dd6bb4eb326d04e3261c63e5f60c1bdcb2975c54",
+  "prototypes_sha256": "46a8e4690e2d8b5dd009230c950c6e195f65cab0e334b2b51a61f2c737807c10",
   "source_loso_summary_sha256": "4362cfd75a21f9c325c91292efc9fca0ca4c8263173a59febb0b503043cc5ae6",
   "source_manifest_sha256": "24c03e17bed1a81900021e1ba8a141e188538d7f42d599581d42ad08b40f2487",
   "threshold_aggregation": {
     "ambiguity_margin": "median across seven held-out folds",
     "class_thresholds": "per-class median across seven held-out folds",
     "idle_stability_frames": "maximum across seven held-out folds",
+    "live_candidates_used_for_threshold_calibration": false,
     "runtime_adaptation": false,
     "source": "seven LOSO folds with nested training-session calibration"
   },
