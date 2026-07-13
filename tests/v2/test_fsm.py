@@ -55,8 +55,8 @@ CONFIG = FSMConfig(
     result_pending_timeout_sec=1.0,
     collect_pending_timeout_sec=1.0,
     sync_lost_timeout_sec=0.5,
-    hook_safe_zone_start=0.65,
-    hook_safe_zone_end=0.85,
+    hook_divider_safety_margin_px=10,
+    hook_fallback_trigger_threshold=0.70,
     get_retry_interval_seconds=0.4,
     get_max_attempts=12,
     get_max_duration_seconds=5.0,
@@ -119,14 +119,15 @@ def test_hook_bar_confirms_hook_active() -> None:
     assert result.next_state == RuntimeState.HOOK
 
 
-def test_hook_safe_zone_emits_once_without_waiting_for_perfect() -> None:
+def test_hook_fallback_threshold_emits_once_without_waiting_for_perfect() -> None:
     fsm = FishingFSM(CONFIG, initial_state=RuntimeState.HOOK)
     result = fsm.advance(
         _evidence(RuntimeState.HOOK), 0.1,
         _bundle(hook=True, fill_ratio=0.70),
     )
     assert result.action_request.intent == ActionIntent.HOOK_ACTION
-    assert result.action_request.payload["position_ratio"] == 0.70
+    assert result.action_request.payload["fill_ratio"] == 0.70
+    assert result.action_request.payload["fallback_used"] is True
     assert result.next_state == RuntimeState.HOOK
     assert 0.70 != 0.95  # The runtime deliberately does not chase the detector's perfect zone.
     assert fsm.commit_action(result.action_request, 0.1).next_state == RuntimeState.RESULT_PENDING

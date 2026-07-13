@@ -70,6 +70,10 @@ hook_detector:
   safe_zone_start: 0.65
   safe_zone_end: 0.85
 
+hook:
+  divider_safety_margin_px: 10
+  fallback_trigger_threshold: 0.70
+
 press_detector:
   armed_fps: 5
   burst_fps: 20

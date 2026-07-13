@@ -45,8 +45,8 @@ def _config_objects(config_path: Path):
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     fsm = dict(data["fsm"])
     fsm.update({
-        "hook_safe_zone_start": data["hook_detector"]["safe_zone_start"],
-        "hook_safe_zone_end": data["hook_detector"]["safe_zone_end"],
+        "hook_divider_safety_margin_px": data["hook"]["divider_safety_margin_px"],
+        "hook_fallback_trigger_threshold": data["hook"]["fallback_trigger_threshold"],
         "get_retry_interval_seconds": data["get_detector"]["retry_interval_seconds"],
         "get_max_attempts": data["get_detector"]["max_attempts"],
         "get_max_duration_seconds": data["get_detector"]["max_duration_seconds"],

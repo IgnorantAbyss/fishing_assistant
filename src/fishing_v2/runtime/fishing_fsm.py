@@ -10,6 +10,10 @@ from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import StateEvidence
 from src.fishing_v2.fusion.transition_policy import TransitionPolicy
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
+from src.fishing_v2.runtime.hook_action_policy import (
+    HookActionPolicy,
+    HookActionPolicyConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -20,16 +24,18 @@ class FSMConfig:
     result_pending_timeout_sec: float = 5.0
     collect_pending_timeout_sec: float = 4.0
     sync_lost_timeout_sec: float = 2.0
-    hook_safe_zone_start: float = 0.65
-    hook_safe_zone_end: float = 0.85
+    hook_divider_safety_margin_px: int = 10
+    hook_fallback_trigger_threshold: float = 0.70
     get_retry_interval_seconds: float = 0.4
     get_max_attempts: int = 12
     get_max_duration_seconds: float = 5.0
     recorded_press_exit_idle_frames: int = 4
 
     def __post_init__(self) -> None:
-        if not 0.0 <= self.hook_safe_zone_start < self.hook_safe_zone_end <= 1.0:
-            raise ValueError("HOOK safe zone must be an ordered ratio within 0..1")
+        HookActionPolicyConfig(
+            self.hook_divider_safety_margin_px,
+            self.hook_fallback_trigger_threshold,
+        )
         if not 0.3 <= self.get_retry_interval_seconds <= 0.5:
             raise ValueError("GET retry interval must remain within the reviewed 0.3..0.5 second range")
         if self.get_max_attempts < 1 or self.get_max_duration_seconds <= 0:
@@ -75,10 +81,15 @@ class FishingFSM:
         self._pending_request: ActionRequest | None = None
         self._press_waiting_for_clear = False
         self._press_intent_proposed = False
+        self._hook_intent_proposed = False
         self._get_started_at: float | None = initial_timestamp if initial_state == RuntimeState.GET else None
         self._get_last_applied_at: float | None = None
         self._get_attempts = 0
         self.policy = TransitionPolicy()
+        self.hook_action_policy = HookActionPolicy(HookActionPolicyConfig(
+            self.config.hook_divider_safety_margin_px,
+            self.config.hook_fallback_trigger_threshold,
+        ))
 
     @property
     def actions_applied(self) -> frozenset[tuple[RuntimeState, ActionIntent]]:
@@ -109,6 +120,7 @@ class FishingFSM:
         self._conflict_since = None
         self._pending_request = None
         self._press_intent_proposed = False
+        self._hook_intent_proposed = False
         if state == RuntimeState.GET:
             self._reset_get_retry(timestamp)
         return FSMResult(previous, state, self._none(), reason, previous != state)
@@ -134,9 +146,12 @@ class FishingFSM:
             self._press_intent_proposed = False
         elif previous == RuntimeState.PRESS and target != RuntimeState.PRESS:
             self._press_intent_proposed = False
+        if target == RuntimeState.HOOK and previous != RuntimeState.HOOK:
+            self._hook_intent_proposed = False
         if target == RuntimeState.IDLE and previous != RuntimeState.IDLE:
             self._actions_applied.clear()
             self._press_waiting_for_clear = False
+            self._hook_intent_proposed = False
         return FSMResult(
             previous, target, self._none(), reason, previous != target,
             visual_acknowledgement=visual_acknowledgement,
@@ -152,6 +167,8 @@ class FishingFSM:
     ) -> ActionRequest:
         if intent == ActionIntent.PRESS_SEQUENCE and self._press_intent_proposed:
             return self._none("press_sequence_already_proposed_in_episode")
+        if intent == ActionIntent.HOOK_ACTION and self._hook_intent_proposed:
+            return self._none("hook_action_already_proposed_in_episode")
         key = (self.state, intent)
         if key in self._actions_applied and intent != ActionIntent.COLLECT:
             return self._none("action_already_applied_in_state")
@@ -159,6 +176,8 @@ class FishingFSM:
         self._pending_request = request
         if intent == ActionIntent.PRESS_SEQUENCE:
             self._press_intent_proposed = True
+        elif intent == ActionIntent.HOOK_ACTION:
+            self._hook_intent_proposed = True
         return request
 
     def discard_proposal(self) -> None:
@@ -467,20 +486,19 @@ class FishingFSM:
 
         if self.state == RuntimeState.HOOK:
             hook = bundle.hook if bundle else None
-            position = hook.fill_ratio if hook and hook.detected else None
-            if position is not None and self.config.hook_safe_zone_start <= position <= self.config.hook_safe_zone_end:
+            decision = self.hook_action_policy.evaluate(
+                hook,
+                action_already_proposed=self._hook_intent_proposed,
+            )
+            if decision.action_ready:
                 action = self._propose(
                     ActionIntent.HOOK_ACTION,
                     max(evidence.confidence, hook.confidence),
-                    "hook_cursor_entered_configured_safe_zone",
-                    payload={
-                        "position_ratio": position,
-                        "safe_zone_start": self.config.hook_safe_zone_start,
-                        "safe_zone_end": self.config.hook_safe_zone_end,
-                    },
+                    "hook_fill_safely_crossed_threshold",
+                    payload=decision.payload(),
                 )
                 return FSMResult(previous, previous, action, "hook_action_proposed", False)
-            return self._held(previous, "hook_waiting_for_configured_safe_zone", failed_telemetry)
+            return self._held(previous, decision.reason, failed_telemetry)
 
         if self.state == RuntimeState.PRESS:
             panel = bundle.press if bundle else None
