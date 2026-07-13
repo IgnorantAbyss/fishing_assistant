@@ -1,0 +1,424 @@
+{
+  "ambiguity_margin": 0.27912049531936645,
+  "approved_roi": {
+    "pixel": [
+      940,
+      36,
+      1620,
+      100
+    ],
+    "reference_resolution": [
+      2560,
+      1440
+    ],
+    "source": "config/fishing_v2.yaml user-approved pixel ROI"
+  },
+  "bundle_version": "prototype_v1_final_1",
+  "class_thresholds": {
+    "HOOK_INSTRUCTION": -0.11282175779342651,
+    "IDLE_CAST": 0.18108483746647835,
+    "PRESS_INSTRUCTION": 0.3142213869094845,
+    "READY_BITE": 0.9029325246810913,
+    "WAITING_IN_PROGRESS": 0.092374726831913
+  },
+  "excluded_session_ids": [
+    "session_20260709_192231"
+  ],
+  "fold_calibration": [
+    {
+      "ambiguity_margin": 0.018877989538013933,
+      "class_thresholds": {
+        "HOOK_INSTRUCTION": -0.11282175779342651,
+        "IDLE_CAST": 0.7545939683914216,
+        "PRESS_INSTRUCTION": 0.26143968701362724,
+        "READY_BITE": -0.07837156981229781,
+        "WAITING_IN_PROGRESS": 0.0729857087135316
+      },
+      "held_out_session": "session_20260709_192315",
+      "idle_stability_frames": 4
+    },
+    {
+      "ambiguity_margin": 0.2813856706023216,
+      "class_thresholds": {
+        "HOOK_INSTRUCTION": -0.11575339734554291,
+        "IDLE_CAST": 0.18108483746647835,
+        "PRESS_INSTRUCTION": 0.3142213869094845,
+        "READY_BITE": 0.9029325246810913,
+        "WAITING_IN_PROGRESS": 0.8909605991840363
+      },
+      "held_out_session": "session_20260710_061220",
+      "idle_stability_frames": 4
+    },
+    {
+      "ambiguity_margin": 0.02268120639026165,
+      "class_thresholds": {
+        "HOOK_INSTRUCTION": 0.9088095426559448,
+        "IDLE_CAST": 0.8978928595781326,
+        "PRESS_INSTRUCTION": 0.18054085969924927,
+        "READY_BITE": 0.9108792424201966,
+        "WAITING_IN_PROGRESS": 0.06187854111194611
+      },
+      "held_out_session": "session_20260710_123210",
+      "idle_stability_frames": 3
+    },
+    {
+      "ambiguity_margin": 0.28356534034013753,
+      "class_thresholds": {
+        "HOOK_INSTRUCTION": -0.11282175779342651,
+        "IDLE_CAST": 0.17912674099206932,
+        "PRESS_INSTRUCTION": 0.5931248790025709,
+        "READY_BITE": 0.9049251401424407,
+        "WAITING_IN_PROGRESS": 0.092374726831913
+      },
+      "held_out_session": "session_20260710_124419",
+      "idle_stability_frames": 4
+    },
+    {
+      "ambiguity_margin": 0.020191600862890482,
+      "class_thresholds": {
+        "HOOK_INSTRUCTION": 0.9099000585079193,
+        "IDLE_CAST": 0.17593131065368658,
+        "PRESS_INSTRUCTION": 0.8761719989776606,
+        "READY_BITE": 0.9029325246810913,
+        "WAITING_IN_PROGRESS": 0.8948927307128907
+      },
+      "held_out_session": "session_20260710_125441",
+      "idle_stability_frames": 4
+    },
+    {
+      "ambiguity_margin": 0.27912049531936645,
+      "class_thresholds": {
+        "HOOK_INSTRUCTION": -0.11282175779342651,
+        "IDLE_CAST": 0.18272411823272705,
+        "PRESS_INSTRUCTION": 0.41514745891094285,
+        "READY_BITE": 0.6282183599472043,
+        "WAITING_IN_PROGRESS": 0.8961397159099579
+      },
+      "held_out_session": "session_20260710_130308",
+      "idle_stability_frames": 4
+    },
+    {
+      "ambiguity_margin": 0.28023827493190767,
+      "class_thresholds": {
+        "HOOK_INSTRUCTION": -0.11282175779342651,
+        "IDLE_CAST": 0.17642316669225697,
+        "PRESS_INSTRUCTION": 0.18045727387070656,
+        "READY_BITE": 0.2750144338607791,
+        "WAITING_IN_PROGRESS": 0.06236196801066399
+      },
+      "held_out_session": "session_20260710_131254",
+      "idle_stability_frames": 4
+    }
+  ],
+  "idle_stability_frames": 4,
+  "observer_version": "prototype_v1",
+  "preprocessing": {
+    "background_normalization": {
+      "method": "gaussian_subtraction",
+      "sigma_x": 7.0,
+      "sigma_y": 7.0
+    },
+    "bright_text_mask": {
+      "gray_min": 145,
+      "positive_local_min": 8
+    },
+    "clahe": {
+      "clip_limit": 2.0,
+      "tile_grid_size": [
+        8,
+        4
+      ]
+    },
+    "color": "BGR_to_grayscale_luminance",
+    "edge_emphasis": {
+      "kernel_size": 3,
+      "method": "sobel_magnitude"
+    },
+    "feature_channels": [
+      "bright_local",
+      "gradient"
+    ],
+    "fixed_size": [
+      170,
+      16
+    ],
+    "normalization": "per_channel_mean_center_l2_then_joint_l2",
+    "similarity": "cosine_max_over_class_prototypes"
+  },
+  "prompt_ground_truth_sha256": {
+    "session_20260709_192315": "354091eaee34262cd5fa39cf64cc9cfee0af9492eaada8f430ac25fece283746",
+    "session_20260710_061220": "a83157b53356722168468e0719b64b77a0f3a2bfcaeddc91a06624725b0f90df",
+    "session_20260710_123210": "26b10eb7f4b575adfc14626070cff7e4e30f3f0cb46433d1371fb7590dcb5b7d",
+    "session_20260710_124419": "b796be28c18b84e951c7c314d9e207e8143095949a45a331455ef3700c200104",
+    "session_20260710_125441": "a0d7796d8b466c49d80401a93b27db4b7c8e07f3e00ab9e68ac11db3f2f4e764",
+    "session_20260710_130308": "eef99507f1f92d6f0f51e37856cbd8d2182944cb37d347b5b38ee6fcff1e0258",
+    "session_20260710_131254": "528d32830ab5ce93023351695adcd5d1f285f962c8d3697072baf246bb356acd"
+  },
+  "prototype_count": 35,
+  "prototype_index": [
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:session_20260709_192315:000515",
+      "row": 0,
+      "source_frame": 515,
+      "source_session": "session_20260709_192315"
+    },
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:session_20260710_061220:000551",
+      "row": 1,
+      "source_frame": 551,
+      "source_session": "session_20260710_061220"
+    },
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:session_20260710_123210:000037",
+      "row": 2,
+      "source_frame": 37,
+      "source_session": "session_20260710_123210"
+    },
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:session_20260710_124419:000015",
+      "row": 3,
+      "source_frame": 15,
+      "source_session": "session_20260710_124419"
+    },
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:session_20260710_125441:000451",
+      "row": 4,
+      "source_frame": 451,
+      "source_session": "session_20260710_125441"
+    },
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:session_20260710_130308:000075",
+      "row": 5,
+      "source_frame": 75,
+      "source_session": "session_20260710_130308"
+    },
+    {
+      "label": "IDLE_CAST",
+      "prototype_id": "IDLE_CAST:session_20260710_131254:000315",
+      "row": 6,
+      "source_frame": 315,
+      "source_session": "session_20260710_131254"
+    },
+    {
+      "label": "WAITING_IN_PROGRESS",
+      "prototype_id": "WAITING_IN_PROGRESS:session_20260709_192315:000144",
+      "row": 7,
+      "source_frame": 144,
+      "source_session": "session_20260709_192315"
+    },
+    {
+      "label": "WAITING_IN_PROGRESS",
+      "prototype_id": "WAITING_IN_PROGRESS:session_20260710_061220:000275",
+      "row": 8,
+      "source_frame": 275,
+      "source_session": "session_20260710_061220"
+    },
+    {
+      "label": "WAITING_IN_PROGRESS",
+      "prototype_id": "WAITING_IN_PROGRESS:session_20260710_123210:000272",
+      "row": 9,
+      "source_frame": 272,
+      "source_session": "session_20260710_123210"
+    },
+    {
+      "label": "WAITING_IN_PROGRESS",
+      "prototype_id": "WAITING_IN_PROGRESS:session_20260710_124419:000573",
+      "row": 10,
+      "source_frame": 573,
+      "source_session": "session_20260710_124419"
+    },
+    {
+      "label": "WAITING_IN_PROGRESS",
+      "prototype_id": "WAITING_IN_PROGRESS:session_20260710_125441:000483",
+      "row": 11,
+      "source_frame": 483,
+      "source_session": "session_20260710_125441"
+    },
+    {
+      "label": "WAITING_IN_PROGRESS",
+      "prototype_id": "WAITING_IN_PROGRESS:session_20260710_130308:000297",
+      "row": 12,
+      "source_frame": 297,
+      "source_session": "session_20260710_130308"
+    },
+    {
+      "label": "WAITING_IN_PROGRESS",
+      "prototype_id": "WAITING_IN_PROGRESS:session_20260710_131254:000434",
+      "row": 13,
+      "source_frame": 434,
+      "source_session": "session_20260710_131254"
+    },
+    {
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:session_20260709_192315:000450",
+      "row": 14,
+      "source_frame": 450,
+      "source_session": "session_20260709_192315"
+    },
+    {
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:session_20260710_061220:000469",
+      "row": 15,
+      "source_frame": 469,
+      "source_session": "session_20260710_061220"
+    },
+    {
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:session_20260710_123210:000526",
+      "row": 16,
+      "source_frame": 526,
+      "source_session": "session_20260710_123210"
+    },
+    {
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:session_20260710_124419:000299",
+      "row": 17,
+      "source_frame": 299,
+      "source_session": "session_20260710_124419"
+    },
+    {
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:session_20260710_125441:000286",
+      "row": 18,
+      "source_frame": 286,
+      "source_session": "session_20260710_125441"
+    },
+    {
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:session_20260710_130308:000338",
+      "row": 19,
+      "source_frame": 338,
+      "source_session": "session_20260710_130308"
+    },
+    {
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:session_20260710_131254:000186",
+      "row": 20,
+      "source_frame": 186,
+      "source_session": "session_20260710_131254"
+    },
+    {
+      "label": "HOOK_INSTRUCTION",
+      "prototype_id": "HOOK_INSTRUCTION:session_20260709_192315:000465",
+      "row": 21,
+      "source_frame": 465,
+      "source_session": "session_20260709_192315"
+    },
+    {
+      "label": "HOOK_INSTRUCTION",
+      "prototype_id": "HOOK_INSTRUCTION:session_20260710_061220:000500",
+      "row": 22,
+      "source_frame": 500,
+      "source_session": "session_20260710_061220"
+    },
+    {
+      "label": "HOOK_INSTRUCTION",
+      "prototype_id": "HOOK_INSTRUCTION:session_20260710_123210:000565",
+      "row": 23,
+      "source_frame": 565,
+      "source_session": "session_20260710_123210"
+    },
+    {
+      "label": "HOOK_INSTRUCTION",
+      "prototype_id": "HOOK_INSTRUCTION:session_20260710_124419:000322",
+      "row": 24,
+      "source_frame": 322,
+      "source_session": "session_20260710_124419"
+    },
+    {
+      "label": "HOOK_INSTRUCTION",
+      "prototype_id": "HOOK_INSTRUCTION:session_20260710_125441:000371",
+      "row": 25,
+      "source_frame": 371,
+      "source_session": "session_20260710_125441"
+    },
+    {
+      "label": "HOOK_INSTRUCTION",
+      "prototype_id": "HOOK_INSTRUCTION:session_20260710_130308:000045",
+      "row": 26,
+      "source_frame": 45,
+      "source_session": "session_20260710_130308"
+    },
+    {
+      "label": "HOOK_INSTRUCTION",
+      "prototype_id": "HOOK_INSTRUCTION:session_20260710_131254:000216",
+      "row": 27,
+      "source_frame": 216,
+      "source_session": "session_20260710_131254"
+    },
+    {
+      "label": "PRESS_INSTRUCTION",
+      "prototype_id": "PRESS_INSTRUCTION:session_20260709_192315:000479",
+      "row": 28,
+      "source_frame": 479,
+      "source_session": "session_20260709_192315"
+    },
+    {
+      "label": "PRESS_INSTRUCTION",
+      "prototype_id": "PRESS_INSTRUCTION:session_20260710_061220:000514",
+      "row": 29,
+      "source_frame": 514,
+      "source_session": "session_20260710_061220"
+    },
+    {
+      "label": "PRESS_INSTRUCTION",
+      "prototype_id": "PRESS_INSTRUCTION:session_20260710_123210:000577",
+      "row": 30,
+      "source_frame": 577,
+      "source_session": "session_20260710_123210"
+    },
+    {
+      "label": "PRESS_INSTRUCTION",
+      "prototype_id": "PRESS_INSTRUCTION:session_20260710_124419:000344",
+      "row": 31,
+      "source_frame": 344,
+      "source_session": "session_20260710_124419"
+    },
+    {
+      "label": "PRESS_INSTRUCTION",
+      "prototype_id": "PRESS_INSTRUCTION:session_20260710_125441:000410",
+      "row": 32,
+      "source_frame": 410,
+      "source_session": "session_20260710_125441"
+    },
+    {
+      "label": "PRESS_INSTRUCTION",
+      "prototype_id": "PRESS_INSTRUCTION:session_20260710_130308:000428",
+      "row": 33,
+      "source_frame": 428,
+      "source_session": "session_20260710_130308"
+    },
+    {
+      "label": "PRESS_INSTRUCTION",
+      "prototype_id": "PRESS_INSTRUCTION:session_20260710_131254:000235",
+      "row": 34,
+      "source_frame": 235,
+      "source_session": "session_20260710_131254"
+    }
+  ],
+  "prototypes_sha256": "547c7181a5ae8cfc5b698918dd6bb4eb326d04e3261c63e5f60c1bdcb2975c54",
+  "source_loso_summary_sha256": "4362cfd75a21f9c325c91292efc9fca0ca4c8263173a59febb0b503043cc5ae6",
+  "source_manifest_sha256": "24c03e17bed1a81900021e1ba8a141e188538d7f42d599581d42ad08b40f2487",
+  "threshold_aggregation": {
+    "ambiguity_margin": "median across seven held-out folds",
+    "class_thresholds": "per-class median across seven held-out folds",
+    "idle_stability_frames": "maximum across seven held-out folds",
+    "runtime_adaptation": false,
+    "source": "seven LOSO folds with nested training-session calibration"
+  },
+  "training_session_ids": [
+    "session_20260709_192315",
+    "session_20260710_061220",
+    "session_20260710_123210",
+    "session_20260710_124419",
+    "session_20260710_125441",
+    "session_20260710_130308",
+    "session_20260710_131254"
+  ]
+}

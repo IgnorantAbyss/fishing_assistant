@@ -1,0 +1,10 @@
+{
+  "bundle_json_sha256": "0c4cf345fa4f65da529ceb01e6fe7061a2196b7aa5b0a2781f75f28f8e818334",
+  "bundle_sha256": "426dbdd152ce51521604be4893d9864dd3c6a4e4b4495bae08b7e4e1d914d851",
+  "bundle_version": "prototype_v1_final_1",
+  "contains_fonts": false,
+  "contains_neural_network_weights": false,
+  "hash_definition": "sha256(domain_separator + bundle.json bytes + separator + prototypes.npz bytes)",
+  "immutable_runtime_calibration": true,
+  "prototypes_sha256": "547c7181a5ae8cfc5b698918dd6bb4eb326d04e3261c63e5f60c1bdcb2975c54"
+}

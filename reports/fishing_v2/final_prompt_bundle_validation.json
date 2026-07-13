@@ -1,0 +1,901 @@
+{
+  "bundle_version": "prototype_v1_final_1",
+  "bundle_sha256": "426dbdd152ce51521604be4893d9864dd3c6a4e4b4495bae08b7e4e1d914d851",
+  "prototype_count": 35,
+  "class_thresholds": {
+    "IDLE_CAST": 0.18108483746647835,
+    "WAITING_IN_PROGRESS": 0.092374726831913,
+    "READY_BITE": 0.9029325246810913,
+    "HOOK_INSTRUCTION": -0.11282175779342651,
+    "PRESS_INSTRUCTION": 0.3142213869094845
+  },
+  "ambiguity_margin": 0.27912049531936645,
+  "idle_stability_frames": 4,
+  "deployment_regression_only": true,
+  "loso_generalization_report": "reports/fishing_v2/prompt_observer_prototype_summary.json",
+  "observer": "prototype_v1",
+  "mode": "predicted_prompt",
+  "formal_sessions": [
+    "session_20260709_192315",
+    "session_20260710_061220",
+    "session_20260710_123210",
+    "session_20260710_124419",
+    "session_20260710_125441",
+    "session_20260710_130308",
+    "session_20260710_131254"
+  ],
+  "replay_complete_count": 7,
+  "fail_frames": 0,
+  "actions_applied": 0,
+  "false_intents": 0,
+  "missed_expected_intents": 0,
+  "sync_required_frames": 0,
+  "event_outcomes": {
+    "READY_BITE": [
+      9,
+      9
+    ],
+    "HOOK_INSTRUCTION": [
+      9,
+      9
+    ],
+    "PRESS_INSTRUCTION": [
+      8,
+      8
+    ],
+    "GET": [
+      5,
+      5
+    ]
+  },
+  "mean_runtime_state_frame_agreement": 0.9971428571428573,
+  "mean_transition_agreement": 0.8673221515326778,
+  "result_counts": {
+    "PASS": 7
+  },
+  "prompt_observer_ready_for_live_detect_only": true,
+  "sessions": [
+    {
+      "session": "session_20260709_192315",
+      "frames": 600,
+      "scripted_final_state": "WAITING",
+      "predicted_final_state": "WAITING",
+      "replay_completed": true,
+      "runtime_state_frame_agreement": 0.9983333333333333,
+      "transition_agreement": 0.8461538461538461,
+      "scripted_transitions": 12,
+      "predicted_transitions": 12,
+      "prompt_events": {
+        "READY_BITE": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 443,
+              "ground_truth_end": 453,
+              "first_prompt_frame": 443,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            }
+          ]
+        },
+        "HOOK_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 454,
+              "ground_truth_end": 471,
+              "first_prompt_frame": 454,
+              "first_specialized_evidence_frame": 459,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        },
+        "PRESS_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 472,
+              "ground_truth_end": 483,
+              "first_prompt_frame": 472,
+              "first_specialized_evidence_frame": 472,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        }
+      },
+      "get_outcome": {
+        "episodes": 1,
+        "runtime_get_episodes": 1,
+        "false_cast_frames": []
+      },
+      "scripted_proposed_intents": {
+        "CAST": 40,
+        "START_HOOK": 9,
+        "HOOK_ACTION": 1,
+        "PRESS_SEQUENCE": 1,
+        "COLLECT": 13
+      },
+      "predicted_proposed_intents": {
+        "CAST": 39,
+        "START_HOOK": 9,
+        "HOOK_ACTION": 1,
+        "PRESS_SEQUENCE": 1,
+        "COLLECT": 13
+      },
+      "false_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": [],
+        "COLLECT": []
+      },
+      "false_intent_count": 0,
+      "missed_expected_intent_types": [],
+      "sync_required_frames": 0,
+      "fail_frames": 0,
+      "actions_applied": 0,
+      "first_divergence": {
+        "frame": 502,
+        "scripted_state": "IDLE",
+        "predicted_state": "COLLECT_PENDING",
+        "scripted_reason": "stable_highest_supported_candidate",
+        "predicted_reason": "candidate_not_stable",
+        "observer": {
+          "predicted_label": "IDLE_CAST",
+          "raw_predicted_label": "IDLE_CAST",
+          "similarity": 0.9096736907958984,
+          "second_label": "PRESS_INSTRUCTION",
+          "second_similarity": 0.5983214378356934,
+          "ambiguity_margin": 0.3113522529602051,
+          "rejection_reason": null,
+          "prototype_id": "IDLE_CAST:session_20260709_192315:000515",
+          "observer_version": "prototype_v1",
+          "approved_roi": [
+            940,
+            36,
+            1620,
+            100
+          ],
+          "idle_streak": 4,
+          "idle_stability_frames": 4
+        }
+      },
+      "result": "PASS"
+    },
+    {
+      "session": "session_20260710_061220",
+      "frames": 600,
+      "scripted_final_state": "WAITING",
+      "predicted_final_state": "WAITING",
+      "replay_completed": true,
+      "runtime_state_frame_agreement": 1.0,
+      "transition_agreement": 1.0,
+      "scripted_transitions": 9,
+      "predicted_transitions": 9,
+      "prompt_events": {
+        "READY_BITE": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 452,
+              "ground_truth_end": 479,
+              "first_prompt_frame": 452,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            }
+          ]
+        },
+        "HOOK_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 480,
+              "ground_truth_end": 506,
+              "first_prompt_frame": 480,
+              "first_specialized_evidence_frame": 486,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        },
+        "PRESS_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 507,
+              "ground_truth_end": 514,
+              "first_prompt_frame": 507,
+              "first_specialized_evidence_frame": 507,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        }
+      },
+      "get_outcome": {
+        "episodes": 0,
+        "runtime_get_episodes": 0,
+        "false_cast_frames": []
+      },
+      "scripted_proposed_intents": {
+        "START_HOOK": 26,
+        "HOOK_ACTION": 1,
+        "PRESS_SEQUENCE": 1,
+        "CAST": 29
+      },
+      "predicted_proposed_intents": {
+        "START_HOOK": 26,
+        "HOOK_ACTION": 1,
+        "PRESS_SEQUENCE": 1,
+        "CAST": 26
+      },
+      "false_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": [],
+        "COLLECT": []
+      },
+      "false_intent_count": 0,
+      "missed_expected_intent_types": [],
+      "sync_required_frames": 0,
+      "fail_frames": 0,
+      "actions_applied": 0,
+      "first_divergence": null,
+      "result": "PASS"
+    },
+    {
+      "session": "session_20260710_123210",
+      "frames": 600,
+      "scripted_final_state": "IDLE",
+      "predicted_final_state": "IDLE",
+      "replay_completed": true,
+      "runtime_state_frame_agreement": 0.9966666666666667,
+      "transition_agreement": 0.8,
+      "scripted_transitions": 9,
+      "predicted_transitions": 9,
+      "prompt_events": {
+        "READY_BITE": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 502,
+              "ground_truth_end": 556,
+              "first_prompt_frame": 502,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            }
+          ]
+        },
+        "HOOK_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 557,
+              "ground_truth_end": 573,
+              "first_prompt_frame": 557,
+              "first_specialized_evidence_frame": 562,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        },
+        "PRESS_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 574,
+              "ground_truth_end": 583,
+              "first_prompt_frame": 574,
+              "first_specialized_evidence_frame": 574,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        }
+      },
+      "get_outcome": {
+        "episodes": 0,
+        "runtime_get_episodes": 0,
+        "false_cast_frames": []
+      },
+      "scripted_proposed_intents": {
+        "CAST": 39,
+        "START_HOOK": 53,
+        "HOOK_ACTION": 1,
+        "PRESS_SEQUENCE": 1
+      },
+      "predicted_proposed_intents": {
+        "CAST": 39,
+        "START_HOOK": 53,
+        "HOOK_ACTION": 1,
+        "PRESS_SEQUENCE": 1
+      },
+      "false_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": [],
+        "COLLECT": []
+      },
+      "false_intent_count": 0,
+      "missed_expected_intent_types": [],
+      "sync_required_frames": 0,
+      "fail_frames": 0,
+      "actions_applied": 0,
+      "first_divergence": {
+        "frame": 50,
+        "scripted_state": "WAITING",
+        "predicted_state": "IDLE",
+        "scripted_reason": "stable_highest_supported_candidate",
+        "predicted_reason": "idle_waiting_for_prompt_or_get_guard",
+        "observer": {
+          "predicted_label": "UNKNOWN",
+          "raw_predicted_label": "UNKNOWN",
+          "similarity": 0.895017683506012,
+          "second_label": "IDLE_CAST",
+          "second_similarity": 0.6197670102119446,
+          "ambiguity_margin": 0.2752506732940674,
+          "rejection_reason": "ambiguous_top_two",
+          "prototype_id": "WAITING_IN_PROGRESS:session_20260710_124419:000573",
+          "observer_version": "prototype_v1",
+          "approved_roi": [
+            940,
+            36,
+            1620,
+            100
+          ],
+          "idle_streak": 0,
+          "idle_stability_frames": 4
+        }
+      },
+      "result": "PASS"
+    },
+    {
+      "session": "session_20260710_124419",
+      "frames": 600,
+      "scripted_final_state": "WAITING",
+      "predicted_final_state": "WAITING",
+      "replay_completed": true,
+      "runtime_state_frame_agreement": 1.0,
+      "transition_agreement": 1.0,
+      "scripted_transitions": 12,
+      "predicted_transitions": 12,
+      "prompt_events": {
+        "READY_BITE": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 257,
+              "ground_truth_end": 308,
+              "first_prompt_frame": 257,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            }
+          ]
+        },
+        "HOOK_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 309,
+              "ground_truth_end": 333,
+              "first_prompt_frame": 309,
+              "first_specialized_evidence_frame": 314,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        },
+        "PRESS_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 334,
+              "ground_truth_end": 355,
+              "first_prompt_frame": 334,
+              "first_specialized_evidence_frame": 334,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        }
+      },
+      "get_outcome": {
+        "episodes": 1,
+        "runtime_get_episodes": 1,
+        "false_cast_frames": []
+      },
+      "scripted_proposed_intents": {
+        "CAST": 52,
+        "START_HOOK": 50,
+        "HOOK_ACTION": 1,
+        "COLLECT": 20
+      },
+      "predicted_proposed_intents": {
+        "CAST": 52,
+        "START_HOOK": 50,
+        "HOOK_ACTION": 1,
+        "COLLECT": 20
+      },
+      "false_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": [],
+        "COLLECT": []
+      },
+      "false_intent_count": 0,
+      "missed_expected_intent_types": [],
+      "sync_required_frames": 0,
+      "fail_frames": 0,
+      "actions_applied": 0,
+      "first_divergence": null,
+      "result": "PASS"
+    },
+    {
+      "session": "session_20260710_125441",
+      "frames": 600,
+      "scripted_final_state": "WAITING",
+      "predicted_final_state": "WAITING",
+      "replay_completed": true,
+      "runtime_state_frame_agreement": 0.9966666666666667,
+      "transition_agreement": 0.8461538461538461,
+      "scripted_transitions": 12,
+      "predicted_transitions": 12,
+      "prompt_events": {
+        "READY_BITE": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 274,
+              "ground_truth_end": 360,
+              "first_prompt_frame": 274,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            }
+          ]
+        },
+        "HOOK_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 361,
+              "ground_truth_end": 395,
+              "first_prompt_frame": 361,
+              "first_specialized_evidence_frame": 366,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        },
+        "PRESS_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 396,
+              "ground_truth_end": 419,
+              "first_prompt_frame": 396,
+              "first_specialized_evidence_frame": 396,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        }
+      },
+      "get_outcome": {
+        "episodes": 1,
+        "runtime_get_episodes": 1,
+        "false_cast_frames": []
+      },
+      "scripted_proposed_intents": {
+        "CAST": 66,
+        "START_HOOK": 85,
+        "HOOK_ACTION": 1,
+        "COLLECT": 15
+      },
+      "predicted_proposed_intents": {
+        "CAST": 66,
+        "START_HOOK": 85,
+        "HOOK_ACTION": 1,
+        "COLLECT": 15
+      },
+      "false_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": [],
+        "COLLECT": []
+      },
+      "false_intent_count": 0,
+      "missed_expected_intent_types": [],
+      "sync_required_frames": 0,
+      "fail_frames": 0,
+      "actions_applied": 0,
+      "first_divergence": {
+        "frame": 460,
+        "scripted_state": "WAITING",
+        "predicted_state": "IDLE",
+        "scripted_reason": "stable_highest_supported_candidate",
+        "predicted_reason": "idle_waiting_for_prompt_or_get_guard",
+        "observer": {
+          "predicted_label": "UNKNOWN",
+          "raw_predicted_label": "UNKNOWN",
+          "similarity": 0.8956526517868042,
+          "second_label": "IDLE_CAST",
+          "second_similarity": 0.6173658967018127,
+          "ambiguity_margin": 0.27828675508499146,
+          "rejection_reason": "ambiguous_top_two",
+          "prototype_id": "WAITING_IN_PROGRESS:session_20260710_125441:000483",
+          "observer_version": "prototype_v1",
+          "approved_roi": [
+            940,
+            36,
+            1620,
+            100
+          ],
+          "idle_streak": 0,
+          "idle_stability_frames": 4
+        }
+      },
+      "result": "PASS"
+    },
+    {
+      "session": "session_20260710_130308",
+      "frames": 600,
+      "scripted_final_state": "WAITING",
+      "predicted_final_state": "WAITING",
+      "replay_completed": true,
+      "runtime_state_frame_agreement": 0.9916666666666667,
+      "transition_agreement": 0.6842105263157895,
+      "scripted_transitions": 16,
+      "predicted_transitions": 16,
+      "prompt_events": {
+        "READY_BITE": {
+          "episodes": 2,
+          "detected": 2,
+          "latency_frames": [
+            0,
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 1,
+              "ground_truth_end": 20,
+              "first_prompt_frame": 1,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            },
+            {
+              "ground_truth_start": 321,
+              "ground_truth_end": 379,
+              "first_prompt_frame": 321,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            }
+          ]
+        },
+        "HOOK_INSTRUCTION": {
+          "episodes": 2,
+          "detected": 2,
+          "latency_frames": [
+            0,
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 21,
+              "ground_truth_end": 46,
+              "first_prompt_frame": 21,
+              "first_specialized_evidence_frame": 26,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            },
+            {
+              "ground_truth_start": 380,
+              "ground_truth_end": 414,
+              "first_prompt_frame": 380,
+              "first_specialized_evidence_frame": 385,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        },
+        "PRESS_INSTRUCTION": {
+          "episodes": 1,
+          "detected": 1,
+          "latency_frames": [
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 415,
+              "ground_truth_end": 438,
+              "first_prompt_frame": 415,
+              "first_specialized_evidence_frame": 415,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        }
+      },
+      "get_outcome": {
+        "episodes": 1,
+        "runtime_get_episodes": 1,
+        "false_cast_frames": []
+      },
+      "scripted_proposed_intents": {
+        "START_HOOK": 68,
+        "HOOK_ACTION": 2,
+        "CAST": 86,
+        "PRESS_SEQUENCE": 1,
+        "COLLECT": 17
+      },
+      "predicted_proposed_intents": {
+        "START_HOOK": 68,
+        "HOOK_ACTION": 2,
+        "CAST": 84,
+        "PRESS_SEQUENCE": 1,
+        "COLLECT": 17
+      },
+      "false_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": [],
+        "COLLECT": []
+      },
+      "false_intent_count": 0,
+      "missed_expected_intent_types": [],
+      "sync_required_frames": 0,
+      "fail_frames": 0,
+      "actions_applied": 0,
+      "first_divergence": {
+        "frame": 63,
+        "scripted_state": "RESULT_PENDING",
+        "predicted_state": "HOOK",
+        "scripted_reason": "recorded_hook_result_prompt_acknowledgement",
+        "predicted_reason": "hook_episode_not_active",
+        "observer": {
+          "predicted_label": "UNKNOWN",
+          "raw_predicted_label": "IDLE_CAST",
+          "similarity": 0.9322642683982849,
+          "second_label": "PRESS_INSTRUCTION",
+          "second_similarity": 0.6156266331672668,
+          "ambiguity_margin": 0.31663763523101807,
+          "rejection_reason": "idle_temporal_guard",
+          "prototype_id": "IDLE_CAST:session_20260710_130308:000075",
+          "observer_version": "prototype_v1",
+          "approved_roi": [
+            940,
+            36,
+            1620,
+            100
+          ],
+          "idle_streak": 2,
+          "idle_stability_frames": 4
+        }
+      },
+      "result": "PASS"
+    },
+    {
+      "session": "session_20260710_131254",
+      "frames": 600,
+      "scripted_final_state": "IDLE",
+      "predicted_final_state": "IDLE",
+      "replay_completed": true,
+      "runtime_state_frame_agreement": 0.9966666666666667,
+      "transition_agreement": 0.8947368421052632,
+      "scripted_transitions": 18,
+      "predicted_transitions": 18,
+      "prompt_events": {
+        "READY_BITE": {
+          "episodes": 2,
+          "detected": 2,
+          "latency_frames": [
+            0,
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 121,
+              "ground_truth_end": 189,
+              "first_prompt_frame": 121,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            },
+            {
+              "ground_truth_start": 499,
+              "ground_truth_end": 526,
+              "first_prompt_frame": 499,
+              "first_specialized_evidence_frame": null,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": false
+            }
+          ]
+        },
+        "HOOK_INSTRUCTION": {
+          "episodes": 2,
+          "detected": 2,
+          "latency_frames": [
+            0,
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 190,
+              "ground_truth_end": 224,
+              "first_prompt_frame": 190,
+              "first_specialized_evidence_frame": 195,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            },
+            {
+              "ground_truth_start": 527,
+              "ground_truth_end": 553,
+              "first_prompt_frame": 527,
+              "first_specialized_evidence_frame": 532,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        },
+        "PRESS_INSTRUCTION": {
+          "episodes": 2,
+          "detected": 2,
+          "latency_frames": [
+            0,
+            0
+          ],
+          "details": [
+            {
+              "ground_truth_start": 225,
+              "ground_truth_end": 249,
+              "first_prompt_frame": 225,
+              "first_specialized_evidence_frame": 225,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            },
+            {
+              "ground_truth_start": 554,
+              "ground_truth_end": 576,
+              "first_prompt_frame": 554,
+              "first_specialized_evidence_frame": 554,
+              "prompt_before_or_at_specialized_evidence": true,
+              "armed_fallback_evidence_available": true
+            }
+          ]
+        }
+      },
+      "get_outcome": {
+        "episodes": 1,
+        "runtime_get_episodes": 1,
+        "false_cast_frames": []
+      },
+      "scripted_proposed_intents": {
+        "START_HOOK": 93,
+        "HOOK_ACTION": 2,
+        "PRESS_SEQUENCE": 1,
+        "COLLECT": 20,
+        "CAST": 61
+      },
+      "predicted_proposed_intents": {
+        "START_HOOK": 93,
+        "HOOK_ACTION": 2,
+        "PRESS_SEQUENCE": 1,
+        "COLLECT": 20,
+        "CAST": 59
+      },
+      "false_intents": {
+        "CAST": [],
+        "START_HOOK": [],
+        "HOOK_ACTION": [],
+        "PRESS_SEQUENCE": [],
+        "COLLECT": []
+      },
+      "false_intent_count": 0,
+      "missed_expected_intent_types": [],
+      "sync_required_frames": 0,
+      "fail_frames": 0,
+      "actions_applied": 0,
+      "first_divergence": {
+        "frame": 331,
+        "scripted_state": "WAITING",
+        "predicted_state": "IDLE",
+        "scripted_reason": "stable_highest_supported_candidate",
+        "predicted_reason": "idle_waiting_for_prompt_or_get_guard",
+        "observer": {
+          "predicted_label": "UNKNOWN",
+          "raw_predicted_label": "UNKNOWN",
+          "similarity": 0.9012240171432495,
+          "second_label": "IDLE_CAST",
+          "second_similarity": 0.6234594583511353,
+          "ambiguity_margin": 0.27776455879211426,
+          "rejection_reason": "ambiguous_top_two",
+          "prototype_id": "WAITING_IN_PROGRESS:session_20260710_131254:000434",
+          "observer_version": "prototype_v1",
+          "approved_roi": [
+            940,
+            36,
+            1620,
+            100
+          ],
+          "idle_streak": 0,
+          "idle_stability_frames": 4
+        }
+      },
+      "result": "PASS"
+    }
+  ],
+  "deployment_regression_passed": true
+}
