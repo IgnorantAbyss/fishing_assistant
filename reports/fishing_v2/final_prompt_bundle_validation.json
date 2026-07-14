@@ -1,6 +1,6 @@
 {
-  "bundle_version": "prototype_v1_final_2",
-  "bundle_sha256": "7a6eaff6fc96ea695f55f94daa77a3478f060d62b304e568692a12fbd985964e",
+  "bundle_version": "prototype_v1_final_3",
+  "bundle_sha256": "6ff79c60cc7bd3adb8f63042edde21c641cc1c3ee2776c472544cf8b1387333e",
   "prototype_count": 36,
   "class_thresholds": {
     "IDLE_CAST": 0.18108483746647835,

@@ -3,16 +3,19 @@ status: live_calibration_candidate
 purpose: cover_confirmed_live_visual_variant_only
 
 candidates:
-  - candidate_id: live_idle_cast_20260713_000035
-    label: IDLE_CAST
+  - candidate_id: live_ready_bite_20260713_000035
+    label: READY_BITE
     review_status: human_confirmed_live_candidate
     source_live_session: session_20260713_172154
     source_frame: 35
     source_screenshot: reports/fishing_v2/live_detect_only/session_20260713_172154/screenshots/000035_sync_required.jpg
     source_screenshot_sha256: 1425e69030d54867edb1e0d7a81702d3c32a54a8427f1b088c8162460cf85e82
     roi: [940, 36, 1620, 100]
-    image_path: assets/reference/prompt/live_idle_cast_20260713_000035.png
+    image_path: assets/reference/prompt/live_ready_bite_20260713_000035.png
     image_sha256: eb6f330da792344dcbeb2552e8aa2612791ca8b19c9217090221deb1f6c01822
+    ground_truth: false
+    used_for_threshold_calibration: false
     note: >-
       User visually confirmed the live top prompt "好像釣到什麼，請按下 Space 開始吧" as
-      IDLE_CAST. This is calibration evidence only and is not Prompt Ground Truth.
+      READY_BITE. The same text is present in formal READY_BITE frames. This is deployment
+      calibration evidence only and is not Prompt Ground Truth.

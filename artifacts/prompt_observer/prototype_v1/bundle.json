@@ -14,7 +14,7 @@
     "source": "config/fishing_v2.yaml user-approved pixel ROI"
   },
   "base_prototype_count": 35,
-  "bundle_version": "prototype_v1_final_2",
+  "bundle_version": "prototype_v1_final_3",
   "class_thresholds": {
     "HOOK_INSTRUCTION": -0.11282175779342651,
     "IDLE_CAST": 0.18108483746647835,
@@ -115,11 +115,11 @@
   "live_calibration_candidate_count": 1,
   "live_calibration_candidates": [
     {
-      "candidate_id": "live_idle_cast_20260713_000035",
-      "image_path": "assets/reference/prompt/live_idle_cast_20260713_000035.png",
+      "candidate_id": "live_ready_bite_20260713_000035",
+      "image_path": "assets/reference/prompt/live_ready_bite_20260713_000035.png",
       "image_sha256": "eb6f330da792344dcbeb2552e8aa2612791ca8b19c9217090221deb1f6c01822",
-      "label": "IDLE_CAST",
-      "prototype_id": "IDLE_CAST:live_calibration_candidate:live_idle_cast_20260713_000035",
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:live_calibration_candidate:live_ready_bite_20260713_000035",
       "review_status": "human_confirmed_live_candidate",
       "source_frame": 35,
       "source_live_session": "session_20260713_172154",
@@ -128,7 +128,7 @@
       "used_for_threshold_calibration": false
     }
   ],
-  "live_candidate_manifest_sha256": "dfc71fb932a6200be71a6326cd4440b30577c304087b5dd960ccd4c0c5fd9397",
+  "live_candidate_manifest_sha256": "3442e1c5ecdc85915ef5ae5e8b2d42a8955ab0b4b47d6b969bb75de8d1785008",
   "observer_version": "prototype_v1",
   "preprocessing": {
     "background_normalization": {
@@ -455,8 +455,8 @@
       "source_session": "session_20260710_131254"
     },
     {
-      "label": "IDLE_CAST",
-      "prototype_id": "IDLE_CAST:live_calibration_candidate:live_idle_cast_20260713_000035",
+      "label": "READY_BITE",
+      "prototype_id": "READY_BITE:live_calibration_candidate:live_ready_bite_20260713_000035",
       "provenance": "human_confirmed_live_candidate",
       "row": 35,
       "source_frame": 35,

@@ -34,14 +34,15 @@ def test_final_bundle_has_35_formal_medoids_plus_one_reviewed_live_candidate() -
         for label in OPERATIONAL_LABELS
     }
     assert counts == {
-        "IDLE_CAST": 8,
+        "IDLE_CAST": 7,
         "WAITING_IN_PROGRESS": 7,
-        "READY_BITE": 7,
+        "READY_BITE": 8,
         "HOOK_INSTRUCTION": 7,
         "PRESS_INSTRUCTION": 7,
     }
     candidate = payload["live_calibration_candidates"][0]
     assert candidate["review_status"] == "human_confirmed_live_candidate"
+    assert candidate["label"] == "READY_BITE"
     assert candidate["used_for_threshold_calibration"] is False
     assert candidate["used_as_ground_truth"] is False
     assert set(payload["prompt_ground_truth_sha256"]) == set(FORMAL_SESSION_IDS)
@@ -71,7 +72,9 @@ def test_live_candidate_is_reviewed_calibration_evidence_not_ground_truth() -> N
     assert len(payload["candidates"]) == 1
     candidate = payload["candidates"][0]
     assert candidate["review_status"] == "human_confirmed_live_candidate"
-    assert candidate["label"] == "IDLE_CAST"
+    assert candidate["label"] == "READY_BITE"
+    assert candidate["ground_truth"] is False
+    assert candidate["used_for_threshold_calibration"] is False
     image = ROOT / candidate["image_path"]
     assert hashlib.sha256(image.read_bytes()).hexdigest() == candidate["image_sha256"]
 

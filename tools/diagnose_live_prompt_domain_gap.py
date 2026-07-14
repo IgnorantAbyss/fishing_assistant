@@ -89,6 +89,11 @@ def parse_args() -> argparse.Namespace:
         default=PROJECT_ROOT / "artifacts" / "prompt_observer" / "prototype_v1",
     )
     parser.add_argument(
+        "--holdout-image", type=Path,
+        default=PROJECT_ROOT / "reports" / "fishing_v2" / "live_detect_only"
+        / "session_20260713_172154" / "screenshots" / "000039_unknown_sustained.jpg",
+    )
+    parser.add_argument(
         "--output", type=Path,
         default=PROJECT_ROOT / "reports" / "fishing_v2" / "live_prompt_diagnostics",
     )
@@ -147,6 +152,7 @@ def main() -> int:
     nearest: dict[str, dict[str, object]] = {}
     for short_name, label in (
         ("idle", "IDLE_CAST"),
+        ("ready", "READY_BITE"),
         ("hook", "HOOK_INSTRUCTION"),
         ("press", "PRESS_INSTRUCTION"),
     ):
@@ -172,20 +178,30 @@ def main() -> int:
     features = load_or_build_features(
         rows, dataset, cache_path=dataset / "features_prototype_v1.npz"
     )
-    idle_indices = [index for index, row in enumerate(rows) if row["label"] == "IDLE_CAST"]
-    idle_coverage = sorted(
+    ready_indices = [index for index, row in enumerate(rows) if row["label"] == "READY_BITE"]
+    ready_coverage = sorted(
         [
             {
                 "session": rows[index]["session_id"],
                 "frame": int(rows[index]["frame_index"]),
                 "similarity": float(feature @ features[index]),
             }
-            for index in idle_indices
+            for index in ready_indices
         ],
         key=lambda item: -item["similarity"],
     )
     events_path = args.image.parents[1] / "events.jsonl"
     runtime = _runtime_prompt_event(events_path)
+    holdout_frame = cv2.imread(str(args.holdout_image), cv2.IMREAD_UNCHANGED)
+    if holdout_frame is None:
+        raise FileNotFoundError(args.holdout_image)
+    holdout_crop = np.ascontiguousarray(holdout_frame[y1:y2, x1:x2])
+    holdout_feature = extract_prompt_feature(holdout_crop)
+    _write(args.output / "live_holdout_raw_roi.png", holdout_crop)
+    _write(
+        args.output / "live_holdout_normalized.png",
+        _preprocessing_images(holdout_crop)["normalized"],
+    )
     diagnostic = {
         "source_image": _display_path(args.image),
         "source_image_sha256": _sha256(args.image.read_bytes()),
@@ -202,13 +218,19 @@ def main() -> int:
             and runtime.get("prototype_id") == prediction.prototype_id
             and runtime.get("second_label") == prediction.second_label
         ),
+        "holdout": {
+            "source_image": _display_path(args.holdout_image),
+            "source_image_sha256": _sha256(args.holdout_image.read_bytes()),
+            "feature_sha256": _sha256(holdout_feature.tobytes()),
+            "formal_medoids_prediction": baseline_model.predict_feature(holdout_feature).__dict__,
+            "corrected_bundle_prediction": loaded.model.predict_feature(holdout_feature).__dict__,
+        },
         "top_10_prototype_similarities": ranked[:10],
         "class_scores": baseline_model.raw_scores(feature)[0],
-        "idle_prototype_similarities": [item for item in ranked if item["class"] == "IDLE_CAST"],
         "nearest_by_class": nearest,
-        "all_annotated_idle_frame_count": len(idle_coverage),
-        "nearest_annotated_idle_frames": idle_coverage[:10],
-        "diagnosis": "new_live_variant_not_covered",
+        "all_annotated_ready_frame_count": len(ready_coverage),
+        "nearest_annotated_ready_frames": ready_coverage[:10],
+        "diagnosis": "ready_bite_live_domain_generalization",
     }
     (args.output / "baseline_diagnostics.json").write_text(
         json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

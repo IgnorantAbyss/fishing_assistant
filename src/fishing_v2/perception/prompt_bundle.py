@@ -31,7 +31,7 @@ from src.fishing_v2.perception.prototype_prompt_observer import (
 )
 
 
-BUNDLE_VERSION = "prototype_v1_final_2"
+BUNDLE_VERSION = "prototype_v1_final_3"
 BUNDLE_JSON = "bundle.json"
 PROTOTYPES_FILE = "prototypes.npz"
 METADATA_JSON = "metadata.json"
@@ -122,6 +122,8 @@ def _load_live_calibration_candidates(
             raise PromptBundleError("Live Prompt candidate ids must be non-empty and unique")
         if label not in OPERATIONAL_LABELS or item.get("review_status") != LIVE_REVIEW_STATUS:
             raise PromptBundleError("Live Prompt candidate must have an operational label and human review")
+        if item.get("ground_truth") is not False or item.get("used_for_threshold_calibration") is not False:
+            raise PromptBundleError("Live Prompt candidate must not be Ground Truth or threshold calibration data")
         if tuple(item.get("roi", ())) != expected_roi:
             raise PromptBundleError("Live Prompt candidate ROI differs from the approved ROI")
         image_path = (project_root / str(item.get("image_path", ""))).resolve()

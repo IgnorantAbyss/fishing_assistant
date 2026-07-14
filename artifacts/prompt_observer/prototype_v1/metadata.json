@@ -1,7 +1,7 @@
 {
-  "bundle_json_sha256": "7b618d5ad8678823a918cfde98826c16387b4f32fba2b50ba95121d0cec5abdf",
-  "bundle_sha256": "7a6eaff6fc96ea695f55f94daa77a3478f060d62b304e568692a12fbd985964e",
-  "bundle_version": "prototype_v1_final_2",
+  "bundle_json_sha256": "bb9fffb40c0f220a9f3bc6b46eef8fbdc3baccdda115f86abd9fb6a50fda9220",
+  "bundle_sha256": "6ff79c60cc7bd3adb8f63042edde21c641cc1c3ee2776c472544cf8b1387333e",
+  "bundle_version": "prototype_v1_final_3",
   "contains_fonts": false,
   "contains_neural_network_weights": false,
   "hash_definition": "sha256(domain_separator + bundle.json bytes + separator + prototypes.npz bytes)",

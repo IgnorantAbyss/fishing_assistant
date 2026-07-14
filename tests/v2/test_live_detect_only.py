@@ -88,14 +88,20 @@ def supported_frame() -> np.ndarray:
     return np.zeros((1440, 2560, 3), dtype=np.uint8)
 
 
-def _runtime(tmp_path: Path, capture: MockCapture, clock: FakeClock) -> LiveDetectOnlyRuntime:
+def _runtime(
+    tmp_path: Path,
+    capture: MockCapture,
+    clock: FakeClock,
+    *,
+    duration_seconds: float = 1.0,
+) -> LiveDetectOnlyRuntime:
     return LiveDetectOnlyRuntime(
         config_path=CONFIG,
         prompt_bundle=load_prompt_bundle(BUNDLE),
         capture=capture,
         logger=LiveSessionLogger(tmp_path, bundle_version="test-bundle"),
         live_config=LiveDetectOnlyConfig(
-            duration_seconds=1.0,
+            duration_seconds=duration_seconds,
             max_fps=25.0,
             show_overlay=False,
             save_transition_frames=False,
@@ -247,11 +253,11 @@ def test_prompt_input_contract_rejects_noncanonical_frames(invalid: np.ndarray) 
         validate_prompt_input(invalid)
 
 
-def test_confirmed_saved_live_idle_variant_is_covered_without_margin_relaxation() -> None:
+def test_confirmed_saved_live_bite_variant_is_ready_without_margin_relaxation() -> None:
     import cv2
 
     crop = cv2.imread(str(
-        ROOT / "assets" / "reference" / "prompt" / "live_idle_cast_20260713_000035.png"
+        ROOT / "assets" / "reference" / "prompt" / "live_ready_bite_20260713_000035.png"
     ))
     loaded = load_prompt_bundle(BUNDLE)
     feature = extract_prompt_feature(crop)
@@ -268,7 +274,7 @@ def test_confirmed_saved_live_idle_variant_is_covered_without_margin_relaxation(
     assert baseline.prototype_id == "HOOK_INSTRUCTION:session_20260709_192315:000465"
     assert baseline.second_label == "PRESS_INSTRUCTION"
     corrected = loaded.model.predict_feature(feature)
-    assert corrected.predicted_label == "IDLE_CAST"
+    assert corrected.predicted_label == "READY_BITE"
     assert corrected.similarity == pytest.approx(1.0, abs=1e-6)
     assert corrected.ambiguity_margin >= loaded.model.ambiguity_threshold
 
@@ -279,7 +285,38 @@ def test_confirmed_saved_live_idle_variant_is_covered_without_margin_relaxation(
         loaded.observer.observe(frame, FrameContext(index, index * 0.2)).kind.value
         for index in range(1, 31)
     ]
-    assert labels[:3] == ["UNKNOWN"] * 3  # Existing IDLE stability guard.
-    assert labels[3:] == ["IDLE_CAST"] * 27
+    assert labels == ["READY_BITE"] * 30
+    assert "IDLE_CAST" not in labels
     assert "HOOK_INSTRUCTION" not in labels
     assert "PRESS_INSTRUCTION" not in labels
+
+
+def test_ready_holdout_startup_would_start_hook_once_and_never_cast(tmp_path: Path) -> None:
+    import cv2
+
+    holdout = cv2.imread(str(
+        ROOT / "reports" / "fishing_v2" / "live_prompt_diagnostics"
+        / "live_holdout_raw_roi.png"
+    ))
+    frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+    loaded = load_prompt_bundle(BUNDLE)
+    x1, y1, x2, y2 = loaded.roi.pixel
+    frame[y1:y2, x1:x2] = holdout
+    clock = FakeClock()
+    runtime = _runtime(tmp_path, MockCapture(frame), clock, duration_seconds=6.0)
+    summary = runtime.run(max_frames=150)
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    event_types = [item["event_type"] for item in events]
+    assert summary["result"] == "completed"
+    assert summary["unique_would_fire"].get("WOULD_START_HOOK") == 1
+    assert summary["unique_would_fire"].get("WOULD_CAST", 0) == 0
+    assert summary["raw_action_proposals"].get("CAST", 0) == 0
+    assert summary["actions_applied"] == 0
+    assert "SYNC_REQUIRED" not in event_types
+    assert any(
+        item["event_type"] == "prompt_label_change" and item["next_label"] == "READY_BITE"
+        for item in events
+    )

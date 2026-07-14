@@ -1,99 +1,95 @@
 {
-  "diagnosis": "new_live_variant_not_covered",
-  "cause_category": "prototype_coverage",
+  "correction": "live bite prompt is READY_BITE, not IDLE_CAST",
   "source_session": "session_20260713_172154",
-  "source_frame": 35,
-  "human_visual_label": "IDLE_CAST",
-  "approved_roi": [940, 36, 1620, 100],
-  "roi_correct": true,
-  "input_contract": {
-    "runtime": "uint8 HxWx3 BGR contiguous 0..255",
-    "saved_frame_shape": [1440, 2560, 3],
-    "saved_frame_dtype": "uint8",
-    "saved_frame_contiguous": true,
-    "saved_roi_shape": [64, 680, 3],
-    "live_replay_contract_aligned": true,
-    "capture_conversion": "MSS BGRA drops alpha and preserves BGR order"
+  "calibration_frame": 35,
+  "holdout_frame": 39,
+  "prompt_text": "好像釣到什麼，請按下 'Space' 開始吧。",
+  "semantic_label": "READY_BITE",
+  "formal_ready_variant_present": {
+    "present": true,
+    "example_session": "session_20260710_061220",
+    "example_frame": 469,
+    "annotation": "READY_BITE"
   },
-  "baseline": {
+  "candidate": {
+    "status": "live_calibration_candidate",
+    "review_status": "human_confirmed_live_candidate",
+    "label": "READY_BITE",
+    "ground_truth": false,
+    "used_for_threshold_calibration": false,
+    "image_path": "assets/reference/prompt/live_ready_bite_20260713_000035.png",
+    "image_sha256": "eb6f330da792344dcbeb2552e8aa2612791ca8b19c9217090221deb1f6c01822"
+  },
+  "removed_wrong_idle_lineage": true,
+  "formal_medoids": {
+    "total": 35,
+    "idle_cast": 7,
+    "waiting_in_progress": 7,
+    "ready_bite": 7,
+    "hook_instruction": 7,
+    "press_instruction": 7
+  },
+  "deployment_prototypes": {
+    "total": 36,
+    "idle_cast": 7,
+    "waiting_in_progress": 7,
+    "ready_bite": 8,
+    "hook_instruction": 7,
+    "press_instruction": 7,
+    "ignore": 0
+  },
+  "formal_medoids_only_baseline": {
     "prediction": "UNKNOWN",
-    "rejection_reason": "ambiguous_top_two",
     "top_class": "HOOK_INSTRUCTION",
     "top_similarity": 0.527796745300293,
     "second_class": "PRESS_INSTRUCTION",
     "second_similarity": 0.5199857950210571,
     "margin": 0.00781095027923584,
-    "best_idle_similarity": 0.49925896525382996,
-    "best_annotated_idle_frame_similarity": 0.5237102508544922,
-    "annotated_idle_frames_scanned": 451,
-    "feature_sha256": "56f2f4b487e0fb8805b3f2a0ccf62e678935961b1610b170d1908a151d8c226e",
-    "runtime_offline_categorical_match": true,
-    "top_10": [
-      ["HOOK_INSTRUCTION", "session_20260709_192315", 465, 0.5277966260910034],
-      ["HOOK_INSTRUCTION", "session_20260710_123210", 565, 0.5253175497055054],
-      ["HOOK_INSTRUCTION", "session_20260710_061220", 500, 0.5238993167877197],
-      ["HOOK_INSTRUCTION", "session_20260710_130308", 45, 0.52302086353302],
-      ["HOOK_INSTRUCTION", "session_20260710_131254", 216, 0.522131085395813],
-      ["HOOK_INSTRUCTION", "session_20260710_125441", 371, 0.5209951400756836],
-      ["PRESS_INSTRUCTION", "session_20260710_123210", 577, 0.5199857950210571],
-      ["HOOK_INSTRUCTION", "session_20260710_124419", 322, 0.5188777446746826],
-      ["PRESS_INSTRUCTION", "session_20260709_192315", 479, 0.518144965171814],
-      ["WAITING_IN_PROGRESS", "session_20260709_192315", 144, 0.5169110298156738]
-    ]
+    "ready_class_score": 0.5115139484405518,
+    "diagnosis": "READY prototype coverage / live-domain generalization"
   },
-  "ambiguity_calibration": {
-    "metric": "top cosine similarity minus second cosine similarity",
-    "fold_margins": [
-      0.018877989538013933,
-      0.2813856706023216,
-      0.02268120639026165,
-      0.28356534034013753,
-      0.020191600862890482,
-      0.27912049531936645,
-      0.28023827493190767
-    ],
-    "final_median": 0.27912049531936645,
-    "loader_preserved_value": true,
-    "changed": false,
-    "reason": "Relaxing the margin would accept the wrong HOOK top class; it cannot repair coverage."
-  },
-  "fix": {
-    "type": "single_confirmed_live_idle_prototype",
-    "candidate_status": "live_calibration_candidate",
-    "review_status": "human_confirmed_live_candidate",
-    "used_as_ground_truth": false,
-    "used_for_threshold_calibration": false,
-    "formal_session_medoids_preserved": 35,
-    "live_candidates_added": 1,
-    "final_prototype_count": 36,
-    "bundle_version": "prototype_v1_final_2",
-    "bundle_sha256": "7a6eaff6fc96ea695f55f94daa77a3478f060d62b304e568692a12fbd985964e"
-  },
-  "corrected": {
-    "prediction": "IDLE_CAST",
+  "calibration_inference": {
+    "frame": 35,
+    "prediction": "READY_BITE",
     "top_similarity": 0.9999999403953552,
     "second_class": "HOOK_INSTRUCTION",
     "second_similarity": 0.527796745300293,
     "margin": 0.47220319509506226,
-    "rejection_reason": null,
-    "thirty_frame_labels": {
-      "idle_temporal_guard_unknown": 3,
-      "stable_idle_cast": 27,
-      "hook": 0,
-      "press": 0
-    },
-    "top_10": [
-      ["IDLE_CAST", "session_20260713_172154", 35, 0.9999998807907104],
-      ["HOOK_INSTRUCTION", "session_20260709_192315", 465, 0.5277966260910034],
-      ["HOOK_INSTRUCTION", "session_20260710_123210", 565, 0.5253175497055054],
-      ["HOOK_INSTRUCTION", "session_20260710_061220", 500, 0.5238993167877197],
-      ["HOOK_INSTRUCTION", "session_20260710_130308", 45, 0.52302086353302],
-      ["HOOK_INSTRUCTION", "session_20260710_131254", 216, 0.522131085395813],
-      ["HOOK_INSTRUCTION", "session_20260710_125441", 371, 0.5209951400756836],
-      ["PRESS_INSTRUCTION", "session_20260710_123210", 577, 0.5199857950210571],
-      ["HOOK_INSTRUCTION", "session_20260710_124419", 322, 0.5188777446746826],
-      ["PRESS_INSTRUCTION", "session_20260709_192315", 479, 0.518144965171814]
-    ]
+    "matched_prototype_id": "READY_BITE:live_calibration_candidate:live_ready_bite_20260713_000035"
+  },
+  "holdout_inference": {
+    "frame": 39,
+    "prediction": "READY_BITE",
+    "top_similarity": 0.9998446702957153,
+    "second_class": "HOOK_INSTRUCTION",
+    "second_similarity": 0.5280972719192505,
+    "margin": 0.47174739837646484,
+    "matched_prototype_id": "READY_BITE:live_calibration_candidate:live_ready_bite_20260713_000035"
+  },
+  "calibration_holdout_independent": true,
+  "runtime_ready_startup_regression": {
+    "source": "holdout frame 39 ROI in deterministic mock capture",
+    "prompt_observation": "READY_BITE",
+    "final_runtime_state": "READY",
+    "startup_consensus_not_reached": false,
+    "raw_start_hook_proposals": 21,
+    "unique_would_start_hook": 1,
+    "would_cast": 0,
+    "idle_stability_guard_entered": false,
+    "actions_applied": 0,
+    "action_sink": null
+  },
+  "calibration": {
+    "class_thresholds_changed": false,
+    "ambiguity_margin": 0.27912049531936645,
+    "ambiguity_margin_changed": false,
+    "idle_stability_frames": 4,
+    "idle_stability_changed": false,
+    "live_candidate_in_loso": false
+  },
+  "bundle": {
+    "version": "prototype_v1_final_3",
+    "sha256": "6ff79c60cc7bd3adb8f63042edde21c641cc1c3ee2776c472544cf8b1387333e"
   },
   "regression": {
     "loso_macro_f1": 0.992316,
