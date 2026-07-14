@@ -36,6 +36,7 @@ from src.fishing_v2.runtime.runtime_controller import ActionExecutionMode, Runti
 from src.fishing_v2.runtime.safety_policy import SafetyPolicy
 from src.fishing_v2.runtime.scheduling import PromptPollingConfig, RuntimeSchedulePolicy
 from src.fishing_v2.runtime.synchronization import StartupSynchronizer
+from src.screen_capture import validate_bgr_frame
 
 
 EXPECTED_RESOLUTION = (2560, 1440)
@@ -248,12 +249,15 @@ class LiveDetectOnlyRuntime:
         self.synchronizer = StartupSynchronizer(sync_config, started_at=0.0)
         self.schedule = _prompt_polling(self._raw_config)
         self._opened = False
+        self._capture_diagnostics: dict[str, Any] = {}
 
     def preflight(self) -> np.ndarray:
         try:
             self.capture.open()
             self._opened = True
-            frame = self.capture.capture()
+            frame = validate_bgr_frame(self.capture.capture())
+            diagnostics = getattr(self.capture, "diagnostics", None)
+            self._capture_diagnostics = dict(diagnostics()) if callable(diagnostics) else {}
         except Exception as exc:
             raise LivePreflightError(f"Capture preflight failed: {exc}") from exc
         height, width = frame.shape[:2]
@@ -364,14 +368,31 @@ class LiveDetectOnlyRuntime:
                 "bundle_sha256": self.prompt_bundle.bundle_sha256,
                 "emit_actions": False,
                 "action_sink": None,
+                "capture": self._capture_diagnostics,
             })
+            if self._capture_diagnostics.get("fallback_used"):
+                self.logger.event("capture_backend_fallback", {
+                    "timestamp": 0.0,
+                    "reason": self._capture_diagnostics.get("fallback_reason"),
+                    "requested_backend": self._capture_diagnostics.get("requested_backend"),
+                    "active_backend": self._capture_diagnostics.get("backend"),
+                })
+            if (
+                self.live_config.show_overlay
+                and self._capture_diagnostics.get("overlay_capture_warning")
+            ):
+                self.logger.event("capture_backend_warning", {
+                    "timestamp": 0.0,
+                    "reason": "mss-region may capture the diagnostic overlay or other covering windows",
+                    "backend": self._capture_diagnostics.get("backend"),
+                })
             while self.clock() - started < self.live_config.duration_seconds:
                 if max_frames is not None and captured >= max_frames:
                     break
                 frame_loop_started = self.clock()
                 elapsed = frame_loop_started - started
                 try:
-                    frame = self.capture.capture()
+                    frame = validate_bgr_frame(self.capture.capture())
                 except KeyboardInterrupt:
                     result_name = "interrupted_by_user"
                     break
@@ -646,6 +667,11 @@ class LiveDetectOnlyRuntime:
                 "final_state": self.fsm.state.value,
                 "emit_actions": False,
                 "action_sink": None,
+                "capture_backend": self._capture_diagnostics.get(
+                    "backend", getattr(self.capture, "backend_name", "unknown")
+                ),
+                "capture_fallback_used": bool(self._capture_diagnostics.get("fallback_used", False)),
+                "capture_diagnostics": self._capture_diagnostics,
             }
             self.logger.finalize(summary)
         return summary

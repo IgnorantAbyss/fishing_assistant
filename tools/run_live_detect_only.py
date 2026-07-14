@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+from typing import Sequence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -16,9 +17,14 @@ from src.fishing_v2.live.live_detect_only import (  # noqa: E402
     LivePreflightError,
     validate_emit_actions,
 )
+from src.fishing_v2.live.capture_backends import (  # noqa: E402
+    CAPTURE_BACKENDS,
+    MSS_REGION_BACKEND,
+    WINDOWS_GRAPHICS_CAPTURE_BACKEND,
+    create_live_capture_session,
+)
 from src.fishing_v2.live.session_logger import LiveSessionLogger  # noqa: E402
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle  # noqa: E402
-from src.screen_capture import MSSCaptureSession  # noqa: E402
 
 
 def _strict_bool(value: str) -> bool:
@@ -30,9 +36,20 @@ def _strict_bool(value: str) -> bool:
     raise argparse.ArgumentTypeError("expected true or false")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--window-title", required=True, help="Exact visible borderless game-window title")
+    parser.add_argument(
+        "--capture-backend",
+        choices=CAPTURE_BACKENDS,
+        default=MSS_REGION_BACKEND,
+        help="Explicit capture source (default: mss-region desktop pixels)",
+    )
+    parser.add_argument(
+        "--allow-mss-fallback",
+        action="store_true",
+        help="Allow WGC initialization failure to fall back to visible desktop-region pixels",
+    )
     parser.add_argument("--duration-seconds", type=float, default=180.0)
     parser.add_argument(
         "--output-dir", type=Path,
@@ -50,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-fps", type=float, default=25.0)
     parser.add_argument("--emit-actions", type=_strict_bool, default=False)
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "fishing_v2.yaml")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -66,7 +83,25 @@ def main() -> int:
         print(f"PREFLIGHT FAILED: final Prompt bundle could not be loaded: {exc}", file=sys.stderr)
         return 2
     logger = LiveSessionLogger(args.output_dir, bundle_version=bundle.bundle_version)
-    capture = MSSCaptureSession(window_title=args.window_title)
+    capture = create_live_capture_session(
+        backend=args.capture_backend,
+        window_title=args.window_title,
+        allow_mss_fallback=args.allow_mss_fallback,
+    )
+    if args.capture_backend == MSS_REGION_BACKEND and args.show_overlay:
+        print(
+            "WARNING: mss-region captures desktop pixels; the diagnostic overlay or other "
+            "covering windows may appear in captured frames. Prefer --no-overlay.",
+            file=sys.stderr,
+        )
+    if (
+        args.capture_backend == WINDOWS_GRAPHICS_CAPTURE_BACKEND
+        and args.allow_mss_fallback
+    ):
+        print(
+            "WARNING: explicit MSS fallback is enabled; any fallback is recorded in the session.",
+            file=sys.stderr,
+        )
     runtime = LiveDetectOnlyRuntime(
         config_path=args.config,
         prompt_bundle=bundle,
@@ -83,6 +118,8 @@ def main() -> int:
     summary = runtime.run()
     print(f"session: {logger.path}")
     print(f"result: {summary['result']}")
+    print(f"capture_backend: {summary.get('capture_backend')}")
+    print(f"capture_fallback_used: {summary.get('capture_fallback_used', False)}")
     print(f"actions_applied: {summary['actions_applied']}")
     return 0 if summary["result"] in {"completed", "interrupted_by_user"} else 2
 

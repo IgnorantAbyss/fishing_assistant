@@ -14,6 +14,36 @@ Live calibration candidate set are loaded from the verified artifact under
 - approved Prompt ROI `[940, 36, 1620, 100]`
 - `config/fishing_v2.yaml` with `safety.emit_actions: false`
 
+## Capture backends
+
+`--capture-backend mss-region` is the default and preserves the original
+behavior. It uses the exact title to resolve an HWND, validates that its process
+is `BlackDesert64`, maps the client rectangle to desktop coordinates, and then
+calls `mss.grab(region)`. The pixels are still desktop pixels: covering windows
+and the diagnostic overlay can therefore appear in the frame. Use
+`--no-overlay` with this backend. A borderless 2560 x 1440 client area can cover
+the complete monitor even though it was selected through an HWND.
+
+`--capture-backend windows-graphics-capture` is the HWND-surface adapter. Its
+native provider contract receives the already validated HWND, must create the
+capture item from that same handle, and converts one BGRA/RGBA surface to
+contiguous `uint8` BGR at the adapter boundary. It does not use `PrintWindow`,
+`BitBlt`, monitor capture, fixed border offsets, or resizing. This repository's
+Python 3.14 environment currently has no verified WGC binding, so that option
+fails preflight with a compatibility diagnostic instead of claiming that MSS
+pixels are window capture. The minimal deployment follow-up is a tested native
+WGC bridge that implements the documented HWND provider contract.
+
+Fallback is opt-in only. Add `--allow-mss-fallback` to a WGC command to permit
+an initialization failure to use `mss-region`; the warning and fallback reason
+are written to the event log and session summary. Once capture starts, HWND
+loss, minimization, invalid capture item, empty/invalid frames, capture failure,
+or client/frame size changes stop the session safely and never switch sources.
+
+Every backend reports its backend name, HWND, process, exact title, raw and
+converted shapes, dtype, channel order, client size/region, and first-frame
+SHA-256. The shared output contract is contiguous `uint8` `H x W x 3` BGR.
+
 Preflight stops before the observation loop when capture fails, resolution is
 wrong, the ROI is invalid, the final bundle/hash is invalid, or action emission
 is enabled. The controller has no action sink. `--emit-actions true` is refused
@@ -29,15 +59,17 @@ at the CLI boundary before capture is opened.
 The validation is a deployment regression over all seven formal sessions. It
 does not replace the leave-one-session-out generalization report.
 
-## Short first live run
+## Windows Graphics Capture command
 
-Use the exact visible game-window title. A two-minute run is a reasonable first
-check; no raw frame stream is retained.
+This command is ready for the adapter contract, but on the current Python 3.14
+environment it will stop at preflight until a verified native WGC provider is
+available:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\run_live_detect_only.py `
-  --window-title "<exact game window title>" `
-  --duration-seconds 120 `
+  --window-title "黑色沙漠 - 524983" `
+  --capture-backend windows-graphics-capture `
+  --duration-seconds 30 `
   --output-dir reports\fishing_v2\live_detect_only `
   --show-overlay `
   --save-transition-frames `
@@ -46,9 +78,34 @@ check; no raw frame stream is retained.
   --emit-actions false
 ```
 
-Keep the game window in the foreground. The overlay is diagnostic and is made
-non-activating on Windows. Stop safely with `Ctrl+C`. A capture exception or a
-resolution change also causes a safe stop and writes the reason to the session.
+An independent no-activate overlay is not part of the target HWND content by
+design, but this still needs a real-window smoke test after a provider becomes
+available. Whether a minimized DirectX window continues to produce frames is
+also not guaranteed; this runtime deliberately stops when the window is
+minimized.
+
+## MSS desktop-region fallback command
+
+Use the exact visible game-window title. A two-minute run is a reasonable first
+check; no raw frame stream is retained.
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_live_detect_only.py `
+  --window-title "黑色沙漠 - 524983" `
+  --capture-backend mss-region `
+  --duration-seconds 30 `
+  --output-dir reports\fishing_v2\live_detect_only `
+  --no-overlay `
+  --save-transition-frames `
+  --prompt-bundle artifacts\prompt_observer\prototype_v1 `
+  --max-fps 25 `
+  --emit-actions false
+```
+
+Keep the game window in the foreground. The optional overlay is a separate,
+non-activating diagnostic window. Stop safely with `Ctrl+C`. A capture exception
+or resolution change also causes a safe stop and writes the reason to the
+session.
 
 ## Output and review
 

@@ -63,7 +63,10 @@ class LiveSessionLogger:
         with self.events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         self._event_counts[event_type] += 1
-        if event_type in {"preflight_failure", "capture_failure", "SYNC_REQUIRED", "detector_conflict"}:
+        if event_type in {
+            "preflight_failure", "capture_failure", "capture_backend_fallback",
+            "capture_backend_warning", "SYNC_REQUIRED", "detector_conflict",
+        }:
             self._warnings.append(str(payload.get("reason", event_type)))
 
     def transition(
@@ -150,6 +153,8 @@ class LiveSessionLogger:
             f"- Capture FPS: **{complete.get('capture_fps', 0.0):.2f}**",
             f"- Mean processing latency: **{complete.get('mean_processing_latency_ms', 0.0):.2f} ms**",
             f"- Actions applied: **{complete.get('actions_applied', 0)}**",
+            f"- Capture backend: **{complete.get('capture_backend', 'unknown')}**",
+            f"- MSS fallback used: **{complete.get('capture_fallback_used', False)}**",
             f"- Raw proposals: `{complete.get('raw_action_proposals', {})}`",
             f"- Unique would-fire: `{complete.get('unique_would_fire', {})}`",
             f"- Warnings: `{self._warnings}`",

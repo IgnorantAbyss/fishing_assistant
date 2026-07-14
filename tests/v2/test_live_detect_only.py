@@ -45,9 +45,15 @@ class FakeClock:
 
 
 class MockCapture:
-    def __init__(self, frame: np.ndarray, failure: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        frame: np.ndarray,
+        failure: BaseException | None = None,
+        diagnostics: dict[str, object] | None = None,
+    ) -> None:
         self.frame = frame
         self.failure = failure
+        self._diagnostics = diagnostics or {}
         self.calls = 0
         self.opened = False
         self.closed = False
@@ -63,6 +69,9 @@ class MockCapture:
 
     def is_foreground(self) -> bool:
         return True
+
+    def diagnostics(self) -> dict[str, object]:
+        return dict(self._diagnostics)
 
     def close(self) -> None:
         self.closed = True
@@ -177,6 +186,29 @@ def test_mock_live_frame_uses_no_sink_and_never_applies_action(
     assert saved["actions_applied"] == 0
 
 
+def test_explicit_capture_fallback_is_recorded_as_session_warning(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    capture = MockCapture(supported_frame, diagnostics={
+        "backend": "mss-region",
+        "requested_backend": "windows-graphics-capture",
+        "fallback_used": True,
+        "fallback_reason": "WindowsGraphicsCaptureUnavailable: binding unavailable",
+        "overlay_capture_warning": False,
+    })
+    runtime = _runtime(tmp_path, capture, FakeClock())
+    summary = runtime.run(max_frames=1)
+    saved = json.loads((runtime.logger.path / "session_summary.json").read_text(encoding="utf-8"))
+    assert summary["capture_backend"] == "mss-region"
+    assert summary["capture_fallback_used"] is True
+    assert any("binding unavailable" in warning for warning in saved["warnings"])
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(item["event_type"] == "capture_backend_fallback" for item in events)
+
+
 def test_would_fire_deduplicates_repeated_proposals_per_cycle() -> None:
     tracker = WouldFireDeduplicator()
     request = ActionRequest(ActionIntent.HOOK_ACTION, 0.96, "safe crossing")
@@ -207,6 +239,7 @@ def test_live_session_directory_never_overwrites(tmp_path: Path) -> None:
 def test_live_runtime_imports_no_input_writer_and_never_loads_ground_truth() -> None:
     paths = [
         ROOT / "src" / "fishing_v2" / "live" / "live_detect_only.py",
+        ROOT / "src" / "fishing_v2" / "live" / "capture_backends.py",
         ROOT / "src" / "fishing_v2" / "live" / "session_logger.py",
         ROOT / "src" / "screen_capture.py",
         ROOT / "tools" / "run_live_detect_only.py",
