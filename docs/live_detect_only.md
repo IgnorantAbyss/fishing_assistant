@@ -67,7 +67,7 @@ available:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\run_live_detect_only.py `
-  --window-title "黑色沙漠 - 524983" `
+  --window-title "<exact current game window title>" `
   --capture-backend windows-graphics-capture `
   --duration-seconds 30 `
   --output-dir reports\fishing_v2\live_detect_only `
@@ -86,12 +86,12 @@ minimized.
 
 ## MSS desktop-region fallback command
 
-Use the exact visible game-window title. A two-minute run is a reasonable first
-check; no raw frame stream is retained.
+Use the exact visible game-window title. In the default `minimal` evidence mode,
+no raw frame stream is retained.
 
 ```powershell
 .\.venv\Scripts\python.exe tools\run_live_detect_only.py `
-  --window-title "黑色沙漠 - 524983" `
+  --window-title "<exact current game window title>" `
   --capture-backend mss-region `
   --duration-seconds 30 `
   --output-dir reports\fishing_v2\live_detect_only `
@@ -120,6 +120,61 @@ reports/fishing_v2/live_detect_only/session_<timestamp>/
   review_items.csv
   screenshots/
 ```
+
+## Diagnostic evidence mode
+
+Minimal mode remains the default and retains the event-only screenshot
+behavior. During detector debugging, opt into diagnostic mode. The next review
+can stop after three complete Runtime cycles:
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_live_detect_only.py `
+  --window-title "<exact current game window title>" `
+  --capture-backend mss-region `
+  --no-overlay `
+  --evidence-mode diagnostic `
+  --evidence-video-fps 10 `
+  --max-completed-cycles 3 `
+  --duration-seconds 600 `
+  --output-dir reports\fishing_v2\live_detect_only `
+  --prompt-bundle artifacts\prompt_observer\prototype_v1 `
+  --max-fps 25 `
+  --emit-actions false
+```
+
+Diagnostic mode records the original 2560 x 1440 capture frame without resize
+and before the independent overlay is drawn. It tries H.264/`avc1`, then MP4V,
+then MJPG as a reliable local equivalent. `video_frames.csv` maps every encoded
+video frame to the same capture frame index and monotonic timestamp used by
+`events.jsonl`. `Ctrl+C`, capture failure, and normal completion all release and
+finalize the writer.
+
+Every frame on which Prompt or a specialized detector actually runs stores all
+four small Prompt/Hook/Press/Get ROI crops plus one JSONL metadata record. The
+record says which detectors executed and includes compact raw result,
+qualification result, rejection reason, and Runtime state. It does not store a
+dense stream of full-screen JPEGs. Event windows retain approximately 10 FPS of
+the two seconds before and after each event by indexing the already retained
+full-session video.
+
+```text
+session_<timestamp>/diagnostic_evidence/
+  session_capture_h264.mp4 | session_capture.mp4 | session_capture.avi
+  video_frames.csv
+  detector_evidence.jsonl
+  event_windows.jsonl
+  rois/
+    prompt/
+    hook/
+    press/
+    get/
+```
+
+The session summary reports the selected video path/codec, frame count, FPS,
+first/last timestamp, dropped video frames, ROI counts and actual detector
+execution counts per Runtime episode, and any evidence-gap intervals. Video and
+ROI evidence are created even when no would-fire event occurs. `actions_applied`
+remains zero in both evidence modes.
 
 `events.jsonl` separates raw ActionIntent proposal counts from deduplicated
 would-fire opportunities (`WOULD_CAST`, `WOULD_START_HOOK`,

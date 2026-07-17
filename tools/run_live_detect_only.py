@@ -23,6 +23,7 @@ from src.fishing_v2.live.capture_backends import (  # noqa: E402
     WINDOWS_GRAPHICS_CAPTURE_BACKEND,
     create_live_capture_session,
 )
+from src.fishing_v2.live.diagnostic_evidence import EVIDENCE_MODES  # noqa: E402
 from src.fishing_v2.live.session_logger import LiveSessionLogger  # noqa: E402
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle  # noqa: E402
 
@@ -51,6 +52,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Allow WGC initialization failure to fall back to visible desktop-region pixels",
     )
     parser.add_argument("--duration-seconds", type=float, default=180.0)
+    parser.add_argument(
+        "--evidence-mode", choices=EVIDENCE_MODES, default="minimal",
+        help="minimal keeps event-only screenshots; diagnostic adds video and dense ROI evidence",
+    )
+    parser.add_argument(
+        "--evidence-video-fps", type=float, default=10.0,
+        help="Diagnostic full-session video sampling rate (default: 10)",
+    )
+    parser.add_argument(
+        "--max-completed-cycles", type=int,
+        help="Stop after this many complete Runtime cycles (for the next review use 3)",
+    )
     parser.add_argument(
         "--output-dir", type=Path,
         default=PROJECT_ROOT / "reports" / "fishing_v2" / "live_detect_only",
@@ -112,6 +125,9 @@ def main() -> int:
             max_fps=args.max_fps,
             show_overlay=args.show_overlay,
             save_transition_frames=args.save_transition_frames,
+            evidence_mode=args.evidence_mode,
+            evidence_video_fps=args.evidence_video_fps,
+            max_completed_cycles=args.max_completed_cycles,
         ),
         emit_actions=False,
     )
@@ -120,8 +136,13 @@ def main() -> int:
     print(f"result: {summary['result']}")
     print(f"capture_backend: {summary.get('capture_backend')}")
     print(f"capture_fallback_used: {summary.get('capture_fallback_used', False)}")
+    print(f"evidence_mode: {summary.get('evidence_mode')}")
+    print(f"video_path: {summary.get('video_path')}")
+    print(f"completed_cycles: {summary.get('completed_cycles')}")
     print(f"actions_applied: {summary['actions_applied']}")
-    return 0 if summary["result"] in {"completed", "interrupted_by_user"} else 2
+    return 0 if summary["result"] in {
+        "completed", "completed_target_cycles", "interrupted_by_user",
+    } else 2
 
 
 if __name__ == "__main__":

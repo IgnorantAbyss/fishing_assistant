@@ -103,6 +103,8 @@ def _runtime(
     clock: FakeClock,
     *,
     duration_seconds: float = 1.0,
+    evidence_mode: str = "minimal",
+    evidence_recorder=None,
 ) -> LiveDetectOnlyRuntime:
     return LiveDetectOnlyRuntime(
         config_path=CONFIG,
@@ -114,14 +116,49 @@ def _runtime(
             max_fps=25.0,
             show_overlay=False,
             save_transition_frames=False,
+            evidence_mode=evidence_mode,
         ),
         emit_actions=False,
         hook_detector=NullHookDetector(),
         press_detector=NullPressDetector(),
         get_detector=NullGetDetector(),
+        evidence_recorder=evidence_recorder,
         clock=clock,
         sleep=clock.sleep,
     )
+
+
+class StubEvidenceRecorder:
+    def __init__(self) -> None:
+        self.video_frames: list[tuple[int, float, tuple[int, ...]]] = []
+        self.roi_frames: list[dict[str, object]] = []
+        self.events: list[str] = []
+        self.finalized = False
+
+    def record_frame(self, frame, *, capture_frame_index, timestamp):
+        self.video_frames.append((capture_frame_index, timestamp, frame.shape))
+        return True
+
+    def record_detector_evidence(self, _frame, **kwargs):
+        self.roi_frames.append(kwargs)
+
+    def mark_event(self, event_type, _payload):
+        self.events.append(event_type)
+
+    def finalize(self):
+        self.finalized = True
+        return {
+            "evidence_mode": "diagnostic",
+            "video_path": "diagnostic_evidence/session_capture.mp4",
+            "video_frame_count": len(self.video_frames),
+            "video_fps": 10.0,
+            "first_timestamp": self.video_frames[0][1] if self.video_frames else None,
+            "last_timestamp": self.video_frames[-1][1] if self.video_frames else None,
+            "dropped_video_frames": 0,
+            "roi_evidence_counts_by_episode": {"1": {"prompt": len(self.roi_frames)}},
+            "has_evidence_gaps": False,
+            "evidence_gap_intervals": [],
+        }
 
 
 def test_emit_actions_true_is_refused_before_capture_initialization() -> None:
@@ -184,6 +221,54 @@ def test_mock_live_frame_uses_no_sink_and_never_applies_action(
     assert summary["action_sink"] is None
     saved = json.loads((runtime.logger.path / "session_summary.json").read_text(encoding="utf-8"))
     assert saved["actions_applied"] == 0
+    assert not (runtime.logger.path / "diagnostic_evidence").exists()
+
+
+def test_diagnostic_mode_records_video_and_roi_without_would_fire(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    recorder = StubEvidenceRecorder()
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        evidence_mode="diagnostic",
+        evidence_recorder=recorder,
+    )
+    summary = runtime.run(max_frames=3)
+    assert summary["result"] == "completed"
+    assert summary["video_frame_count"] == 3
+    assert recorder.video_frames[0][2] == (1440, 2560, 3)
+    assert recorder.roi_frames
+    assert set(recorder.roi_frames[0]["roi_bounds"]) == {"prompt", "hook", "press", "get"}
+    assert summary["unique_would_fire"] == {}
+    assert summary["actions_applied"] == 0
+    assert recorder.finalized is True
+
+
+def test_diagnostic_video_finalizes_after_ctrl_c(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class DelayedInterruptCapture(MockCapture):
+        def capture(self):
+            self.calls += 1
+            if self.calls > 2:
+                raise KeyboardInterrupt()
+            return self.frame
+
+    recorder = StubEvidenceRecorder()
+    runtime = _runtime(
+        tmp_path,
+        DelayedInterruptCapture(supported_frame),
+        FakeClock(),
+        evidence_mode="diagnostic",
+        evidence_recorder=recorder,
+    )
+    summary = runtime.run(max_frames=5)
+    assert summary["result"] == "interrupted_by_user"
+    assert summary["video_frame_count"] == 1
+    assert recorder.finalized is True
+    assert summary["actions_applied"] == 0
 
 
 def test_explicit_capture_fallback_is_recorded_as_session_warning(
@@ -240,6 +325,7 @@ def test_live_runtime_imports_no_input_writer_and_never_loads_ground_truth() -> 
     paths = [
         ROOT / "src" / "fishing_v2" / "live" / "live_detect_only.py",
         ROOT / "src" / "fishing_v2" / "live" / "capture_backends.py",
+        ROOT / "src" / "fishing_v2" / "live" / "diagnostic_evidence.py",
         ROOT / "src" / "fishing_v2" / "live" / "session_logger.py",
         ROOT / "src" / "screen_capture.py",
         ROOT / "tools" / "run_live_detect_only.py",

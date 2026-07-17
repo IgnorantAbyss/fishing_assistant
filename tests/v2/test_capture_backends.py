@@ -84,16 +84,26 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     default = parse_args(["--window-title", "exact-title"])
     assert default.capture_backend == MSS_REGION_BACKEND
     assert default.allow_mss_fallback is False
+    assert default.evidence_mode == "minimal"
+    assert default.evidence_video_fps == 10.0
     selected = parse_args([
         "--window-title", "exact-title",
         "--capture-backend", WINDOWS_GRAPHICS_CAPTURE_BACKEND,
         "--allow-mss-fallback",
+        "--evidence-mode", "diagnostic",
+        "--evidence-video-fps", "12",
+        "--max-completed-cycles", "3",
     ])
     assert selected.capture_backend == WINDOWS_GRAPHICS_CAPTURE_BACKEND
     assert selected.allow_mss_fallback is True
+    assert selected.evidence_mode == "diagnostic"
+    assert selected.evidence_video_fps == 12.0
+    assert selected.max_completed_cycles == 3
     assert CAPTURE_BACKENDS == ("mss-region", "windows-graphics-capture")
     with pytest.raises(SystemExit):
         parse_args(["--window-title", "exact-title", "--capture-backend", "monitor"])
+    with pytest.raises(SystemExit):
+        parse_args(["--window-title", "exact-title", "--evidence-mode", "dense"])
 
 
 def test_exact_title_lookup_never_uses_similar_window() -> None:

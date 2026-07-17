@@ -7,7 +7,7 @@ import csv
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import cv2
 
@@ -47,8 +47,14 @@ class LiveSessionLogger:
         self._event_counts: Counter[str] = Counter()
         self._cycles: dict[int, dict[str, Any]] = {}
         self._warnings: list[str] = []
+        self._event_listener: Callable[[str, Mapping[str, Any]], None] | None = None
         with self.transitions_path.open("w", encoding="utf-8", newline="") as handle:
             csv.DictWriter(handle, fieldnames=TRANSITION_FIELDS).writeheader()
+
+    def set_event_listener(
+        self, listener: Callable[[str, Mapping[str, Any]], None] | None
+    ) -> None:
+        self._event_listener = listener
 
     def save_screenshot(self, frame: Any, frame_index: int, event_type: str) -> str:
         safe_type = "".join(char.lower() if char.isalnum() else "_" for char in event_type)
@@ -63,6 +69,8 @@ class LiveSessionLogger:
         with self.events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         self._event_counts[event_type] += 1
+        if self._event_listener is not None:
+            self._event_listener(event_type, payload)
         if event_type in {
             "preflight_failure", "capture_failure", "capture_backend_fallback",
             "capture_backend_warning", "SYNC_REQUIRED", "detector_conflict",
@@ -155,6 +163,13 @@ class LiveSessionLogger:
             f"- Actions applied: **{complete.get('actions_applied', 0)}**",
             f"- Capture backend: **{complete.get('capture_backend', 'unknown')}**",
             f"- MSS fallback used: **{complete.get('capture_fallback_used', False)}**",
+            f"- Evidence mode: **{complete.get('evidence_mode', 'minimal')}**",
+            f"- Diagnostic video: `{complete.get('video_path')}`",
+            f"- Diagnostic video frames / FPS: **{complete.get('video_frame_count', 0)} / {complete.get('video_fps', 0.0)}**",
+            f"- Diagnostic video timestamps: **{complete.get('first_timestamp')} – {complete.get('last_timestamp')}**",
+            f"- Dropped diagnostic video frames: **{complete.get('dropped_video_frames', 0)}**",
+            f"- ROI evidence by episode: `{complete.get('roi_evidence_counts_by_episode', {})}`",
+            f"- Evidence gaps: **{complete.get('has_evidence_gaps', False)}** `{complete.get('evidence_gap_intervals', [])}`",
             f"- Raw proposals: `{complete.get('raw_action_proposals', {})}`",
             f"- Unique would-fire: `{complete.get('unique_would_fire', {})}`",
             f"- Warnings: `{self._warnings}`",

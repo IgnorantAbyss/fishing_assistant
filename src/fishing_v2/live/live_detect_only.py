@@ -15,13 +15,24 @@ import yaml
 
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
 from src.fishing_v2.domain.frame_context import FrameContext
-from src.fishing_v2.domain.observations import PromptObservation, PromptObservationKind
+from src.fishing_v2.domain.observations import (
+    GetObservation,
+    HookObservation,
+    PressObservation,
+    PromptObservation,
+    PromptObservationKind,
+)
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import ObservationFusion
 from src.fishing_v2.legacy_adapters.get_detector_adapter import LegacyGetDetectorAdapter
 from src.fishing_v2.legacy_adapters.hook_detector_adapter import LegacyHookDetectorAdapter
 from src.fishing_v2.legacy_adapters.press_detector_adapter import LegacyPressDetectorAdapter
 from src.fishing_v2.live.session_logger import LiveSessionLogger
+from src.fishing_v2.live.diagnostic_evidence import (
+    EVIDENCE_MODES,
+    DiagnosticEvidenceConfig,
+    DiagnosticEvidenceRecorder,
+)
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.perception.prompt_bundle import LoadedPromptBundle
 from src.fishing_v2.replay.v2_replay_runner import _config_objects
@@ -37,6 +48,7 @@ from src.fishing_v2.runtime.safety_policy import SafetyPolicy
 from src.fishing_v2.runtime.scheduling import PromptPollingConfig, RuntimeSchedulePolicy
 from src.fishing_v2.runtime.synchronization import StartupSynchronizer
 from src.screen_capture import validate_bgr_frame
+from src.config_loader import load_roi_config
 
 
 EXPECTED_RESOLUTION = (2560, 1440)
@@ -60,6 +72,9 @@ class LiveDetectOnlyConfig:
     show_overlay: bool = True
     save_transition_frames: bool = True
     unknown_screenshot_seconds: float = 2.0
+    evidence_mode: str = "minimal"
+    evidence_video_fps: float = 10.0
+    max_completed_cycles: int | None = None
 
     def __post_init__(self) -> None:
         if self.duration_seconds <= 0:
@@ -68,6 +83,12 @@ class LiveDetectOnlyConfig:
             raise ValueError("max_fps must be positive")
         if self.unknown_screenshot_seconds <= 0:
             raise ValueError("unknown_screenshot_seconds must be positive")
+        if self.evidence_mode not in EVIDENCE_MODES:
+            raise ValueError(f"evidence_mode must be one of {EVIDENCE_MODES}")
+        if self.evidence_video_fps <= 0:
+            raise ValueError("evidence_video_fps must be positive")
+        if self.max_completed_cycles is not None and self.max_completed_cycles <= 0:
+            raise ValueError("max_completed_cycles must be positive when provided")
 
 
 class WouldFireDeduplicator:
@@ -213,6 +234,7 @@ class LiveDetectOnlyRuntime:
         hook_detector: Any | None = None,
         press_detector: Any | None = None,
         get_detector: Any | None = None,
+        evidence_recorder: DiagnosticEvidenceRecorder | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -250,6 +272,16 @@ class LiveDetectOnlyRuntime:
         self.schedule = _prompt_polling(self._raw_config)
         self._opened = False
         self._capture_diagnostics: dict[str, Any] = {}
+        self.evidence_recorder = evidence_recorder
+        if self.live_config.evidence_mode == "diagnostic":
+            self.evidence_recorder = self.evidence_recorder or DiagnosticEvidenceRecorder(
+                self.logger.path,
+                config=DiagnosticEvidenceConfig(video_fps=self.live_config.evidence_video_fps),
+            )
+            self.logger.set_event_listener(self.evidence_recorder.mark_event)
+        elif self.evidence_recorder is not None:
+            raise ValueError("evidence_recorder requires evidence_mode='diagnostic'")
+        self._diagnostic_roi_bounds: dict[str, tuple[int, int, int, int]] = {}
 
     def preflight(self) -> np.ndarray:
         try:
@@ -266,6 +298,14 @@ class LiveDetectOnlyRuntime:
                 f"Unsupported capture resolution {width}x{height}; expected 2560x1440"
             )
         self.prompt_bundle.roi.pixel_bounds(width, height)
+        if self.evidence_recorder is not None:
+            roi_config = load_roi_config()
+            self._diagnostic_roi_bounds = {
+                "prompt": self.prompt_bundle.roi.pixel_bounds(width, height),
+                "hook": roi_config.pixel_roi("hook_bar", width, height),
+                "press": roi_config.pixel_roi("press_sequence", width, height),
+                "get": roi_config.pixel_roi("get_window", width, height),
+            }
         expected_count = int(self.prompt_bundle.bundle.get("prototype_count", 0))
         if len(self.prompt_bundle.model.prototypes) != expected_count or expected_count not in {36, 37}:
             raise LivePreflightError("Final Prompt bundle must contain 35 medoids plus reviewed Live candidates")
@@ -297,6 +337,83 @@ class LiveDetectOnlyRuntime:
                 "get": result.qualified.get.qualified_detected,
             },
         }
+
+    @staticmethod
+    def _observation_summary(observation: Any | None) -> dict[str, Any] | None:
+        if observation is None:
+            return None
+        base = {
+            "detected": bool(getattr(observation, "detected", False)),
+            "confidence": float(getattr(observation, "confidence", 0.0)),
+            "frame_index": int(observation.frame_index),
+            "timestamp": float(observation.timestamp),
+            "source": str(getattr(observation, "source", "")),
+        }
+        evidence = getattr(observation, "evidence", {})
+        selected_evidence_keys = (
+            "matched_features", "exception", "bar_bbox", "fill_endpoint_x",
+            "divider_line_x", "divider_line_detected", "divider_margin_passed",
+            "panel_bbox", "panel_phase", "selected_clean_frame", "panel_disappeared",
+        )
+        base["evidence"] = {
+            key: evidence[key] for key in selected_evidence_keys if key in evidence
+        }
+        if isinstance(observation, HookObservation):
+            base.update({
+                "fill_ratio": observation.fill_ratio,
+                "divider_ratio": observation.divider_ratio,
+            })
+        elif isinstance(observation, PressObservation):
+            base.update({
+                "panel_candidate": observation.panel_candidate,
+                "panel_present": observation.panel_present,
+                "sequence_candidate": list(observation.sequence_candidate),
+                "sequence_ready": observation.sequence_ready,
+                "sequence_confidence": observation.sequence_confidence,
+            })
+        elif isinstance(observation, GetObservation):
+            pass
+        return base
+
+    @classmethod
+    def _diagnostic_metadata(
+        cls,
+        *,
+        prompt: PromptObservation | None,
+        raw_bundle: ObservationBundle,
+        result: Any,
+        executed: Mapping[str, bool],
+    ) -> dict[str, Any]:
+        prompt_evidence = prompt.evidence if prompt is not None else {}
+        payload: dict[str, Any] = {
+            "prompt": {
+                "executed": bool(executed["prompt"]),
+                "raw": {
+                    "predicted_label": prompt_evidence.get("raw_predicted_label"),
+                    "similarity": prompt_evidence.get("similarity"),
+                    "second_label": prompt_evidence.get("second_label"),
+                    "ambiguity_margin": prompt_evidence.get("ambiguity_margin"),
+                } if prompt is not None else None,
+                "qualified": bool(prompt and prompt.kind != PromptObservationKind.UNKNOWN),
+                "result": {
+                    "label": prompt.kind.value,
+                    "confidence": prompt.confidence,
+                } if prompt is not None else None,
+                "rejection_reason": prompt_evidence.get("rejection_reason"),
+            }
+        }
+        for name in ("hook", "press", "get"):
+            raw = getattr(raw_bundle, name)
+            qualification = getattr(result.qualified, name)
+            qualified_observation = getattr(result.qualified.bundle, name)
+            payload[name] = {
+                "executed": bool(executed[name]),
+                "raw": cls._observation_summary(raw) if executed[name] else None,
+                "qualified": asdict(qualification),
+                "result": cls._observation_summary(qualified_observation),
+                "rejection_reason": qualification.qualification_reason,
+            }
+        return payload
 
     def _prompt_interval(self) -> float:
         configured = self.schedule.prompt_interval_seconds(self.fsm.state)
@@ -336,6 +453,10 @@ class LiveDetectOnlyRuntime:
 
     def run(self, *, max_frames: int | None = None) -> dict[str, Any]:
         captured = processed = actions_applied = 0
+        completed_cycles = 0
+        evidence_episode_id = 1
+        stop_after_completed_cycle = False
+        evidence_failure_reason: str | None = None
         latencies: list[float] = []
         detector_runs: Counter[str] = Counter()
         result_name = "completed"
@@ -414,6 +535,20 @@ class LiveDetectOnlyRuntime:
                         "reason": f"resolution_changed_to_{width}x{height}",
                     })
                     break
+                if self.evidence_recorder is not None:
+                    try:
+                        self.evidence_recorder.record_frame(
+                            frame, capture_frame_index=captured, timestamp=elapsed
+                        )
+                    except Exception as exc:
+                        result_name = "safe_stop_evidence_failure"
+                        evidence_failure_reason = f"video: {type(exc).__name__}: {exc}"
+                        self.logger.event("diagnostic_evidence_failure", {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "reason": evidence_failure_reason,
+                        })
+                        break
                 prompt_due = elapsed >= next_prompt_due
                 detector_interval = self._detector_interval(activation)
                 detector_due = detector_interval is not None and elapsed >= next_detector_due
@@ -468,6 +603,39 @@ class LiveDetectOnlyRuntime:
                     next_detector_due = elapsed + next_interval if next_interval is not None else float("inf")
                     latency_ms = (self.clock() - processing_started) * 1000.0
                     latencies.append(latency_ms)
+
+                    if self.evidence_recorder is not None:
+                        executed = {
+                            "prompt": prompt_due,
+                            "hook": hook is not None,
+                            "press": press is not None,
+                            "get": get is not None,
+                        }
+                        try:
+                            self.evidence_recorder.record_detector_evidence(
+                                frame,
+                                capture_frame_index=captured,
+                                timestamp=elapsed,
+                                episode_id=evidence_episode_id,
+                                runtime_state=last_result.fsm.next_state.value,
+                                roi_bounds=self._diagnostic_roi_bounds,
+                                detector_metadata=self._diagnostic_metadata(
+                                    prompt=prompt,
+                                    raw_bundle=raw_bundle,
+                                    result=last_result,
+                                    executed=executed,
+                                ),
+                                executed=executed,
+                            )
+                        except Exception as exc:
+                            result_name = "safe_stop_evidence_failure"
+                            evidence_failure_reason = f"roi: {type(exc).__name__}: {exc}"
+                            self.logger.event("diagnostic_evidence_failure", {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                "reason": evidence_failure_reason,
+                            })
+                            break
 
                     if prompt and prompt.kind.value != last_prompt_kind:
                         self.logger.event("prompt_label_change", {
@@ -580,6 +748,20 @@ class LiveDetectOnlyRuntime:
                             and last_result.fsm.previous_state not in {RuntimeState.IDLE, RuntimeState.SYNCING}
                         ):
                             self.deduplicator.finish_cycle()
+                            completed_cycles += 1
+                            if self.evidence_recorder is not None:
+                                self.logger.event("diagnostic_cycle_completed", {
+                                    "timestamp": elapsed,
+                                    "frame_index": captured,
+                                    "episode_id": evidence_episode_id,
+                                    "completed_cycles": completed_cycles,
+                                    "actions_applied": 0,
+                                })
+                            evidence_episode_id += 1
+                            stop_after_completed_cycle = bool(
+                                self.live_config.max_completed_cycles is not None
+                                and completed_cycles >= self.live_config.max_completed_cycles
+                            )
 
                     if self.fsm.state == RuntimeState.SYNC_REQUIRED and not sync_required_active:
                         screenshot = self.logger.save_screenshot(frame, captured, "sync_required")
@@ -631,6 +813,9 @@ class LiveDetectOnlyRuntime:
                         flush=True,
                     )
                     last_terminal = elapsed
+                if stop_after_completed_cycle:
+                    result_name = "completed_target_cycles"
+                    break
                 loop_interval = 1.0 / self.live_config.max_fps
                 self.sleep(max(0.0, loop_interval - (self.clock() - frame_loop_started)))
         except KeyboardInterrupt:
@@ -644,6 +829,45 @@ class LiveDetectOnlyRuntime:
             })
         finally:
             elapsed_total = max(0.0, self.clock() - started)
+            evidence_summary: dict[str, Any] = {
+                "evidence_mode": "minimal",
+                "video_path": None,
+                "video_frame_count": 0,
+                "video_fps": 0.0,
+                "first_timestamp": None,
+                "last_timestamp": None,
+                "dropped_video_frames": 0,
+                "roi_evidence_counts_by_episode": {},
+                "has_evidence_gaps": False,
+                "evidence_gap_intervals": [],
+            }
+            if self.evidence_recorder is not None:
+                try:
+                    evidence_summary = self.evidence_recorder.finalize()
+                except Exception as exc:
+                    result_name = "safe_stop_evidence_finalize_failure"
+                    self.logger.event("diagnostic_evidence_failure", {
+                        "timestamp": elapsed_total,
+                        "frame_index": captured,
+                        "reason": f"finalize: {type(exc).__name__}: {exc}",
+                    })
+                    evidence_summary = {
+                        **evidence_summary,
+                        "evidence_mode": "diagnostic",
+                        "has_evidence_gaps": True,
+                        "evidence_gap_intervals": [{
+                            "reason": f"finalize_failure: {type(exc).__name__}: {exc}"
+                        }],
+                    }
+            if evidence_failure_reason is not None:
+                evidence_summary = {
+                    **evidence_summary,
+                    "has_evidence_gaps": True,
+                    "evidence_gap_intervals": [
+                        *evidence_summary.get("evidence_gap_intervals", []),
+                        {"reason": evidence_failure_reason},
+                    ],
+                }
             self.overlay.close()
             if self._opened:
                 self.capture.close()
@@ -672,6 +896,9 @@ class LiveDetectOnlyRuntime:
                 ),
                 "capture_fallback_used": bool(self._capture_diagnostics.get("fallback_used", False)),
                 "capture_diagnostics": self._capture_diagnostics,
+                "completed_cycles": completed_cycles,
+                "max_completed_cycles": self.live_config.max_completed_cycles,
+                **evidence_summary,
             }
             self.logger.finalize(summary)
         return summary
