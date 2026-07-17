@@ -60,6 +60,13 @@ class RuntimeController:
         self._last_action_at: float | None = None
         self._sent: set[tuple[str, ActionIntent, int]] = set()
 
+    def reset_for_sync_recovery(self, timestamp: float) -> None:
+        """Drop stale episode, qualifier and one-shot state at sync loss."""
+        self.fsm.begin_sync_recovery(timestamp)
+        self.evidence_qualifier.reset_temporal_state()
+        self._sent.clear()
+        self._last_action_at = None
+
     def qualify_raw_bundle(
         self,
         raw_bundle: ObservationBundle,

@@ -137,6 +137,47 @@ class FishingFSM:
             self._reset_get_retry(timestamp)
         return FSMResult(previous, state, self._none(), reason, previous != state)
 
+    def begin_sync_recovery(self, timestamp: float) -> None:
+        """Clear all episode/action state before accepting recovery evidence."""
+        if self.state != RuntimeState.SYNC_REQUIRED:
+            raise RuntimeError("Sync recovery can only begin from SYNC_REQUIRED")
+        self.state_since = float(timestamp)
+        self._candidate = None
+        self._candidate_frames = 0
+        self._conflict_since = None
+        self._pending_request = None
+        self._actions_applied.clear()
+        self._press_waiting_for_clear = False
+        self._press_intent_proposed = False
+        self._hook_intent_proposed = False
+        self._hook_episode_active = False
+        self._hook_episode_started_at = None
+        self._hook_absent_frames = 0
+        self._get_started_at = None
+        self._get_last_applied_at = None
+        self._get_attempts = 0
+
+    def recover_from_sync_required(
+        self,
+        state: RuntimeState,
+        timestamp: float,
+        reason: str,
+    ) -> FSMResult:
+        """Apply an independently qualified recovery without relaxing FSM edges."""
+        if self.state != RuntimeState.SYNC_REQUIRED:
+            raise RuntimeError("Runtime is not awaiting synchronization")
+        concrete_states = {
+            RuntimeState.IDLE,
+            RuntimeState.WAITING,
+            RuntimeState.READY,
+            RuntimeState.HOOK,
+            RuntimeState.PRESS,
+            RuntimeState.GET,
+        }
+        if state not in concrete_states:
+            raise ValueError("Recovery target must be a concrete runtime state")
+        return self.force_state(state, timestamp, reason)
+
     def _transition(
         self,
         target: RuntimeState,

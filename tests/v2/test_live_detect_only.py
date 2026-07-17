@@ -1,4 +1,6 @@
 import ast
+import csv
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -10,7 +12,13 @@ import pytest
 
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
 from src.fishing_v2.domain.frame_context import FrameContext
-from src.fishing_v2.domain.observations import GetObservation, HookObservation, PressObservation
+from src.fishing_v2.domain.observations import (
+    GetObservation,
+    HookObservation,
+    PressObservation,
+    PromptObservation,
+    PromptObservationKind,
+)
 from src.fishing_v2.live.live_detect_only import (
     LiveDetectOnlyConfig,
     LiveDetectOnlyRuntime,
@@ -439,3 +447,87 @@ def test_ready_holdout_startup_would_start_hook_once_and_never_cast(tmp_path: Pa
         item["event_type"] == "prompt_label_change" and item["next_label"] == "READY_BITE"
         for item in events
     )
+
+
+def test_live_runtime_logs_startup_and_sync_required_recovery_transitions(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class TimelinePromptObserver:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def observe(self, _frame, context):
+            self.calls += 1
+            kind = (
+                PromptObservationKind.READY_BITE
+                if self.calls <= 10
+                else PromptObservationKind.WAITING_IN_PROGRESS
+            )
+            return PromptObservation(
+                kind,
+                0.998,
+                {kind.value: 0.998},
+                "saved_live_timeline",
+                context.frame_index,
+                context.timestamp,
+                {},
+            )
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        duration_seconds=7.0,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=TimelinePromptObserver(),
+    )
+    summary = runtime.run(max_frames=180)
+    with runtime.logger.transitions_path.open(encoding="utf-8", newline="") as handle:
+        transitions = list(csv.DictReader(handle))
+    edges = [
+        (row["previous_state"], row["next_state"], row["reason"])
+        for row in transitions
+    ]
+    assert any(previous == "SYNCING" and next_state == "READY" for previous, next_state, _ in edges)
+    assert (
+        "READY",
+        "SYNC_REQUIRED",
+        "persistent_conflicting_or_illegal_evidence",
+    ) in edges
+    assert any(
+        previous == "SYNC_REQUIRED"
+        and next_state == "WAITING"
+        and reason == "prompt_consensus_sync_recovery"
+        for previous, next_state, reason in edges
+    )
+
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    types = [item["event_type"] for item in events]
+    assert "sync_recovery_started" in types
+    assert "sync_recovery_candidate" in types
+    assert "sync_recovered" in types
+    recovered = next(item for item in events if item["event_type"] == "sync_recovered")
+    assert recovered["recovery_target"] == "WAITING"
+    assert recovered["support_frames"] == 10
+    assert recovered["action_intent"] == "NONE"
+    assert recovered["action_applied"] is False
+    recovery_frame = recovered["frame_index"]
+    assert not any(
+        item["frame_index"] == recovery_frame and item["event_type"].startswith("WOULD_")
+        for item in events
+        if "frame_index" in item
+    )
+    assert any(
+        item["event_type"] == "detector_activation_change"
+        and item["hook"] == "ARMED"
+        and item["press"] == "ARMED"
+        and item["get"] == "ARMED"
+        for item in events
+    )
+    assert summary["actions_applied"] == 0
+    assert runtime.controller.action_sink is None

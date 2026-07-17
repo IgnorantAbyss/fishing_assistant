@@ -85,6 +85,12 @@ class DetectorEvidenceQualifier:
         self._get_confirmed_frames = 0
         self._get_last_frame: int | None = None
 
+    def reset_temporal_state(self) -> None:
+        """Discard detector confirmation accumulated before resynchronization."""
+        self.press_aggregator.reset()
+        self._get_confirmed_frames = 0
+        self._get_last_frame = None
+
     def qualify(
         self,
         raw: ObservationBundle,

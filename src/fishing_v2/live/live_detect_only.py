@@ -108,6 +108,12 @@ class WouldFireDeduplicator:
         if self.has_cycle_activity:
             self.cycle_id += 1
 
+    def reset_for_sync_recovery(self) -> None:
+        """Prevent pre-loss proposals from suppressing the recovered cycle."""
+        if self.has_cycle_activity:
+            self.cycle_id += 1
+        self._seen.clear()
+
     def observe(
         self,
         request: ActionRequest,
@@ -269,6 +275,7 @@ class LiveDetectOnlyRuntime:
             evidence_qualifier=DetectorEvidenceQualifier(qualification_config),
         )
         self.synchronizer = StartupSynchronizer(sync_config, started_at=0.0)
+        self.recovery_synchronizer = StartupSynchronizer(sync_config, started_at=0.0)
         self.schedule = _prompt_polling(self._raw_config)
         self._opened = False
         self._capture_diagnostics: dict[str, Any] = {}
@@ -577,6 +584,8 @@ class LiveDetectOnlyRuntime:
                     })
                     raw_bundle = ObservationBundle(captured, elapsed, prompt, hook, press, get)
                     sync_reason = None
+                    processing_from_sync_required = self.fsm.state == RuntimeState.SYNC_REQUIRED
+                    transition_results: list[Any] = []
                     if self.fsm.state == RuntimeState.SYNCING:
                         _, startup_qualified = self.controller.qualify_raw_bundle(
                             raw_bundle, action_mode=ActionExecutionMode.RECORDED_OBSERVATION
@@ -584,10 +593,13 @@ class LiveDetectOnlyRuntime:
                         sync = self.synchronizer.observe(startup_qualified.bundle)
                         sync_reason = sync.reason
                         if sync.synchronized:
-                            self.fsm.force_state(sync.state, elapsed, sync.reason)
+                            transition_results.append(
+                                self.fsm.force_state(sync.state, elapsed, sync.reason)
+                            )
                         elif sync.state == RuntimeState.SYNC_REQUIRED:
-                            self.fsm.force_state(RuntimeState.SYNC_REQUIRED, elapsed, sync.reason)
-                    previous_state = self.fsm.state
+                            transition_results.append(self.fsm.force_state(
+                                RuntimeState.SYNC_REQUIRED, elapsed, sync.reason
+                            ))
                     last_result = self.controller.process(
                         raw_bundle,
                         foreground=self.capture.is_foreground(),
@@ -598,7 +610,64 @@ class LiveDetectOnlyRuntime:
                         raise RuntimeError("Detect-only safety invariant violated: action_applied=true")
                     actions_applied += int(last_result.action_applied)
                     processed += 1
+                    if last_result.fsm.changed:
+                        transition_results.append(last_result.fsm)
+
+                    entered_sync_required = bool(
+                        self.fsm.state == RuntimeState.SYNC_REQUIRED
+                        and not processing_from_sync_required
+                    )
+                    if entered_sync_required:
+                        self.controller.reset_for_sync_recovery(elapsed)
+                        self.recovery_synchronizer.reset(started_at=elapsed)
+                        self.deduplicator.reset_for_sync_recovery()
+                        self.logger.event("sync_recovery_started", {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "recovery_target": None,
+                            "support_frames": 0,
+                            "duration_seconds": 0.0,
+                            "rejection_reason": "fresh_window_after_sync_required",
+                        })
+                    elif processing_from_sync_required:
+                        recovery = self.recovery_synchronizer.observe_recovery(
+                            last_result.qualified,
+                            has_conflict=last_result.evidence.has_conflict,
+                        )
+                        recovery_payload = {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "recovery_target": (
+                                recovery.candidate_state.value
+                                if recovery.candidate_state is not None else None
+                            ),
+                            "support_frames": recovery.support_frames,
+                            "observed_frames": recovery.observed_frames,
+                            "duration_seconds": recovery.duration_seconds,
+                            "confidence": recovery.confidence,
+                            "rejection_reason": recovery.rejection_reason,
+                            "reason": recovery.reason,
+                        }
+                        self.logger.event("sync_recovery_candidate", recovery_payload)
+                        if recovery.synchronized:
+                            recovered = self.fsm.recover_from_sync_required(
+                                recovery.state, elapsed, recovery.reason
+                            )
+                            transition_results.append(recovered)
+                            self.logger.event("sync_recovered", {
+                                **recovery_payload,
+                                "recovery_target": recovery.state.value,
+                                "action_intent": ActionIntent.NONE.value,
+                                "action_applied": False,
+                            })
+
                     activation = last_result.next_activation
+                    if self.fsm.state != last_result.fsm.next_state:
+                        activation = self.activation_policy.evaluate(
+                            self.fsm.state,
+                            raw_bundle,
+                            recorded_observation=True,
+                        )
                     next_interval = self._detector_interval(activation)
                     next_detector_due = elapsed + next_interval if next_interval is not None else float("inf")
                     latency_ms = (self.clock() - processing_started) * 1000.0
@@ -726,7 +795,9 @@ class LiveDetectOnlyRuntime:
                         unknown_started = None
                         unknown_saved = False
 
-                    if last_result.fsm.previous_state != last_result.fsm.next_state:
+                    for transition_result in transition_results:
+                        if transition_result.previous_state == transition_result.next_state:
+                            continue
                         screenshot = (
                             self.logger.save_screenshot(frame, captured, "runtime_transition")
                             if self.live_config.save_transition_frames else None
@@ -734,18 +805,22 @@ class LiveDetectOnlyRuntime:
                         self.logger.transition(
                             timestamp=elapsed,
                             frame_index=captured,
-                            previous_state=last_result.fsm.previous_state.value,
-                            next_state=last_result.fsm.next_state.value,
-                            reason=sync_reason or last_result.fsm.transition_reason,
+                            previous_state=transition_result.previous_state.value,
+                            next_state=transition_result.next_state.value,
+                            reason=transition_result.transition_reason,
                             screenshot_reference=screenshot,
                         )
                         self.logger.update_cycle(self.deduplicator.cycle_id, "runtime_transition", {
                             "frame_index": captured,
-                            "runtime_state": last_result.fsm.next_state.value,
+                            "runtime_state": transition_result.next_state.value,
                         })
                         if (
-                            last_result.fsm.next_state == RuntimeState.IDLE
-                            and last_result.fsm.previous_state not in {RuntimeState.IDLE, RuntimeState.SYNCING}
+                            transition_result.next_state == RuntimeState.IDLE
+                            and transition_result.previous_state not in {
+                                RuntimeState.IDLE,
+                                RuntimeState.SYNCING,
+                                RuntimeState.SYNC_REQUIRED,
+                            }
                         ):
                             self.deduplicator.finish_cycle()
                             completed_cycles += 1
@@ -765,10 +840,21 @@ class LiveDetectOnlyRuntime:
 
                     if self.fsm.state == RuntimeState.SYNC_REQUIRED and not sync_required_active:
                         screenshot = self.logger.save_screenshot(frame, captured, "sync_required")
+                        sync_entry = next(
+                            (
+                                item for item in reversed(transition_results)
+                                if item.next_state == RuntimeState.SYNC_REQUIRED
+                            ),
+                            None,
+                        )
                         self.logger.event("SYNC_REQUIRED", {
                             "timestamp": elapsed,
                             "frame_index": captured,
-                            "reason": sync_reason or last_result.fsm.transition_reason,
+                            "reason": (
+                                sync_entry.transition_reason
+                                if sync_entry is not None
+                                else sync_reason or last_result.fsm.transition_reason
+                            ),
                             "screenshot_reference": screenshot,
                         })
                     sync_required_active = self.fsm.state == RuntimeState.SYNC_REQUIRED

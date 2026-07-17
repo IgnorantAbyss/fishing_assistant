@@ -52,7 +52,7 @@ class DetectorActivationPolicy:
         prompt = bundle.prompt.kind if bundle.prompt else PromptObservationKind.UNKNOWN
 
         hook = DetectorActivationMode.OFF
-        if state in {RuntimeState.SYNCING, RuntimeState.HOOK_PENDING}:
+        if state in {RuntimeState.SYNCING, RuntimeState.SYNC_REQUIRED, RuntimeState.HOOK_PENDING}:
             hook = DetectorActivationMode.ARMED
         if (
             state in {RuntimeState.SYNCING, RuntimeState.HOOK_PENDING}
@@ -63,7 +63,7 @@ class DetectorActivationPolicy:
             hook = DetectorActivationMode.ACTIVE
 
         press = DetectorActivationMode.OFF
-        if state in {RuntimeState.SYNCING, RuntimeState.RESULT_PENDING}:
+        if state in {RuntimeState.SYNCING, RuntimeState.SYNC_REQUIRED, RuntimeState.RESULT_PENDING}:
             press = DetectorActivationMode.ARMED
         if recorded_observation and state in {RuntimeState.HOOK, RuntimeState.PRESS}:
             press = DetectorActivationMode.ARMED
@@ -76,7 +76,7 @@ class DetectorActivationPolicy:
             press = DetectorActivationMode.ACTIVE
 
         get = DetectorActivationMode.OFF
-        if state in {RuntimeState.SYNCING, RuntimeState.RESULT_PENDING}:
+        if state in {RuntimeState.SYNCING, RuntimeState.SYNC_REQUIRED, RuntimeState.RESULT_PENDING}:
             get = DetectorActivationMode.ARMED
         if recorded_observation and state in {RuntimeState.HOOK, RuntimeState.PRESS}:
             get = DetectorActivationMode.ARMED
