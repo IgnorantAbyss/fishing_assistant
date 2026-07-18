@@ -92,7 +92,7 @@ get_detector:
   armed_fps: 5
   panel_confirmation_frames: 2
   localizer:
-    search_width_ratio: 0.78
+    search_width_ratio: 0.94
     geometry:
       x1_min: 0.18
       x1_max: 0.42
@@ -105,6 +105,15 @@ get_detector:
       x2_min: 0.90
       y2_min: 0.70
       y2_max: 0.92
+    vertical_sliding:
+      x1_ratio: 0.20
+      x2_ratio: 0.98
+      panel_height_to_width_ratio: 0.70
+      step_ratio: 0.02
+      min_grid_cells: 8
+      min_title_bright_ratio: 0.015
+      min_button_bright_ratio: 0.012
+      min_dark_ratio: 0.80
   dark_scene_fallback:
     x1_ratio: 0.26
     y1_ratio: 0.23

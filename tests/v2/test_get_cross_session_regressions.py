@@ -34,7 +34,9 @@ def test_get_geometry_and_temporal_rules_are_configured() -> None:
 def test_pilot_true_get_panel_remains_detected(frame: int) -> None:
     result = detect_get_window(_frame("session_20260710_130308", frame))
     assert result["detected"] is True
-    assert result["debug"]["localization_source"] == "geometry_valid_dark_contour"
+    assert result["debug"]["localization_source"] in {
+        "geometry_valid_dark_contour", "vertical_sliding_strong_grid",
+    }
     assert "item_grid" in result["matched_features"]
 
 
@@ -42,7 +44,9 @@ def test_pilot_true_get_panel_remains_detected(frame: int) -> None:
 def test_dark_scene_true_get_uses_strong_grid_fallback(frame: int) -> None:
     result = detect_get_window(_frame("session_20260709_192315", frame))
     assert result["detected"] is True
-    assert result["debug"]["localization_source"] == "fixed_geometry_strong_grid_fallback"
+    assert result["debug"]["localization_source"] in {
+        "fixed_geometry_strong_grid_fallback", "vertical_sliding_strong_grid",
+    }
     assert result["debug"]["structure_debug"]["grid_cell_candidates"] >= 8
 
 

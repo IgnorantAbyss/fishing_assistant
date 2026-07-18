@@ -311,7 +311,11 @@ class LiveDetectOnlyRuntime:
                 "prompt": self.prompt_bundle.roi.pixel_bounds(width, height),
                 "hook": roi_config.pixel_roi("hook_bar", width, height),
                 "press": roi_config.pixel_roi("press_sequence", width, height),
-                "get": roi_config.pixel_roi("get_window", width, height),
+                "get": roi_config.pixel_roi(
+                    "get_search" if "get_search" in roi_config.rois else "get_window",
+                    width,
+                    height,
+                ),
             }
         expected_count = int(self.prompt_bundle.bundle.get("prototype_count", 0))
         if len(self.prompt_bundle.model.prototypes) != expected_count or expected_count not in {36, 37}:
@@ -379,8 +383,59 @@ class LiveDetectOnlyRuntime:
                 "sequence_confidence": observation.sequence_confidence,
             })
         elif isinstance(observation, GetObservation):
-            pass
+            # GET localization failures cannot be reconstructed from the
+            # flattened feature list. Diagnostic mode intentionally keeps the
+            # complete JSON-only adapter payload for later Live audits.
+            if "legacy_debug" in evidence:
+                base["evidence"]["legacy_debug"] = evidence["legacy_debug"]
         return base
+
+    @staticmethod
+    def _get_diagnostic_fields(
+        raw: GetObservation | None,
+        qualified: GetObservation | None,
+        qualification: Any,
+    ) -> dict[str, Any]:
+        evidence = raw.evidence if raw is not None else {}
+        debug = evidence.get("legacy_debug", {})
+        sliding = debug.get("vertical_sliding") or {}
+        sliding_selected = sliding.get("selected") or {}
+        fallback = debug.get("fixed_fallback") or {}
+        structure = debug.get("structure_debug") or {}
+        if not structure:
+            structure = sliding_selected.get("structure_debug") or fallback.get("structure_debug") or {}
+        dark_ratio = sliding_selected.get("dark_ratio")
+        if dark_ratio is None:
+            dark_ratio = fallback.get("dark_ratio")
+        qualified_evidence = qualified.evidence if qualified is not None else {}
+        localization_source = debug.get("localization_source")
+        return {
+            "raw_candidate": bool(raw and raw.detected),
+            "qualified": bool(qualification.qualified_detected),
+            "confidence": float(raw.confidence) if raw is not None else None,
+            "search_roi": debug.get("search_roi"),
+            "candidate_bbox": debug.get("panel_bbox"),
+            "candidate_bbox_global": debug.get("panel_bbox_global"),
+            "vertical_anchor_px": sliding_selected.get("vertical_anchor_px"),
+            "vertical_offset_ratio": sliding_selected.get("vertical_offset_ratio"),
+            "panel_confidence": debug.get("panel_confidence"),
+            "fallback_used": localization_source in {
+                "vertical_sliding_strong_grid", "fixed_geometry_strong_grid_fallback"
+            },
+            "fallback_reason": (
+                None if debug.get("panel_bbox") is not None
+                else sliding.get("rejection_reason") or debug.get("rejection_reason")
+            ),
+            "localization_source": localization_source,
+            "dark_ratio": dark_ratio,
+            "grid_contour_count": structure.get("grid_cell_candidates"),
+            "title_bright_ratio": structure.get("title_bright_ratio"),
+            "button_bright_ratio": structure.get("button_bright_ratio"),
+            "temporal_confirmation_count": qualified_evidence.get("get_confirmation_frames", 0),
+            "activation_mode": qualification.activation_mode.value,
+            "evidence_eligible_for_fusion": bool(qualification.used_by_fusion),
+            "rejection_reason": qualification.qualification_reason,
+        }
 
     @classmethod
     def _diagnostic_metadata(
@@ -420,6 +475,10 @@ class LiveDetectOnlyRuntime:
                 "result": cls._observation_summary(qualified_observation),
                 "rejection_reason": qualification.qualification_reason,
             }
+            if name == "get":
+                payload[name]["diagnostics"] = cls._get_diagnostic_fields(
+                    raw, qualified_observation, qualification
+                )
         return payload
 
     def _prompt_interval(self) -> float:

@@ -147,6 +147,86 @@ def _find_panel(
     }
 
 
+def _vertical_sliding_panel(
+    image: np.ndarray,
+    localizer: Mapping[str, Any],
+) -> tuple[np.ndarray | None, tuple[int, int, int, int] | None, dict[str, Any]]:
+    """Find the fixed-width inventory geometry at any vertical anchor.
+
+    The Live panel can move by roughly one title-bar height.  This search keeps
+    the reviewed title/grid/button gate, but removes the single y-anchor
+    assumption that rejected panels touching the legacy ROI's top edge.
+    """
+    full_height, full_width = image.shape[:2]
+    search_width = round(full_width * float(localizer["search_width_ratio"]))
+    search = image[:, :search_width]
+    height, width = search.shape[:2]
+    settings = localizer["vertical_sliding"]
+    x1 = round(width * float(settings["x1_ratio"]))
+    x2 = round(width * float(settings["x2_ratio"]))
+    panel_height = min(
+        height,
+        max(1, round((x2 - x1) * float(settings["panel_height_to_width_ratio"]))),
+    )
+    step = max(1, round(height * float(settings["step_ratio"])))
+    anchors = list(range(0, max(1, height - panel_height + 1), step))
+    final_anchor = max(0, height - panel_height)
+    if not anchors or anchors[-1] != final_anchor:
+        anchors.append(final_anchor)
+
+    candidates: list[tuple[tuple[int, float, float, float], int, dict[str, Any]]] = []
+    for y1 in anchors:
+        y2 = y1 + panel_height
+        panel = search[y1:y2, x1:x2]
+        scores, structure = _panel_structure_scores(panel)
+        gray = cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY)
+        dark_ratio = float(np.mean(gray < 120))
+        accepted = bool(
+            structure["grid_cell_candidates"] >= int(settings["min_grid_cells"])
+            and structure["title_bright_ratio"] >= float(settings["min_title_bright_ratio"])
+            and structure["button_bright_ratio"] >= float(settings["min_button_bright_ratio"])
+            and dark_ratio >= float(settings["min_dark_ratio"])
+        )
+        item = {
+            "bbox": [x1, y1, x2, y2],
+            "vertical_anchor_px": y1,
+            "vertical_offset_ratio": round(y1 / max(1, height), 4),
+            "structure_scores": {name: round(value, 4) for name, value in scores.items()},
+            "structure_debug": structure,
+            "dark_ratio": round(dark_ratio, 4),
+            "accepted": accepted,
+        }
+        if accepted:
+            rank = (
+                int(structure["grid_cell_candidates"]),
+                float(structure["button_bright_ratio"]),
+                float(structure["title_bright_ratio"]),
+                dark_ratio,
+            )
+            candidates.append((rank, y1, item))
+
+    debug = {
+        "search_size": [width, height],
+        "candidate_count": len(candidates),
+        "anchors_evaluated": len(anchors),
+        "candidates": sorted(
+            (item for _, _, item in candidates),
+            key=lambda item: (
+                item["structure_debug"]["grid_cell_candidates"],
+                item["structure_debug"]["button_bright_ratio"],
+            ),
+            reverse=True,
+        )[:5],
+    }
+    if not candidates:
+        debug["rejection_reason"] = "no_vertical_anchor_passed_reviewed_structure_gate"
+        return None, None, debug
+    _, best_y, best = max(candidates, key=lambda item: item[0])
+    bounds = (x1, best_y, x2, best_y + panel_height)
+    debug["selected"] = best
+    return search[bounds[1]:bounds[3], bounds[0]:bounds[2]], bounds, debug
+
+
 def _panel_structure_scores(panel: np.ndarray) -> tuple[dict[str, float], dict[str, Any]]:
     """Score title/grid/button structure after panel localization."""
     gray = cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY)
@@ -161,10 +241,17 @@ def _panel_structure_scores(panel: np.ndarray) -> tuple[dict[str, float], dict[s
     cells = 0
     for contour in contours:
         _, _, cell_width, cell_height = cv2.boundingRect(contour)
+        contour_area = cv2.contourArea(contour)
+        rectangularity = contour_area / max(1, cell_width * cell_height)
+        vertices = len(cv2.approxPolyDP(
+            contour, 0.03 * cv2.arcLength(contour, True), True
+        ))
         if (
             width * 0.07 <= cell_width <= width * 0.24
             and height * 0.10 <= cell_height <= height * 0.28
             and 0.65 <= cell_width / max(1, cell_height) <= 1.8
+            and rectangularity >= 0.65
+            and 4 <= vertices <= 6
         ):
             cells += 1
     scores = {
@@ -190,7 +277,10 @@ def detect_get_window(
     config = roi_config or load_roi_config()
     active_thresholds = thresholds or load_thresholds_config()
     settings = get_settings or _load_get_settings()
-    left, top, right, bottom = normalized_to_pixel_roi(config.rois["get_window"], frame.shape[1], frame.shape[0])
+    search_roi_name = "get_search" if "get_search" in config.rois else "get_window"
+    left, top, right, bottom = normalized_to_pixel_roi(
+        config.rois[search_roi_name], frame.shape[1], frame.shape[0]
+    )
     crop = frame[top:bottom, left:right]
     template = cv2.imread(str(LIVE_GET_TEMPLATE), cv2.IMREAD_COLOR)
     if template is None:
@@ -200,8 +290,15 @@ def detect_get_window(
             "matched_features": [],
             "debug": {"roi_name": "get_window", "reason": "live_get_template_missing"},
         }
-    localized_crop, panel_bbox, localizer_debug = _find_panel(crop, settings["localizer"])
+    localized_crop, panel_bbox, contour_debug = _find_panel(crop, settings["localizer"])
     localization_source = "geometry_valid_dark_contour" if localized_crop is not None else "none"
+    sliding_debug: dict[str, Any] | None = None
+    if localized_crop is None:
+        localized_crop, panel_bbox, sliding_debug = _vertical_sliding_panel(
+            crop, settings["localizer"]
+        )
+        if localized_crop is not None:
+            localization_source = "vertical_sliding_strong_grid"
     fallback_debug: dict[str, Any] | None = None
     if localized_crop is None:
         search_width = round(crop.shape[1] * float(settings["localizer"]["search_width_ratio"]))
@@ -230,14 +327,14 @@ def detect_get_window(
             localized_crop = fallback_crop
             panel_bbox = fallback_bounds
             localization_source = "fixed_geometry_strong_grid_fallback"
-    # The canonical asset is already an ROI crop; its panel bounds are stable.
-    template_height, template_width = template.shape[:2]
-    template_panel_bbox = (
-        round(template_width * 0.19),
-        round(template_height * 0.17),
-        round(template_width * 0.92),
-        round(template_height * 0.84),
+    # Locate the canonical panel with the same relative geometry used for Live
+    # frames so comparison does not retain a second, conflicting y anchor.
+    localized_template, template_panel_bbox, _ = _vertical_sliding_panel(
+        template, settings["localizer"]
     )
+    if localized_template is None or template_panel_bbox is None:
+        template_height, template_width = template.shape[:2]
+        template_panel_bbox = (0, 0, template_width, template_height)
     tx1, ty1, tx2, ty2 = template_panel_bbox
     localized_template = template[ty1:ty2, tx1:tx2]
     comparison_crop = localized_crop if localized_crop is not None else crop
@@ -276,22 +373,40 @@ def detect_get_window(
     }
     detected = passes["item_grid"] and (passes["inventory_title"] or passes["collect_button"])
     confidence = float(np.mean(list(scores.values())))
+    rejection_reason = (
+        "raw_get_panel_detected"
+        if detected
+        else (
+            "panel_localization_failed"
+            if panel_bbox is None
+            else "localized_panel_missing_required_grid_title_or_button"
+        )
+    )
+    panel_bbox_global = (
+        [left + panel_bbox[0], top + panel_bbox[1], left + panel_bbox[2], top + panel_bbox[3]]
+        if panel_bbox is not None else None
+    )
     return {
         "detected": detected,
         "confidence": round(confidence, 4),
         "matched_features": [name for name, passed in passes.items() if passed],
         "debug": {
-            "roi_name": "get_window",
+            "roi_name": search_roi_name,
+            "search_roi": [left, top, right, bottom],
             "panel_bbox": list(panel_bbox) if panel_bbox is not None else None,
+            "panel_bbox_global": panel_bbox_global,
             "template_panel_bbox": list(template_panel_bbox) if template_panel_bbox is not None else None,
             "localized_panel_comparison": panel_bbox is not None and template_panel_bbox is not None,
             "localization_source": localization_source,
-            "localizer": localizer_debug,
+            "localizer": contour_debug,
+            "vertical_sliding": sliding_debug,
             "fixed_fallback": fallback_debug,
             "similarity_scores": {name: round(score, 4) for name, score in similarity_scores.items()},
             "structure_scores": {name: round(score, 4) for name, score in structure_scores.items()},
             "structure_debug": structure_debug,
             "feature_scores": {name: round(score, 4) for name, score in scores.items()},
+            "panel_confidence": round(confidence, 4),
+            "rejection_reason": rejection_reason,
             "detector_min_confidence": active_thresholds.min_confidence_for("GET"),
         },
     }

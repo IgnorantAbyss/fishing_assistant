@@ -138,6 +138,69 @@ def test_dense_roi_evidence_exists_without_would_fire_event(tmp_path: Path) -> N
     assert set(records[0]["roi_paths"]) == {"prompt", "hook", "press", "get"}
 
 
+def test_get_diagnostic_metadata_keeps_complete_legacy_debug() -> None:
+    from src.fishing_v2.domain.observations import GetObservation
+    from src.fishing_v2.live.live_detect_only import LiveDetectOnlyRuntime
+    from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
+    from src.fishing_v2.runtime.detector_evidence import EvidenceQualification
+
+    debug = {
+        "search_roi": [1, 2, 3, 4],
+        "panel_bbox": [10, 20, 110, 220],
+        "panel_bbox_global": [11, 22, 113, 224],
+        "localization_source": "vertical_sliding_strong_grid",
+        "panel_confidence": 0.96,
+        "structure_debug": {
+            "grid_cell_candidates": 12,
+            "title_bright_ratio": 0.03,
+            "button_bright_ratio": 0.02,
+        },
+        "vertical_sliding": {
+            "selected": {
+                "vertical_anchor_px": 42,
+                "vertical_offset_ratio": 0.1,
+                "dark_ratio": 0.91,
+            }
+        },
+    }
+    raw = GetObservation(True, 0.96, 7, 1.4, evidence={
+        "matched_features": ["inventory_title", "item_grid", "collect_button"],
+        "legacy_debug": debug,
+    })
+    qualified = GetObservation(True, 0.96, 7, 1.4, evidence={
+        **raw.evidence, "get_confirmation_frames": 2,
+    })
+    qualification = EvidenceQualification(
+        "get", DetectorActivationMode.BURST, True, True,
+        "strong_get_panel_temporally_qualified", True, False,
+    )
+    summary = LiveDetectOnlyRuntime._observation_summary(raw)
+    fields = LiveDetectOnlyRuntime._get_diagnostic_fields(raw, qualified, qualification)
+    assert summary["evidence"]["legacy_debug"] == debug
+    assert fields == {
+        "raw_candidate": True,
+        "qualified": True,
+        "confidence": 0.96,
+        "search_roi": [1, 2, 3, 4],
+        "candidate_bbox": [10, 20, 110, 220],
+        "candidate_bbox_global": [11, 22, 113, 224],
+        "vertical_anchor_px": 42,
+        "vertical_offset_ratio": 0.1,
+        "panel_confidence": 0.96,
+        "fallback_used": True,
+        "fallback_reason": None,
+        "localization_source": "vertical_sliding_strong_grid",
+        "dark_ratio": 0.91,
+        "grid_contour_count": 12,
+        "title_bright_ratio": 0.03,
+        "button_bright_ratio": 0.02,
+        "temporal_confirmation_count": 2,
+        "activation_mode": "BURST",
+        "evidence_eligible_for_fusion": True,
+        "rejection_reason": "strong_get_panel_temporally_qualified",
+    }
+
+
 def test_event_ring_indexes_two_seconds_before_and_after_in_full_video(tmp_path: Path) -> None:
     io = EvidenceIO()
     recorder = _recorder(tmp_path, io)

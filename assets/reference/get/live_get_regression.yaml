@@ -1,0 +1,135 @@
+version: 1
+status: reviewed_live_regression_reference
+source_session: session_20260718_082600
+notes:
+  - These are copied diagnostic GET ROI images, not formal Ground Truth.
+  - expected_collect_ready=false on first fade-in frames means panel presence is visible but not yet stable enough to act on.
+items:
+  - image: live_get_regression/cycle1_002403_initial.jpg
+    source_session: session_20260718_082600
+    source_frame: 2403
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 5440fdc45da46bd0cb5320ef722c03aca7aad5eccf3b6de846d8bc6a4f200689
+  - image: live_get_regression/cycle1_002428_clear.jpg
+    source_session: session_20260718_082600
+    source_frame: 2428
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 64e0f6795538876da4829efe16c0fb40ff7275d3e8a1099f7a8c42fe51e77cfd
+  - image: live_get_regression/cycle1_002433_clear_confirm.jpg
+    source_session: session_20260718_082600
+    source_frame: 2433
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 445b9d1d364000c618a132abc1f76398f6f6ee0bd6efa84ab09db239ceb4071b
+  - image: live_get_regression/cycle1_002538_last.jpg
+    source_session: session_20260718_082600
+    source_frame: 2538
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 581dc18b6d185c8d1d8dd994442d7049943682c7a12196ab27b7c175193f6766
+  - image: live_get_regression/cycle3_006513_initial.jpg
+    source_session: session_20260718_082600
+    source_frame: 6513
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 8be9addb9255d30e41e088d0c249cbc072c85dd2f07c9bc341c89cffc6ea4670
+  - image: live_get_regression/cycle3_006528_clear.jpg
+    source_session: session_20260718_082600
+    source_frame: 6528
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: e55bc17ee5ebe25cbf1afb562622e879c4e5a00a8ab93986fb12466f87190893
+  - image: live_get_regression/cycle3_006529_clear_confirm.jpg
+    source_session: session_20260718_082600
+    source_frame: 6529
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 399a102a5e997f9dc8922e942661400d2751f6c5aaa4bec2fd11d93a6c38b0db
+  - image: live_get_regression/cycle3_006569_result_pending.jpg
+    source_session: session_20260718_082600
+    source_frame: 6569
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 7e321d118f737265bdef906dfc62d21ced8576abaf40cde9bece88835c24f95c
+  - image: live_get_regression/cycle3_006573_idle_prompt_overlap.jpg
+    source_session: session_20260718_082600
+    source_frame: 6573
+    expected_get_panel_present: true
+    expected_result_banner_present: false
+    expected_collect_ready: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 356ea262a8ea2d784a53c60e07c50eaf41e9306bef70afcecd848606b04f9363
+  - image: live_get_regression/cycle2_004482_result_banner.jpg
+    source_session: session_20260718_082600
+    source_frame: 4482
+    expected_get_panel_present: false
+    expected_result_banner_present: true
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 6083fe334a7fae7e419252764171b22f23a80954723613dd599d0f77d35747ef
+  - image: live_get_regression/cycle2_004402_false_candidate.jpg
+    source_session: session_20260718_082600
+    source_frame: 4402
+    expected_get_panel_present: false
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 35e26056544abae5ce01553b7d230f30db9b2decd11a23974bc85dabba6b8af3
+  - image: live_get_regression/cycle2_004407_false_candidate.jpg
+    source_session: session_20260718_082600
+    source_frame: 4407
+    expected_get_panel_present: false
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 1bef8c52683906dd6652d417ef4b73d8ce1fd423453fb83194a61c59ff70ae00
+  - image: live_get_regression/cycle2_004546_false_candidate.jpg
+    source_session: session_20260718_082600
+    source_frame: 4546
+    expected_get_panel_present: false
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 335504503fa1b713ab54caeee3c0996e69feeef605a1719fd960762479698c37
+  - image: live_get_regression/negative_004421_press.jpg
+    source_session: session_20260718_082600
+    source_frame: 4421
+    expected_get_panel_present: false
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: b78091f6980c75a2c17972d5f914f9ce7b2b06af7a263fa5ea096731b98bcdf1
+  - image: live_get_regression/negative_004556_idle.jpg
+    source_session: session_20260718_082600
+    source_frame: 4556
+    expected_get_panel_present: false
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 98a66193e467fe391534d2cb969cdf565aab91758e54dcb996a4d4f763598305
+  - image: live_get_regression/negative_004477_background.jpg
+    source_session: session_20260718_082600
+    source_frame: 4477
+    expected_get_panel_present: false
+    expected_result_banner_present: false
+    expected_collect_ready: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: d18f79e0788c11020d67e8b406b487be9899a886ef1af8c3c55eb83c564bfb87

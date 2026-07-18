@@ -27,6 +27,7 @@ ROI_NAMES = (
     "hook_prompt",
     "hook_bar_precise",
     "press_sequence",
+    "get_search",
     "get_window",
     "right_quest_area",
 )
@@ -53,6 +54,7 @@ DEFAULT_ROI_DATA: dict[str, Any] = {
         "hook_prompt": {"x1": 0.37, "y1": 0.29, "x2": 0.63, "y2": 0.335},
         "hook_bar_precise": {"x1": 0.38, "y1": 0.325, "x2": 0.62, "y2": 0.365},
         "press_sequence": {"x1": 0.38, "y1": 0.17, "x2": 0.62, "y2": 0.31},
+        "get_search": {"x1": 0.75, "y1": 0.47, "x2": 0.94, "y2": 0.84},
         "get_window": {"x1": 0.75, "y1": 0.55, "x2": 0.94, "y2": 0.84},
         "right_quest_area": {"x1": 0.82, "y1": 0.20, "x2": 0.99, "y2": 0.75},
     },
