@@ -155,3 +155,10 @@ safety:
   emit_actions: false
   minimum_evidence_confidence: 0.8
   cooldown_sec: 0.25
+
+action:
+  key_hold_ms: 40
+  sequence_interval_ms: 60
+  minimum_action_interval_ms: 150
+  panic_key: F12
+  max_actions_per_minute: 30

@@ -14,6 +14,7 @@ from src.fishing_v2.domain.observations import (
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import ObservationFusion, StateEvidence
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
+from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
 from src.fishing_v2.runtime.fishing_fsm import FSMConfig, FishingFSM
 from src.fishing_v2.runtime.runtime_controller import RuntimeController
@@ -68,7 +69,12 @@ def _controller(state: RuntimeState, *, emit_actions: bool = False, sink=None) -
 
 def test_ready_action_arms_hook_detector() -> None:
     class Sink:
-        def emit(self, request): pass
+        def apply(self, request, context):
+            return ActionExecutionResult(
+                context.action_id, request.intent.value, context.requested_at,
+                context.requested_at, context.requested_at, True, True,
+                2, 2, context.target_hwnd, context.target_hwnd,
+            )
 
     result = _controller(RuntimeState.READY, emit_actions=True, sink=Sink()).process(
         _bundle(0.1, prompt=PromptObservationKind.READY_BITE),
@@ -90,6 +96,31 @@ def test_emit_actions_false_keeps_ready_after_proposal() -> None:
     assert result.fsm.action_request.intent == ActionIntent.START_HOOK
     assert result.action_applied is False
     assert result.fsm.next_state == RuntimeState.READY
+
+
+def test_incomplete_sink_result_does_not_commit_runtime_action() -> None:
+    class PartialSink:
+        def apply(self, request, context):
+            return ActionExecutionResult(
+                context.action_id, request.intent.value, context.requested_at,
+                context.requested_at, context.requested_at, False, False,
+                1, 2, context.target_hwnd, context.target_hwnd,
+                rejection_reason="sendinput_incomplete", partial_execution=True,
+            )
+
+    controller = _controller(
+        RuntimeState.READY, emit_actions=True, sink=PartialSink()
+    )
+    result = controller.process(
+        _bundle(0.1, prompt=PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+    )
+    assert result.action_execution is not None
+    assert result.action_execution.partial_execution is True
+    assert result.action_applied is False
+    assert controller.fsm.state == RuntimeState.READY
+    assert controller.fsm.actions_applied == frozenset()
 
 
 def test_hook_instruction_uses_burst_without_confirming_hook() -> None:
@@ -114,7 +145,12 @@ def test_hook_bar_is_required_for_hook_active() -> None:
 
 def test_hook_action_arms_press_and_get_detectors() -> None:
     class Sink:
-        def emit(self, request): pass
+        def apply(self, request, context):
+            return ActionExecutionResult(
+                context.action_id, request.intent.value, context.requested_at,
+                context.requested_at, context.requested_at, True, True,
+                2, 2, context.target_hwnd, context.target_hwnd,
+            )
 
     result = _controller(RuntimeState.HOOK, emit_actions=True, sink=Sink()).process(
         _bundle(0.1, hook=True, fill_ratio=0.70),

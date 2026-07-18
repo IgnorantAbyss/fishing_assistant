@@ -1,4 +1,4 @@
-"""Observe the real game window without ever emitting keyboard or mouse input."""
+"""Observe the game; optionally apply explicitly allowlisted foreground actions."""
 
 from __future__ import annotations
 
@@ -24,6 +24,10 @@ from src.fishing_v2.live.capture_backends import (  # noqa: E402
     create_live_capture_session,
 )
 from src.fishing_v2.live.diagnostic_evidence import EVIDENCE_MODES  # noqa: E402
+from src.fishing_v2.live.windows_action_sink import (  # noqa: E402
+    ACTION_SINKS,
+    ACTION_SINK_NONE,
+)
 from src.fishing_v2.live.session_logger import LiveSessionLogger  # noqa: E402
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle  # noqa: E402
 
@@ -79,6 +83,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-fps", type=float, default=25.0)
     parser.add_argument("--emit-actions", type=_strict_bool, default=False)
+    parser.add_argument(
+        "--action-sink", choices=ACTION_SINKS, default=ACTION_SINK_NONE,
+        help="Input backend; defaults to none and is never initialized in detect-only mode",
+    )
+    parser.add_argument(
+        "--action-allowlist", default="",
+        help="Comma-separated ActionIntent names; first Live acceptance should use COLLECT",
+    )
+    parser.add_argument(
+        "--panic-key", choices=("F12",), default="F12",
+        help="Polling-only permanent session stop key for the action sink (default: F12)",
+    )
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "fishing_v2.yaml")
     return parser.parse_args(argv)
 
@@ -86,7 +102,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        validate_emit_actions(args.emit_actions)
+        validate_emit_actions(
+            args.emit_actions, args.action_sink, args.action_allowlist
+        )
     except LivePreflightError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 2
@@ -129,7 +147,10 @@ def main() -> int:
             evidence_video_fps=args.evidence_video_fps,
             max_completed_cycles=args.max_completed_cycles,
         ),
-        emit_actions=False,
+        emit_actions=args.emit_actions,
+        action_sink_name=args.action_sink,
+        action_allowlist=args.action_allowlist,
+        panic_key=args.panic_key,
     )
     summary = runtime.run()
     print(f"session: {logger.path}")

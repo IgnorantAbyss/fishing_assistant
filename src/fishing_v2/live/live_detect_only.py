@@ -1,4 +1,4 @@
-"""Real-frame observation loop with a hard no-action boundary."""
+"""Real-frame observation loop with detect-only defaults and guarded opt-in actions."""
 
 from __future__ import annotations
 
@@ -34,6 +34,14 @@ from src.fishing_v2.live.diagnostic_evidence import (
     DiagnosticEvidenceConfig,
     DiagnosticEvidenceRecorder,
 )
+from src.fishing_v2.live.windows_action_sink import (
+    ACTION_SINK_NONE,
+    ACTION_SINK_SENDINPUT,
+    EXPECTED_GAME_PROCESS,
+    WindowsActionConfig,
+    WindowsSendInputActionSink,
+    parse_action_allowlist,
+)
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.perception.prompt_bundle import LoadedPromptBundle
 from src.fishing_v2.perception.result_banner_observer import (
@@ -52,6 +60,7 @@ from src.fishing_v2.runtime.runtime_controller import ActionExecutionMode, Runti
 from src.fishing_v2.runtime.safety_policy import SafetyPolicy
 from src.fishing_v2.runtime.scheduling import PromptPollingConfig, RuntimeSchedulePolicy
 from src.fishing_v2.runtime.synchronization import StartupSynchronizer
+from src.fishing_v2.ports.action_sink import ActionExecutionContext, ActionSink
 from src.screen_capture import validate_bgr_frame
 from src.config_loader import load_roi_config
 
@@ -217,9 +226,28 @@ class DiagnosticOverlay:
             cv2.destroyWindow(self.WINDOW_NAME)
 
 
-def validate_emit_actions(emit_actions: bool) -> None:
-    if emit_actions:
-        raise LivePreflightError("--emit-actions=true is forbidden: live runtime is detect-only")
+def validate_emit_actions(
+    emit_actions: bool,
+    action_sink: str = ACTION_SINK_NONE,
+    action_allowlist: str | tuple[str, ...] | list[str] = (),
+) -> None:
+    """Require two independent CLI opt-ins before constructing an input sink."""
+    if emit_actions and action_sink != ACTION_SINK_SENDINPUT:
+        raise LivePreflightError(
+            "--emit-actions=true requires the explicit --action-sink=sendinput opt-in"
+        )
+    if not emit_actions and action_sink != ACTION_SINK_NONE:
+        raise LivePreflightError(
+            "--action-sink=sendinput requires --emit-actions=true"
+        )
+    try:
+        allowlist = parse_action_allowlist(action_allowlist)
+    except ValueError as exc:
+        raise LivePreflightError(str(exc)) from exc
+    if emit_actions and not allowlist:
+        raise LivePreflightError(
+            "An explicit non-empty --action-allowlist is required when actions are enabled"
+        )
 
 
 def _prompt_polling(config: Mapping[str, Any]) -> RuntimeSchedulePolicy:
@@ -250,10 +278,14 @@ class LiveDetectOnlyRuntime:
         get_detector: Any | None = None,
         result_banner_observer: Any | None = None,
         evidence_recorder: DiagnosticEvidenceRecorder | None = None,
+        action_sink_name: str = ACTION_SINK_NONE,
+        action_allowlist: str | tuple[str, ...] | list[str] = (),
+        panic_key: str = "F12",
+        action_sink_factory: Callable[..., ActionSink] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        validate_emit_actions(emit_actions)
+        validate_emit_actions(emit_actions, action_sink_name, action_allowlist)
         self.config_path = Path(config_path)
         self.prompt_bundle = prompt_bundle
         self.capture = capture
@@ -262,6 +294,12 @@ class LiveDetectOnlyRuntime:
         self.hook_detector = hook_detector or LegacyHookDetectorAdapter()
         self.press_detector = press_detector or LegacyPressDetectorAdapter()
         self.get_detector = get_detector or LegacyGetDetectorAdapter()
+        self.emit_actions = bool(emit_actions)
+        self.action_sink_name = action_sink_name
+        self.action_allowlist = parse_action_allowlist(action_allowlist)
+        self.panic_key = panic_key
+        self.action_sink_factory = action_sink_factory or WindowsSendInputActionSink
+        self.action_sink: ActionSink | None = None
         self.clock = clock
         self.sleep = sleep
         self.overlay = DiagnosticOverlay(live_config.show_overlay)
@@ -278,7 +316,9 @@ class LiveDetectOnlyRuntime:
             activation_config, qualification_config,
         ) = _config_objects(self.config_path)
         if safety_config.emit_actions or self._raw_config["safety"]["emit_actions"] is not False:
-            raise LivePreflightError("Live detect-only requires safety.emit_actions=false")
+            raise LivePreflightError(
+                "Runtime safety.emit_actions must remain false; the guarded Live sink is CLI-only"
+            )
         self.fsm = FishingFSM(fsm_config, initial_state=RuntimeState.SYNCING)
         self.activation_policy = DetectorActivationPolicy(activation_config)
         self.controller = RuntimeController(
@@ -304,6 +344,50 @@ class LiveDetectOnlyRuntime:
         elif self.evidence_recorder is not None:
             raise ValueError("evidence_recorder requires evidence_mode='diagnostic'")
         self._diagnostic_roi_bounds: dict[str, tuple[int, int, int, int]] = {}
+
+    def _initialize_action_sink(self, *, session_started_at: float) -> None:
+        if not self.emit_actions or self.action_sink_name == ACTION_SINK_NONE:
+            return
+        hwnd = self._capture_diagnostics.get("hwnd")
+        title = self._capture_diagnostics.get("window_title")
+        process = self._capture_diagnostics.get("process")
+        process_id = self._capture_diagnostics.get("process_id")
+        client_size = self._capture_diagnostics.get("client_size")
+        if not isinstance(hwnd, int) or hwnd <= 0:
+            raise LivePreflightError("Action sink requires the exact startup-resolved target HWND")
+        if not isinstance(title, str) or not title:
+            raise LivePreflightError("Action sink requires the exact startup-resolved window title")
+        if not isinstance(process, str) or process.casefold() != EXPECTED_GAME_PROCESS.casefold():
+            raise LivePreflightError(
+                f"Action sink process must be {EXPECTED_GAME_PROCESS}, got {process!r}"
+            )
+        if not isinstance(process_id, int) or process_id <= 0:
+            raise LivePreflightError("Action sink requires the startup-resolved target PID")
+        if tuple(client_size or ()) != EXPECTED_RESOLUTION:
+            raise LivePreflightError(
+                f"Action sink requires a {EXPECTED_RESOLUTION[0]}x{EXPECTED_RESOLUTION[1]} client"
+            )
+        try:
+            action_config = WindowsActionConfig.from_mapping(
+                self._raw_config.get("action"), panic_key=self.panic_key
+            )
+            self.action_sink = self.action_sink_factory(
+                target_hwnd=hwnd,
+                expected_title=title,
+                expected_process_id=process_id,
+                expected_process_name=EXPECTED_GAME_PROCESS,
+                expected_client_size=EXPECTED_RESOLUTION,
+                allowlist=self.action_allowlist,
+                config=action_config,
+                clock=self.clock,
+                sleep=self.sleep,
+                event_callback=self.logger.event,
+                session_started_at=session_started_at,
+            )
+        except Exception as exc:
+            raise LivePreflightError(
+                f"Action sink initialization failed: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def preflight(self) -> np.ndarray:
         try:
@@ -535,6 +619,7 @@ class LiveDetectOnlyRuntime:
         prompt: PromptObservation | None,
         result: Any | None,
         activation: DetectorActivationSnapshot,
+        actions_applied: int,
     ) -> list[str]:
         evidence = prompt.evidence if prompt else {}
         hook = result.qualified.bundle.hook if result else None
@@ -548,7 +633,7 @@ class LiveDetectOnlyRuntime:
             f"Runtime={self.fsm.state.value} activation H/P/G={activation.hook.value}/{activation.press.value}/{activation.get.value}",
             f"Hook raw/qualified={bool(hook)}/{bool(hook and hook.detected)} fill={getattr(hook, 'fill_ratio', None)} crossed={bool(hook and hook.evidence.get('divider_margin_passed'))}",
             f"Press panel={bool(press and press.panel_present)} sequence={''.join(press.sequence_candidate) if press else ''} frozen={bool(press and press.sequence_ready)}",
-            f"Get panel={bool(get and get.detected)} | would-fire={request.intent.value} | action_applied=false",
+            f"Get panel={bool(get and get.detected)} | would-fire={request.intent.value} | action_applied={actions_applied > 0}",
             f"Result banner={bool(result_banner and result_banner.detected)} hold-only=true",
         ]
 
@@ -557,6 +642,7 @@ class LiveDetectOnlyRuntime:
         completed_cycles = 0
         evidence_episode_id = 1
         stop_after_completed_cycle = False
+        stop_after_action_commit_failure = False
         evidence_failure_reason: str | None = None
         latencies: list[float] = []
         detector_runs: Counter[str] = Counter()
@@ -584,13 +670,15 @@ class LiveDetectOnlyRuntime:
         )
         try:
             self.preflight()
+            self._initialize_action_sink(session_started_at=started)
             self.logger.event("preflight_passed", {
                 "timestamp": 0.0,
                 "resolution": list(EXPECTED_RESOLUTION),
                 "approved_roi": list(self.prompt_bundle.roi.pixel),
                 "bundle_sha256": self.prompt_bundle.bundle_sha256,
-                "emit_actions": False,
-                "action_sink": None,
+                "emit_actions": self.emit_actions,
+                "action_sink": self.action_sink_name,
+                "action_allowlist": sorted(item.value for item in self.action_allowlist),
                 "capture": self._capture_diagnostics,
             })
             if self._capture_diagnostics.get("fallback_used"):
@@ -628,6 +716,10 @@ class LiveDetectOnlyRuntime:
                     })
                     break
                 captured += 1
+                if self.action_sink is not None:
+                    poll_panic = getattr(self.action_sink, "poll_panic", None)
+                    if callable(poll_panic):
+                        poll_panic()
                 height, width = frame.shape[:2]
                 if (width, height) != EXPECTED_RESOLUTION:
                     result_name = "safe_stop_resolution_changed"
@@ -716,10 +808,12 @@ class LiveDetectOnlyRuntime:
                         foreground=self.capture.is_foreground(),
                         runtime_environment_supported=True,
                         action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+                        preserve_proposal=self.action_sink is not None,
                     )
                     if last_result.action_applied:
-                        raise RuntimeError("Detect-only safety invariant violated: action_applied=true")
-                    actions_applied += int(last_result.action_applied)
+                        raise RuntimeError(
+                            "Recorded-observation controller invariant violated: action_applied=true"
+                        )
                     processed += 1
                     if last_result.fsm.changed:
                         transition_results.append(last_result.fsm)
@@ -996,7 +1090,7 @@ class LiveDetectOnlyRuntime:
                                     "frame_index": captured,
                                     "episode_id": evidence_episode_id,
                                     "completed_cycles": completed_cycles,
-                                    "actions_applied": 0,
+                                    "actions_applied": actions_applied,
                                 })
                             evidence_episode_id += 1
                             stop_after_completed_cycle = bool(
@@ -1037,6 +1131,9 @@ class LiveDetectOnlyRuntime:
                     )
                     if would_fire:
                         event_type = would_fire.pop("event_type")
+                        action_id = str(would_fire["deduplication_key"])
+                        would_fire["action_id"] = action_id
+                        would_fire["episode_id"] = str(would_fire["cycle_id"])
                         screenshot = self.logger.save_screenshot(frame, captured, event_type)
                         would_fire["screenshot_reference"] = screenshot
                         if event_type == "WOULD_HOOK_ACTION" and hook_crossed_at is not None:
@@ -1045,6 +1142,57 @@ class LiveDetectOnlyRuntime:
                             ) * 1000.0
                         self.logger.event(event_type, would_fire)
                         self.logger.update_cycle(self.deduplicator.cycle_id, event_type, would_fire)
+                        if self.action_sink is not None:
+                            execution = self.action_sink.apply(
+                                last_result.fsm.action_request,
+                                ActionExecutionContext(
+                                    action_id=action_id,
+                                    episode_id=str(self.deduplicator.cycle_id),
+                                    requested_at=elapsed,
+                                    capture_frame_index=captured,
+                                    runtime_state=self.fsm.state.value,
+                                    target_hwnd=self._capture_diagnostics.get("hwnd"),
+                                ),
+                            )
+                            if execution.applied:
+                                actions_applied += 1
+                                commit = self.controller.commit_external_action(
+                                    last_result.fsm.action_request,
+                                    elapsed,
+                                )
+                                if not commit.action_applied:
+                                    self.logger.event("action_failed", {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "action_id": action_id,
+                                        "intent": last_result.fsm.action_request.intent.value,
+                                        "reason": "runtime_commit_failed_after_complete_input",
+                                        "commit_reason": commit.reason,
+                                        "action_applied": True,
+                                    })
+                                    result_name = "safe_stop_action_commit_failure"
+                                    stop_after_action_commit_failure = True
+                                else:
+                                    if commit.previous_state != commit.next_state:
+                                        self.logger.transition(
+                                            timestamp=elapsed,
+                                            frame_index=captured,
+                                            previous_state=commit.previous_state.value,
+                                            next_state=commit.next_state.value,
+                                            reason=commit.reason,
+                                            screenshot_reference=screenshot,
+                                        )
+                                        activation = self.activation_policy.evaluate(
+                                            self.fsm.state,
+                                            raw_bundle,
+                                            recorded_observation=True,
+                                        )
+                            else:
+                                self.controller.discard_external_proposal()
+                        else:
+                            self.controller.discard_external_proposal()
+                    elif self.action_sink is not None:
+                        self.controller.discard_external_proposal()
 
                 capture_fps = captured / max(1e-9, self.clock() - started)
                 latency_ms = latencies[-1] if latencies else 0.0
@@ -1054,6 +1202,7 @@ class LiveDetectOnlyRuntime:
                     prompt=last_prompt,
                     result=last_result,
                     activation=activation,
+                    actions_applied=actions_applied,
                 ))
                 if elapsed - last_terminal >= 1.0:
                     print(
@@ -1061,12 +1210,14 @@ class LiveDetectOnlyRuntime:
                         f"prompt={last_prompt.kind.value if last_prompt else 'N/A'} state={self.fsm.state.value} "
                         f"activation={activation.hook.value}/{activation.press.value}/{activation.get.value} "
                         f"intent={last_result.fsm.action_request.intent.value if last_result else 'NONE'} "
-                        "action_applied=false",
+                        f"action_applied={bool(actions_applied)}",
                         flush=True,
                     )
                     last_terminal = elapsed
                 if stop_after_completed_cycle:
                     result_name = "completed_target_cycles"
+                    break
+                if stop_after_action_commit_failure:
                     break
                 loop_interval = 1.0 / self.live_config.max_fps
                 self.sleep(max(0.0, loop_interval - (self.clock() - frame_loop_started)))
@@ -1131,6 +1282,21 @@ class LiveDetectOnlyRuntime:
             if self._opened:
                 self.capture.close()
                 self._opened = False
+            action_summary = {
+                "action_sink_type": ACTION_SINK_NONE,
+                "action_allowlist": sorted(item.value for item in self.action_allowlist),
+                "attempted_action_counts": {},
+                "applied_action_counts": {},
+                "rejected_action_counts": {},
+                "partial_action_counts": {},
+                "rejection_counts_by_reason": {},
+                "panic_triggered": False,
+                "focus_loss_count": 0,
+            }
+            if self.action_sink is not None:
+                sink_summary = getattr(self.action_sink, "summary", None)
+                if callable(sink_summary):
+                    action_summary.update(sink_summary())
             summary = {
                 "result": result_name,
                 "duration_seconds": elapsed_total,
@@ -1145,11 +1311,14 @@ class LiveDetectOnlyRuntime:
                     for name, count in detector_runs.items()
                 },
                 "raw_action_proposals": dict(self.deduplicator.raw_proposals),
+                "proposed_action_counts": dict(self.deduplicator.raw_proposals),
                 "unique_would_fire": dict(self.deduplicator.unique_events),
                 "actions_applied": actions_applied,
                 "final_state": self.fsm.state.value,
-                "emit_actions": False,
-                "action_sink": None,
+                "emit_actions": self.emit_actions,
+                "action_sink": (
+                    self.action_sink_name if self.action_sink is not None else None
+                ),
                 "capture_backend": self._capture_diagnostics.get(
                     "backend", getattr(self.capture, "backend_name", "unknown")
                 ),
@@ -1157,6 +1326,7 @@ class LiveDetectOnlyRuntime:
                 "capture_diagnostics": self._capture_diagnostics,
                 "completed_cycles": completed_cycles,
                 "max_completed_cycles": self.live_config.max_completed_cycles,
+                **action_summary,
                 **evidence_summary,
             }
             self.logger.finalize(summary)

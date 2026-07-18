@@ -20,6 +20,7 @@ from src.fishing_v2.domain.observations import (
     PromptObservationKind,
 )
 from src.fishing_v2.domain.runtime_state import RuntimeState
+from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
 from src.fishing_v2.live.live_detect_only import (
     LiveDetectOnlyConfig,
     LiveDetectOnlyRuntime,
@@ -28,6 +29,7 @@ from src.fishing_v2.live.live_detect_only import (
     validate_emit_actions,
 )
 from src.fishing_v2.live.session_logger import LiveSessionLogger, create_live_session_directory
+from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle
 from src.fishing_v2.perception.prototype_prompt_observer import (
     PrototypePromptModel,
@@ -114,6 +116,10 @@ def _runtime(
     duration_seconds: float = 1.0,
     evidence_mode: str = "minimal",
     evidence_recorder=None,
+    emit_actions: bool = False,
+    action_sink_name: str = "none",
+    action_allowlist=(),
+    action_sink_factory=None,
 ) -> LiveDetectOnlyRuntime:
     return LiveDetectOnlyRuntime(
         config_path=CONFIG,
@@ -127,7 +133,10 @@ def _runtime(
             save_transition_frames=False,
             evidence_mode=evidence_mode,
         ),
-        emit_actions=False,
+        emit_actions=emit_actions,
+        action_sink_name=action_sink_name,
+        action_allowlist=action_allowlist,
+        action_sink_factory=action_sink_factory,
         hook_detector=NullHookDetector(),
         press_detector=NullPressDetector(),
         get_detector=NullGetDetector(),
@@ -170,8 +179,8 @@ class StubEvidenceRecorder:
         }
 
 
-def test_emit_actions_true_is_refused_before_capture_initialization() -> None:
-    with pytest.raises(LivePreflightError, match="forbidden"):
+def test_emit_actions_true_requires_explicit_sink_before_capture_initialization() -> None:
+    with pytest.raises(LivePreflightError, match="requires.*sendinput"):
         validate_emit_actions(True)
     result = subprocess.run(
         [
@@ -231,6 +240,141 @@ def test_mock_live_frame_uses_no_sink_and_never_applies_action(
     saved = json.loads((runtime.logger.path / "session_summary.json").read_text(encoding="utf-8"))
     assert saved["actions_applied"] == 0
     assert not (runtime.logger.path / "diagnostic_evidence").exists()
+
+
+def test_emit_false_never_initializes_action_sink_factory(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    calls = []
+
+    def forbidden_factory(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("action sink must not initialize")
+
+    runtime = _runtime(
+        tmp_path, MockCapture(supported_frame), FakeClock(),
+        action_sink_factory=forbidden_factory,
+    )
+    summary = runtime.run(max_frames=1)
+    assert summary["action_sink_type"] == "none"
+    assert summary["emit_actions"] is False
+    assert calls == []
+
+
+def test_explicit_sendinput_mode_initializes_only_after_valid_target_preflight(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    created = []
+
+    class FakeSink:
+        def __init__(self, kwargs):
+            self.kwargs = kwargs
+            self.apply_calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.apply_calls.append((request, context))
+            raise AssertionError("one blank frame must not propose an action")
+
+        def summary(self):
+            return {"action_sink_type": "sendinput", "action_allowlist": ["COLLECT"]}
+
+    def factory(**kwargs):
+        sink = FakeSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "黑色沙漠 - 525411",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path, capture, FakeClock(), emit_actions=True,
+        action_sink_name="sendinput", action_allowlist="COLLECT",
+        action_sink_factory=factory,
+    )
+    assert created == []
+    summary = runtime.run(max_frames=1)
+    assert len(created) == 1
+    assert created[0].kwargs["target_hwnd"] == 4242
+    assert created[0].kwargs["expected_title"] == "黑色沙漠 - 525411"
+    assert created[0].kwargs["expected_process_id"] == 99
+    assert created[0].apply_calls == []
+    assert summary["action_sink_type"] == "sendinput"
+    assert summary["actions_applied"] == 0
+
+
+def test_collect_only_live_path_applies_one_stable_action_after_qualified_get(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class VisibleGetDetector:
+        def observe(self, _frame, context):
+            return GetObservation(
+                True, 0.99, context.frame_index, context.timestamp,
+                evidence={"grid_cell_candidates": 12},
+            )
+
+    class CompleteFakeSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id, request.intent.value, context.requested_at,
+                context.requested_at, context.requested_at, True, True,
+                2, 2, context.target_hwnd, context.target_hwnd,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["COLLECT"],
+                "attempted_action_counts": {"COLLECT": len(self.calls)},
+                "applied_action_counts": {"COLLECT": len(self.calls)},
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteFakeSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "黑色沙漠 - 525411",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path, capture, FakeClock(), duration_seconds=2.0,
+        emit_actions=True, action_sink_name="sendinput",
+        action_allowlist="COLLECT", action_sink_factory=factory,
+    )
+    runtime.get_detector = VisibleGetDetector()
+    runtime.controller.evidence_qualifier.qualify_get(
+        GetObservation(True, 0.99, 0, 0.0), DetectorActivationMode.BURST
+    )
+    runtime.fsm.force_state(RuntimeState.GET, 0.0, "test_get")
+    summary = runtime.run(max_frames=12)
+    assert len(created) == 1
+    assert len(created[0].calls) == 1
+    request, context = created[0].calls[0]
+    assert request.intent == ActionIntent.COLLECT
+    assert context.action_id == "cycle:1:COLLECT"
+    assert summary["unique_would_fire"] == {"WOULD_COLLECT": 1}
+    assert summary["actions_applied"] == 1
+    assert summary["applied_action_counts"] == {"COLLECT": 1}
 
 
 def test_diagnostic_mode_records_video_and_roi_without_would_fire(
@@ -383,7 +527,7 @@ def test_live_session_directory_never_overwrites(tmp_path: Path) -> None:
     assert first.is_dir() and second.is_dir()
 
 
-def test_live_runtime_imports_no_input_writer_and_never_loads_ground_truth() -> None:
+def test_live_runtime_uses_no_third_party_input_and_never_loads_ground_truth() -> None:
     paths = [
         ROOT / "src" / "fishing_v2" / "live" / "live_detect_only.py",
         ROOT / "src" / "fishing_v2" / "live" / "capture_backends.py",
@@ -407,7 +551,6 @@ def test_live_runtime_imports_no_input_writer_and_never_loads_ground_truth() -> 
             elif isinstance(node, ast.Attribute):
                 attributes.add(node.attr.lower())
     assert imported.isdisjoint({"pyautogui", "pynput", "keyboard"})
-    assert "sendinput" not in attributes
     assert "ground_truth.yaml" not in combined
     assert "prompt_ground_truth" not in combined
 
