@@ -106,6 +106,9 @@ class DiagnosticEvidenceRecorder:
         self._writer: Any | None = None
         self._video_path: Path | None = None
         self._video_codec: str | None = None
+        self._requested_video_codec = "avc1"
+        self._attempted_codecs: list[str] = []
+        self._codec_initialization_errors: list[dict[str, str]] = []
         self._frame_size: tuple[int, int] | None = None
         self._next_due: float | None = None
         self._video_samples: list[VideoSample] = []
@@ -139,12 +142,22 @@ class DiagnosticEvidenceRecorder:
         self._frame_size = (width, height)
         candidates = (
             ("avc1", self.root / "session_capture_h264.mp4"),
-            ("mp4v", self.root / "session_capture.mp4"),
-            ("MJPG", self.root / "session_capture.avi"),
+            ("mp4v", self.root / "session_capture_mp4v.mp4"),
         )
-        failures: list[str] = []
         for codec, path in candidates:
-            writer = self._writer_factory(path, codec, self.config.video_fps, self._frame_size)
+            self._attempted_codecs.append(codec)
+            try:
+                writer = self._writer_factory(
+                    path, codec, self.config.video_fps, self._frame_size
+                )
+            except Exception as exc:
+                self._codec_initialization_errors.append({
+                    "codec": codec,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                })
+                if path.exists():
+                    path.unlink()
+                continue
             if writer is not None and bool(writer.isOpened()):
                 self._writer = writer
                 self._video_path = path
@@ -152,11 +165,21 @@ class DiagnosticEvidenceRecorder:
                 return
             if writer is not None:
                 writer.release()
-            failures.append(codec)
+            self._codec_initialization_errors.append({
+                "codec": codec,
+                "reason": "writer_is_opened_false" if writer is not None else "writer_factory_returned_none",
+            })
+            if path.exists():
+                path.unlink()
         raise RuntimeError(
             "Could not initialize diagnostic video writer; attempted codecs: "
-            + ", ".join(failures)
+            + ", ".join(self._attempted_codecs)
         )
+
+    def prepare_video(self, frame: np.ndarray) -> None:
+        """Initialize and verify the writer during diagnostic preflight."""
+        frame = validate_bgr_frame(frame)
+        self._ensure_writer(frame)
 
     def record_frame(
         self, frame: np.ndarray, *, capture_frame_index: int, timestamp: float
@@ -327,6 +350,15 @@ class DiagnosticEvidenceRecorder:
             "evidence_mode": "diagnostic",
             "video_path": str(self._video_path) if self._video_path else None,
             "video_codec": self._video_codec,
+            "requested_video_codec": self._requested_video_codec,
+            "attempted_codecs": list(self._attempted_codecs),
+            "actual_video_codec": self._video_codec,
+            "video_codec_fallback_used": bool(
+                self._video_codec is not None
+                and self._video_codec != self._requested_video_codec
+            ),
+            "codec_initialization_errors": list(self._codec_initialization_errors),
+            "actual_video_path": str(self._video_path) if self._video_path else None,
             "video_frame_count": len(self._video_samples),
             "video_fps": self.config.video_fps,
             "video_frame_size": list(self._frame_size) if self._frame_size else None,

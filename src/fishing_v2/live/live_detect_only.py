@@ -332,6 +332,14 @@ class LiveDetectOnlyRuntime:
                     height,
                 ),
             }
+            prepare_video = getattr(self.evidence_recorder, "prepare_video", None)
+            if callable(prepare_video):
+                try:
+                    prepare_video(frame)
+                except Exception as exc:
+                    raise LivePreflightError(
+                        f"Diagnostic video preflight failed: {type(exc).__name__}: {exc}"
+                    ) from exc
         expected_count = int(self.prompt_bundle.bundle.get("prototype_count", 0))
         if len(self.prompt_bundle.model.prototypes) != expected_count or expected_count not in {36, 37}:
             raise LivePreflightError("Final Prompt bundle must contain 35 medoids plus reviewed Live candidates")
@@ -1076,6 +1084,13 @@ class LiveDetectOnlyRuntime:
             evidence_summary: dict[str, Any] = {
                 "evidence_mode": "minimal",
                 "video_path": None,
+                "video_codec": None,
+                "requested_video_codec": None,
+                "attempted_codecs": [],
+                "actual_video_codec": None,
+                "video_codec_fallback_used": False,
+                "codec_initialization_errors": [],
+                "actual_video_path": None,
                 "video_frame_count": 0,
                 "video_fps": 0.0,
                 "first_timestamp": None,

@@ -4,7 +4,9 @@ import csv
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
+import pytest
 
 from src.fishing_v2.live.diagnostic_evidence import (
     DiagnosticEvidenceConfig,
@@ -80,6 +82,14 @@ def test_full_session_video_uses_original_shape_and_timestamp_sidecar(tmp_path: 
     assert np.all(io.active_writer.frames[0][:, :, 1] == 77)
     assert io.active_writer.released is True
     assert summary["video_codec"] == "mp4v"
+    assert summary["requested_video_codec"] == "avc1"
+    assert summary["attempted_codecs"] == ["avc1", "mp4v"]
+    assert summary["actual_video_codec"] == "mp4v"
+    assert summary["video_codec_fallback_used"] is True
+    assert summary["codec_initialization_errors"] == [
+        {"codec": "avc1", "reason": "writer_is_opened_false"}
+    ]
+    assert Path(summary["actual_video_path"]).name == "session_capture_mp4v.mp4"
     assert summary["video_frame_size"] == [6, 4]
     assert summary["video_frame_count"] == 2
     assert summary["first_timestamp"] == 0.0
@@ -88,6 +98,88 @@ def test_full_session_video_uses_original_shape_and_timestamp_sidecar(tmp_path: 
     assert [(row["capture_frame_index"], row["timestamp"]) for row in rows] == [
         ("11", "0.000000000"), ("13", "0.100000000"),
     ]
+
+
+def test_codec_factory_exception_is_recorded_before_mp4v_fallback(tmp_path: Path) -> None:
+    io = EvidenceIO()
+
+    def writer_factory(path, codec, fps, size):
+        if codec == "avc1":
+            raise RuntimeError("simulated incompatible OpenH264")
+        return io.video_writer(path, codec, fps, size)
+
+    recorder = DiagnosticEvidenceRecorder(
+        tmp_path / "session",
+        writer_factory=writer_factory,
+        image_writer=io.image_writer,
+    )
+    assert recorder.record_frame(
+        np.zeros((4, 6, 3), dtype=np.uint8),
+        capture_frame_index=1,
+        timestamp=0.0,
+    )
+    summary = recorder.finalize()
+    assert summary["actual_video_codec"] == "mp4v"
+    assert summary["video_codec_fallback_used"] is True
+    assert summary["codec_initialization_errors"] == [{
+        "codec": "avc1",
+        "reason": "RuntimeError: simulated incompatible OpenH264",
+    }]
+
+
+def test_both_video_codecs_failing_is_explicit(tmp_path: Path) -> None:
+    def closed_writer(path, codec, _fps, _size):
+        return FakeVideoWriter(path, opened=False)
+
+    recorder = DiagnosticEvidenceRecorder(
+        tmp_path / "session", writer_factory=closed_writer
+    )
+    with pytest.raises(RuntimeError, match="avc1.*mp4v"):
+        recorder.record_frame(
+            np.zeros((4, 6, 3), dtype=np.uint8),
+            capture_frame_index=1,
+            timestamp=0.0,
+        )
+    summary = recorder.finalize()
+    assert summary["attempted_codecs"] == ["avc1", "mp4v"]
+    assert summary["actual_video_codec"] is None
+    assert summary["actual_video_path"] is None
+    assert len(summary["codec_initialization_errors"]) == 2
+
+
+def test_real_mp4v_fallback_is_readable_at_live_resolution(tmp_path: Path) -> None:
+    def force_mp4v(path, codec, fps, size):
+        if codec == "avc1":
+            return FakeVideoWriter(path, opened=False)
+        return cv2.VideoWriter(
+            str(path), cv2.VideoWriter_fourcc(*codec), fps, size, True
+        )
+
+    recorder = DiagnosticEvidenceRecorder(
+        tmp_path / "session", writer_factory=force_mp4v
+    )
+    frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+    for index in range(3):
+        frame[:, :, 1] = index * 40
+        assert recorder.record_frame(
+            frame, capture_frame_index=index + 1, timestamp=index / 10.0
+        )
+    summary = recorder.finalize()
+
+    path = Path(summary["actual_video_path"])
+    capture = cv2.VideoCapture(str(path))
+    try:
+        assert capture.isOpened()
+        assert int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) == 2560
+        assert int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) == 1440
+        assert int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) == 3
+        readable, decoded = capture.read()
+        assert readable is True
+        assert decoded.shape == (1440, 2560, 3)
+    finally:
+        capture.release()
+    assert summary["actual_video_codec"] == "mp4v"
+    assert summary["dropped_video_frames"] == 0
 
 
 def test_dense_roi_evidence_exists_without_would_fire_event(tmp_path: Path) -> None:
