@@ -229,6 +229,9 @@ def _prompt_polling(config: Mapping[str, Any]) -> RuntimeSchedulePolicy:
         waiting_max_seconds=float(config["prompt_polling"]["waiting_max_seconds"]),
         ready_fps=float(config["prompt_polling"]["ready_fps"]),
         result_pending_fps=float(config["prompt_polling"]["result_pending_fps"]),
+        ready_confirmation_timeout_seconds=float(
+            config["prompt_polling"]["ready_confirmation_timeout_seconds"]
+        ),
     ))
 
 
@@ -647,8 +650,14 @@ class LiveDetectOnlyRuntime:
                 if should_process:
                     processing_started = self.clock()
                     context = FrameContext(captured, elapsed, metadata={"source": "live_detect_only"})
+                    ready_burst_update = None
                     if prompt_due:
                         last_prompt = self.prompt_bundle.observer.observe(frame, context)
+                        ready_burst_update = self.schedule.observe_prompt(
+                            self.fsm.state, last_prompt.kind, elapsed
+                        )
+                        if ready_burst_update.candidate_reset_required:
+                            self.fsm.clear_transition_candidate()
                         next_prompt_due = elapsed + self._prompt_interval()
                     prompt = last_prompt
                     run_detectors = detector_due or any(
@@ -706,6 +715,44 @@ class LiveDetectOnlyRuntime:
                     processed += 1
                     if last_result.fsm.changed:
                         transition_results.append(last_result.fsm)
+                        if (
+                            last_result.fsm.previous_state == RuntimeState.WAITING
+                            and last_result.fsm.next_state == RuntimeState.READY
+                        ):
+                            confirmation = self.schedule.confirm_ready(elapsed)
+                            next_prompt_due = min(
+                                next_prompt_due,
+                                elapsed + self._prompt_interval(),
+                            )
+                            self.logger.event("ready_confirmation_burst_confirmed", {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                "support_frames": confirmation.ready_support_frames,
+                                "duration_seconds": confirmation.candidate_age_seconds,
+                                "action_intent": ActionIntent.NONE.value,
+                                "action_applied": False,
+                            })
+
+                    if ready_burst_update is not None:
+                        burst_payload = {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "support_frames": ready_burst_update.ready_support_frames,
+                            "duration_seconds": ready_burst_update.candidate_age_seconds,
+                            "reason": ready_burst_update.reason,
+                            "target_fps": self.schedule.config.ready_fps,
+                            "timeout_seconds": (
+                                self.schedule.config.ready_confirmation_timeout_seconds
+                            ),
+                            "action_intent": ActionIntent.NONE.value,
+                            "action_applied": False,
+                        }
+                        if ready_burst_update.burst_timed_out:
+                            self.logger.event("ready_confirmation_burst_timeout", burst_payload)
+                        if ready_burst_update.burst_cancelled:
+                            self.logger.event("ready_confirmation_burst_cancelled", burst_payload)
+                        if ready_burst_update.burst_started:
+                            self.logger.event("ready_confirmation_burst_started", burst_payload)
 
                     entered_sync_required = bool(
                         self.fsm.state == RuntimeState.SYNC_REQUIRED

@@ -19,6 +19,7 @@ from src.fishing_v2.domain.observations import (
     PromptObservation,
     PromptObservationKind,
 )
+from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.live.live_detect_only import (
     LiveDetectOnlyConfig,
     LiveDetectOnlyRuntime,
@@ -319,6 +320,59 @@ def test_would_fire_deduplicates_repeated_proposals_per_cycle() -> None:
     tracker.finish_cycle()
     assert tracker.observe(request, frame_index=20, **kwargs) is not None
     assert tracker.unique_events == {"WOULD_HOOK_ACTION": 2}
+
+
+def test_live_ready_burst_transitions_and_proposes_without_four_second_poll(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class ReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.99,
+                {PromptObservationKind.READY_BITE.value: 0.99},
+                "existing_prompt_observer",
+                context.frame_index,
+                context.timestamp,
+                evidence={
+                    "similarity": 0.99,
+                    "ambiguity_margin": 0.3,
+                    "rejection_reason": None,
+                },
+            )
+
+    clock = FakeClock()
+    runtime = _runtime(
+        tmp_path, MockCapture(supported_frame), clock, duration_seconds=1.0
+    )
+    runtime.prompt_bundle = replace(runtime.prompt_bundle, observer=ReadyObserver())
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+    summary = runtime.run(max_frames=8)
+
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    transition = next(
+        item for item in events
+        if item["event_type"] == "runtime_transition"
+        and item["previous_state"] == "WAITING"
+        and item["next_state"] == "READY"
+    )
+    would_start = next(
+        item for item in events if item["event_type"] == "WOULD_START_HOOK"
+    )
+    confirmed = next(
+        item for item in events
+        if item["event_type"] == "ready_confirmation_burst_confirmed"
+    )
+
+    assert transition["timestamp"] <= 0.3
+    assert would_start["timestamp"] - transition["timestamp"] < 0.1
+    assert confirmed["action_intent"] == ActionIntent.NONE.value
+    assert summary["unique_would_fire"]["WOULD_START_HOOK"] == 1
+    assert summary["actions_applied"] == 0
+    assert summary["action_sink"] is None
 
 
 def test_live_session_directory_never_overwrites(tmp_path: Path) -> None:

@@ -206,7 +206,7 @@ def test_waiting_polling_and_detector_frequencies_are_configured() -> None:
     assert config["press_detector"]["sequence_min_aggregated_confidence"] == 0.68
     policy = RuntimeSchedulePolicy(PromptPollingConfig(**polling))
     assert policy.prompt_interval_seconds(RuntimeState.WAITING) == 4.0
-    assert policy.prompt_interval_seconds(RuntimeState.READY) == pytest.approx(0.2)
+    assert policy.prompt_interval_seconds(RuntimeState.READY) == pytest.approx(0.05)
 
 
 def test_safety_rejects_foreground_and_resolution_failures() -> None:

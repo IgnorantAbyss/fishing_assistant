@@ -61,8 +61,9 @@ prompt_polling:
   waiting_interval_seconds: 4.0
   waiting_min_seconds: 3.0
   waiting_max_seconds: 5.0
-  ready_fps: 5
+  ready_fps: 20
   result_pending_fps: 5
+  ready_confirmation_timeout_seconds: 0.3
 
 hook_detector:
   armed_fps: 5

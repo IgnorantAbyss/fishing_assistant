@@ -353,6 +353,11 @@ class FishingFSM:
             visual_acknowledgement=visual_acknowledgement,
         )
 
+    def clear_transition_candidate(self) -> None:
+        """Discard stale stability support after a scheduler cancellation."""
+        self._candidate = None
+        self._candidate_frames = 0
+
     def _advance_get(
         self,
         evidence: StateEvidence,
