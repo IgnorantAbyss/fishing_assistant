@@ -24,6 +24,7 @@ class DetectorActivationConfig:
     press_armed_fps: float = 5.0
     press_burst_fps: float = 20.0
     get_armed_fps: float = 5.0
+    get_burst_fps: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -76,8 +77,10 @@ class DetectorActivationPolicy:
             press = DetectorActivationMode.ACTIVE
 
         get = DetectorActivationMode.OFF
-        if state in {RuntimeState.SYNCING, RuntimeState.SYNC_REQUIRED, RuntimeState.RESULT_PENDING}:
+        if state in {RuntimeState.SYNCING, RuntimeState.SYNC_REQUIRED}:
             get = DetectorActivationMode.ARMED
+        if state == RuntimeState.RESULT_PENDING:
+            get = DetectorActivationMode.BURST
         if recorded_observation and state in {RuntimeState.HOOK, RuntimeState.PRESS}:
             get = DetectorActivationMode.ARMED
         if state == RuntimeState.GET:
@@ -89,7 +92,7 @@ class DetectorActivationPolicy:
             get=get,
             hook_fps=self._fps(hook, self.config.hook_armed_fps, self.config.hook_burst_fps),
             press_fps=self._fps(press, self.config.press_armed_fps, self.config.press_burst_fps),
-            get_fps=self.config.get_armed_fps if get != DetectorActivationMode.OFF else 0.0,
+            get_fps=self._fps(get, self.config.get_armed_fps, self.config.get_burst_fps),
         )
 
     @staticmethod

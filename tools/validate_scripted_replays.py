@@ -234,10 +234,17 @@ def summarize_replay(
         if transition["to"] in specialized_targets
         and row["global_ground_truth"] != specialized_targets[transition["to"]]
     ]
+    historical_result_pending_not_fully_evaluable = bool(
+        rows
+        and rows[-1]["next_runtime_state"] == "RESULT_PENDING"
+        and rows[-1]["global_ground_truth"] == "IDLE"
+        and rows[-1]["prompt_observation"] == "UNKNOWN"
+    )
     terminal_mismatch = bool(
         rows
         and rows[-1]["global_ground_truth"] in {"IDLE", "WAITING", "READY", "HOOK", "PRESS", "GET"}
         and rows[-1]["next_runtime_state"] != rows[-1]["global_ground_truth"]
+        and not historical_result_pending_not_fully_evaluable
     )
     if terminal_mismatch:
         unexplained_transitions.append({
@@ -262,7 +269,13 @@ def summarize_replay(
         failure_reasons.append("unexplained_runtime_transition")
     if has_false_intents:
         failure_reasons.append("false_action_intent")
-    warnings = [item for values in detector_warnings.values() for item in values]
+    runtime_warnings = (
+        ["historical_result_pending_not_fully_evaluable"]
+        if historical_result_pending_not_fully_evaluable else []
+    )
+    warnings = [
+        item for values in detector_warnings.values() for item in values
+    ] + runtime_warnings
     result = "FAIL" if failure_reasons else "PASS_WITH_WARNINGS" if warnings else "PASS"
     return {
         "session": session_id,
@@ -282,6 +295,7 @@ def summarize_replay(
         "get": get,
         "false_action_intents": false_intents,
         "detector_warnings": detector_warnings,
+        "runtime_warnings": runtime_warnings,
         "unexplained_runtime_transitions": unexplained_transitions,
         "failure_reasons": failure_reasons,
         "result": result,
@@ -327,6 +341,7 @@ def write_session_summary(summary: dict[str, Any], output_root: Path) -> tuple[P
         for detector, values in summary["detector_warnings"].items()
         for warning in values
     ]
+    warnings.extend(f"- RUNTIME: {warning}" for warning in summary.get("runtime_warnings", []))
     lines.extend(warnings or ["- None"])
     if summary["failure_reasons"]:
         lines.extend(["", "## Failures", ""])

@@ -32,6 +32,8 @@ class FSMConfig:
     get_max_attempts: int = 12
     get_max_duration_seconds: float = 5.0
     recorded_press_exit_idle_frames: int = 4
+    result_minimum_pending_sec: float = 1.5
+    result_maximum_pending_sec: float = 10.0
 
     def __post_init__(self) -> None:
         HookActionPolicyConfig(
@@ -48,6 +50,10 @@ class FSMConfig:
             raise ValueError("GET retry limits must be positive")
         if self.recorded_press_exit_idle_frames < 2:
             raise ValueError("recorded_press_exit_idle_frames must be at least two")
+        if self.result_minimum_pending_sec <= 0:
+            raise ValueError("result_minimum_pending_sec must be positive")
+        if self.result_maximum_pending_sec <= self.result_minimum_pending_sec:
+            raise ValueError("result_maximum_pending_sec must exceed the minimum grace")
 
 
 @dataclass(frozen=True)
@@ -425,6 +431,36 @@ class FishingFSM:
                 visual_acknowledgement="qualified_get_panel_present",
             )
 
+        # RESULT_PENDING is shared by the short HOOK->PRESS hand-off and the
+        # final result. Qualified PRESS must therefore remain eligible during
+        # the grace window. All other exits wait for result evidence to settle.
+        qualified_press_pending = bool(
+            self.state == RuntimeState.RESULT_PENDING
+            and bundle and bundle.press and bundle.press.detected
+        )
+        if self.state == RuntimeState.RESULT_PENDING and not qualified_press_pending:
+            result_elapsed = self._timeout(timestamp)
+            banner_present = bool(
+                bundle and bundle.result_banner and bundle.result_banner.detected
+            )
+            if result_elapsed >= self.config.result_maximum_pending_sec:
+                return self._transition(
+                    RuntimeState.SYNC_REQUIRED,
+                    timestamp,
+                    "result_pending_maximum_timeout",
+                )
+            if banner_present:
+                return self._held(
+                    previous,
+                    "result_banner_holds_result_pending",
+                    failed_telemetry,
+                    visual_acknowledgement="RESULT_BANNER_PRESENT",
+                )
+            if result_elapsed < self.config.result_minimum_pending_sec:
+                return self._held(
+                    previous, "result_pending_minimum_grace", failed_telemetry
+                )
+
         press_panel = bundle.press if bundle else None
         press_disappeared = bool(
             press_panel
@@ -475,24 +511,9 @@ class FishingFSM:
                     "recorded_press_result_prompt_acknowledgement",
                     visual_acknowledgement=prompt.value,
                 )
-            if (
-                self.state == RuntimeState.RESULT_PENDING
-                and press_panel is not None
-                and not press_panel.detected
-                and int(press_panel.evidence.get("panel_absent_frames", 0))
-                >= self.config.recorded_press_exit_idle_frames
-            ):
-                return self._transition(
-                    RuntimeState.IDLE,
-                    timestamp,
-                    "recorded_press_panel_exit_without_result_panel",
-                    visual_acknowledgement="qualified_press_panel_stably_absent",
-                )
-
         timeout_limits = {
             RuntimeState.CAST_PENDING: self.config.cast_pending_timeout_sec,
             RuntimeState.HOOK_PENDING: self.config.hook_pending_timeout_sec,
-            RuntimeState.RESULT_PENDING: self.config.result_pending_timeout_sec,
             RuntimeState.COLLECT_PENDING: self.config.collect_pending_timeout_sec,
         }
         if self.state in timeout_limits and self._timeout(timestamp) >= timeout_limits[self.state]:

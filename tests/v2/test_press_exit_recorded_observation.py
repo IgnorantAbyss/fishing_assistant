@@ -153,14 +153,31 @@ def test_recorded_result_pending_reaches_idle_after_extended_panel_absence() -> 
     fsm = FishingFSM(
         FSMConfig(stable_frames=1, recorded_press_exit_idle_frames=4),
         initial_state=RuntimeState.RESULT_PENDING,
+        initial_timestamp=0.0,
     )
     result = fsm.advance(
-        _evidence(4), 0.8,
-        _bundle(_press(4, present=False, absent_frames=4, disappeared=True)),
+        _evidence(9, RuntimeState.IDLE), 1.8,
+        _bundle(
+            _press(9, present=False, absent_frames=9, disappeared=True),
+            prompt=PromptObservationKind.IDLE_CAST,
+        ),
         recorded_observation=True,
     )
     assert result.next_state == RuntimeState.IDLE
-    assert result.visual_acknowledgement == "qualified_press_panel_stably_absent"
+    assert result.visual_acknowledgement == "IDLE_CAST"
+
+
+def test_recorded_result_pending_does_not_use_press_absence_without_idle_evidence() -> None:
+    fsm = FishingFSM(
+        FSMConfig(stable_frames=1),
+        initial_state=RuntimeState.RESULT_PENDING,
+    )
+    result = fsm.advance(
+        _evidence(9), 1.8,
+        _bundle(_press(9, present=False, absent_frames=9, disappeared=True)),
+        recorded_observation=True,
+    )
+    assert result.next_state == RuntimeState.RESULT_PENDING
 
 
 def test_get_panel_still_has_priority_after_press() -> None:
@@ -193,7 +210,9 @@ def test_session_123210_recorded_replay_exits_press_without_applying_action(tmp_
         flat_report=False,
     )
     assert len(run.rows) == 600
-    assert run.rows[-1]["next_runtime_state"] == "IDLE"
+    # The historical capture ends in an explicitly ignored transition and has
+    # no stable IDLE_CAST evidence. The safer grace policy leaves it pending.
+    assert run.rows[-1]["next_runtime_state"] == "RESULT_PENDING"
     assert sum(row["proposed_intent"] == "PRESS_SEQUENCE" for row in run.rows) == 1
     assert not any(row["action_applied"] for row in run.rows)
     assert not any(row["next_runtime_state"] == "SYNC_REQUIRED" for row in run.rows)
@@ -203,4 +222,6 @@ def test_session_123210_recorded_replay_exits_press_without_applying_action(tmp_
         if row["previous_runtime_state"] != row["next_runtime_state"]
     }
     assert transitions[585] == "RESULT_PENDING"
-    assert transitions[587] == "IDLE"
+    assert RuntimeState.IDLE.value not in {
+        state for frame, state in transitions.items() if frame > 585
+    }

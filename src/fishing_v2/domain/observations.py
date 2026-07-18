@@ -71,3 +71,15 @@ class GetObservation:
     timestamp: float
     source: str = "get_detector"
     evidence: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ResultBannerObservation:
+    """Non-action result evidence which may only hold RESULT_PENDING."""
+
+    detected: bool
+    confidence: float
+    frame_index: int
+    timestamp: float
+    source: str = "result_banner_observer"
+    evidence: Mapping[str, Any] = field(default_factory=dict)

@@ -125,7 +125,8 @@ def test_hook_action_arms_press_and_get_detectors() -> None:
     assert result.fsm.next_state == RuntimeState.RESULT_PENDING
     assert result.action_applied is True
     assert result.next_activation.press == DetectorActivationMode.ARMED
-    assert result.next_activation.get == DetectorActivationMode.ARMED
+    assert result.next_activation.get == DetectorActivationMode.BURST
+    assert result.next_activation.get_fps == 20.0
 
 
 def test_press_instruction_uses_burst_without_confirming_press() -> None:

@@ -126,6 +126,23 @@ get_detector:
   max_attempts: 12
   max_duration_seconds: 5.0
 
+result:
+  minimum_result_pending_sec: 1.5
+  maximum_result_pending_sec: 10.0
+  get_burst_fps: 20
+  banner_observer:
+    enabled: true
+    experimental: true
+    roi:
+      x1: 0.23
+      y1: 0.045
+      x2: 0.72
+      y2: 0.15
+    template: assets/reference/result_banner/live_result_banner_004522.jpg
+    min_similarity: 0.88
+    min_dark_band_ratio: 0.25
+    min_gold_ratio: 0.005
+
 sync:
   observation_frames: 10
   minimum_consensus_ratio: 0.7

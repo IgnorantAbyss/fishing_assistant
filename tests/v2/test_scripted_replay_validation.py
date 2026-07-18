@@ -99,3 +99,32 @@ def test_terminal_runtime_mismatch_is_a_replay_failure() -> None:
     assert result["result"] == "FAIL"
     assert "unexplained_runtime_transition" in result["failure_reasons"]
     assert result["unexplained_runtime_transitions"][0]["issue"] == "terminal_runtime_state_mismatch"
+
+
+def test_historical_result_pending_without_idle_prompt_is_warning_not_failure() -> None:
+    row = {
+        "frame_index": 1,
+        "global_ground_truth": "IDLE",
+        "prompt_observation": "UNKNOWN",
+        "previous_runtime_state": "RESULT_PENDING",
+        "next_runtime_state": "RESULT_PENDING",
+        "transition_reason": "result_pending_minimum_grace",
+        "proposed_intent": "NONE",
+        "action_applied": False,
+        "raw_detected": {"hook": False, "press": False, "get": False},
+        "qualified_detected": {"hook": False, "press": False, "get": False},
+        "used_by_fusion": {"hook": False, "press": False, "get": False},
+        "press_panel_candidate": False,
+        "press_panel_present_raw": False,
+        "press_sequence_ready": False,
+        "qualified_press_observation": None,
+        "press_sequence_candidate": [],
+    }
+    result = summarize_replay(
+        "session_test", [row], {"valid": True, "total_frames": 1}
+    )
+    assert result["result"] == "PASS_WITH_WARNINGS"
+    assert result["runtime_warnings"] == [
+        "historical_result_pending_not_fully_evaluable"
+    ]
+    assert result["unexplained_runtime_transitions"] == []

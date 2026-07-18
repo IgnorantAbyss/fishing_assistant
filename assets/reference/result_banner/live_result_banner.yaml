@@ -1,0 +1,27 @@
+version: 1
+status: experimental_single_episode_reference
+source_session: session_20260718_082600
+roi_normalized: [0.23, 0.045, 0.72, 0.15]
+runtime_effect: hold_result_pending_only
+collect_eligible: false
+items:
+  - image: live_result_banner_004522.jpg
+    source_frame: 4522
+    expected_result_banner_present: true
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 5406b91cdb2ccb333eefb0ce16ec5d6d4d9080c9cf4e20a9515da23f30f38de7
+  - image: negative_get_panel_002443.jpg
+    source_frame: 2443
+    expected_result_banner_present: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 40b63200ebd901304e82b0048e6b7fe1824d8bf61071d4254c572cede6e64656
+  - image: negative_idle_004556.jpg
+    source_frame: 4556
+    expected_result_banner_present: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 0a2cbf2918b2faed8e9808fc09ae4c4b26ab1ecdff42e7742c73f6f9218e5dbb
+  - image: negative_get_panel_006537.jpg
+    source_frame: 6537
+    expected_result_banner_present: false
+    review_status: human_reviewed_live_audit
+    source_image_sha256: 6195e7cef76a008c915b88c1ca52339928e6476ef8c6c1e13ef6865b0cb0177a

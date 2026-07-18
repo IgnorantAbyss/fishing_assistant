@@ -7,6 +7,7 @@ from src.fishing_v2.domain.observations import (
     HookObservation,
     PressObservation,
     PromptObservation,
+    ResultBannerObservation,
 )
 
 
@@ -18,3 +19,4 @@ class ObservationBundle:
     hook: HookObservation | None = None
     press: PressObservation | None = None
     get: GetObservation | None = None
+    result_banner: ResultBannerObservation | None = None

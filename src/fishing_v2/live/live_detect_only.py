@@ -21,6 +21,7 @@ from src.fishing_v2.domain.observations import (
     PressObservation,
     PromptObservation,
     PromptObservationKind,
+    ResultBannerObservation,
 )
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import ObservationFusion
@@ -35,6 +36,10 @@ from src.fishing_v2.live.diagnostic_evidence import (
 )
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.perception.prompt_bundle import LoadedPromptBundle
+from src.fishing_v2.perception.result_banner_observer import (
+    ResultBannerConfig,
+    ResultBannerObserver,
+)
 from src.fishing_v2.replay.v2_replay_runner import _config_objects
 from src.fishing_v2.runtime.detector_activation import (
     DetectorActivationMode,
@@ -240,6 +245,7 @@ class LiveDetectOnlyRuntime:
         hook_detector: Any | None = None,
         press_detector: Any | None = None,
         get_detector: Any | None = None,
+        result_banner_observer: Any | None = None,
         evidence_recorder: DiagnosticEvidenceRecorder | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -258,6 +264,12 @@ class LiveDetectOnlyRuntime:
         self.overlay = DiagnosticOverlay(live_config.show_overlay)
         self.deduplicator = WouldFireDeduplicator()
         self._raw_config = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        banner_config = ResultBannerConfig.from_mapping(
+            self._raw_config["result"]["banner_observer"]
+        )
+        self.result_banner_observer = (
+            result_banner_observer or ResultBannerObserver(banner_config)
+        )
         (
             fusion_config, fsm_config, sync_config, safety_config,
             activation_config, qualification_config,
@@ -338,10 +350,12 @@ class LiveDetectOnlyRuntime:
         hook = result.qualified.bundle.hook
         press = result.qualified.bundle.press
         get = result.qualified.bundle.get
+        result_banner = result.qualified.bundle.result_banner
         return {
             "hook": asdict(hook) if hook else None,
             "press": asdict(press) if press else None,
             "get": asdict(get) if get else None,
+            "result_banner": asdict(result_banner) if result_banner else None,
             "qualified": {
                 "hook": result.qualified.hook.qualified_detected,
                 "press": result.qualified.press.qualified_detected,
@@ -479,6 +493,14 @@ class LiveDetectOnlyRuntime:
                 payload[name]["diagnostics"] = cls._get_diagnostic_fields(
                     raw, qualified_observation, qualification
                 )
+        banner = raw_bundle.result_banner
+        payload["result_banner"] = {
+            "executed": banner is not None,
+            "detected": bool(banner and banner.detected),
+            "confidence": float(banner.confidence) if banner else None,
+            "evidence": dict(banner.evidence) if banner else None,
+            "collect_eligible": False,
+        }
         return payload
 
     def _prompt_interval(self) -> float:
@@ -507,6 +529,7 @@ class LiveDetectOnlyRuntime:
         hook = result.qualified.bundle.hook if result else None
         press = result.qualified.bundle.press if result else None
         get = result.qualified.bundle.get if result else None
+        result_banner = result.qualified.bundle.result_banner if result else None
         request = result.fsm.action_request if result else ActionRequest(ActionIntent.NONE, 0.0, "none")
         return [
             f"DETECT ONLY | capture={capture_fps:.1f} FPS latency={latency_ms:.1f} ms bundle={self.prompt_bundle.bundle_version}",
@@ -515,6 +538,7 @@ class LiveDetectOnlyRuntime:
             f"Hook raw/qualified={bool(hook)}/{bool(hook and hook.detected)} fill={getattr(hook, 'fill_ratio', None)} crossed={bool(hook and hook.evidence.get('divider_margin_passed'))}",
             f"Press panel={bool(press and press.panel_present)} sequence={''.join(press.sequence_candidate) if press else ''} frozen={bool(press and press.sequence_ready)}",
             f"Get panel={bool(get and get.detected)} | would-fire={request.intent.value} | action_applied=false",
+            f"Result banner={bool(result_banner and result_banner.detected)} hold-only=true",
         ]
 
     def run(self, *, max_frames: int | None = None) -> dict[str, Any]:
@@ -534,6 +558,7 @@ class LiveDetectOnlyRuntime:
         hook_crossed_at: float | None = None
         press_frozen_frame: int | None = None
         get_visible = False
+        result_banner_visible = False
         unknown_started: float | None = None
         unknown_saved = False
         conflict_active = False
@@ -636,12 +661,22 @@ class LiveDetectOnlyRuntime:
                     if self.fsm.state == RuntimeState.IDLE:
                         run_get = True  # required read-only GET guard before WOULD_CAST
                     get = self.get_detector.observe(frame, context) if run_get else None
+                    run_result_banner = bool(
+                        run_detectors and self.fsm.state == RuntimeState.RESULT_PENDING
+                    )
+                    result_banner = (
+                        self.result_banner_observer.observe(frame, context)
+                        if run_result_banner else None
+                    )
                     detector_runs.update({
                         "hook": int(hook is not None),
                         "press": int(press is not None),
                         "get": int(get is not None),
+                        "result_banner": int(result_banner is not None),
                     })
-                    raw_bundle = ObservationBundle(captured, elapsed, prompt, hook, press, get)
+                    raw_bundle = ObservationBundle(
+                        captured, elapsed, prompt, hook, press, get, result_banner
+                    )
                     sync_reason = None
                     processing_from_sync_required = self.fsm.state == RuntimeState.SYNC_REQUIRED
                     transition_results: list[Any] = []
@@ -738,6 +773,7 @@ class LiveDetectOnlyRuntime:
                             "hook": hook is not None,
                             "press": press is not None,
                             "get": get is not None,
+                            "result_banner": result_banner is not None,
                         }
                         try:
                             self.evidence_recorder.record_detector_evidence(
@@ -774,6 +810,22 @@ class LiveDetectOnlyRuntime:
                             "prompt_evidence": dict(prompt.evidence),
                         })
                         last_prompt_kind = prompt.kind.value
+                    current_banner_visible = bool(result_banner and result_banner.detected)
+                    if current_banner_visible != result_banner_visible:
+                        self.logger.event(
+                            "result_banner_appearance" if current_banner_visible else "result_banner_disappearance",
+                            {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                "experimental": bool(
+                                    result_banner and result_banner.evidence.get("experimental")
+                                ),
+                                "runtime_effect": "hold_result_pending_only",
+                                "action_intent": ActionIntent.NONE.value,
+                                "action_applied": False,
+                            },
+                        )
+                        result_banner_visible = current_banner_visible
                     activation_payload = self._activation_payload(activation)
                     if last_activation != activation:
                         self.logger.event("detector_activation_change", {

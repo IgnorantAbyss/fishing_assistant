@@ -53,6 +53,8 @@ def _config_objects(config_path: Path):
         "get_max_attempts": data["get_detector"]["max_attempts"],
         "get_max_duration_seconds": data["get_detector"]["max_duration_seconds"],
         "recorded_press_exit_idle_frames": data["press_detector"]["recorded_exit_idle_frames"],
+        "result_minimum_pending_sec": data["result"]["minimum_result_pending_sec"],
+        "result_maximum_pending_sec": data["result"]["maximum_result_pending_sec"],
     })
     activation = DetectorActivationConfig(
         hook_armed_fps=data["hook_detector"]["armed_fps"],
@@ -60,6 +62,7 @@ def _config_objects(config_path: Path):
         press_armed_fps=data["press_detector"]["armed_fps"],
         press_burst_fps=data["press_detector"]["burst_fps"],
         get_armed_fps=data["get_detector"]["armed_fps"],
+        get_burst_fps=data["result"]["get_burst_fps"],
     )
     press = data["press_detector"]
     qualification = EvidenceQualificationConfig(

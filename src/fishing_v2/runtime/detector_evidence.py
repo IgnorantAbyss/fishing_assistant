@@ -107,6 +107,7 @@ class DetectorEvidenceQualifier:
                 hook_observation,
                 press_observation,
                 get_observation,
+                raw.result_banner,
             ),
             hook,
             press,
