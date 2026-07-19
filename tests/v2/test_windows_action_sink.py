@@ -9,6 +9,7 @@ import pytest
 
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
 from src.fishing_v2.live.windows_action_sink import (
+    ActionIntegrityPreflightError,
     EXPECTED_CLIENT_SIZE,
     EXPECTED_GAME_PROCESS,
     CtypesWindowsInputApi,
@@ -52,6 +53,17 @@ class FakeWindowsApi:
         self.input_modes: list[str] = []
         self.panic_values: list[bool] = []
         self.inspect_calls = 0
+        self.integrity_diagnostics = {
+            "python_process": {
+                "process_id": 1, "integrity_level": "medium",
+                "integrity_rid": 8192, "elevated": False,
+            },
+            "target_process": {
+                "process_id": 99, "integrity_level": "medium",
+                "integrity_rid": 8192, "elevated": False,
+            },
+            "suspected_integrity_mismatch": False,
+        }
 
     def inspect_window(self, _hwnd: int) -> WindowSafetySnapshot:
         self.inspect_calls += 1
@@ -81,16 +93,15 @@ class FakeWindowsApi:
         return self.panic_values.pop(0) if self.panic_values else False
 
     def process_integrity_diagnostics(self, target_process_id: int):
-        return {
-            "python_process": {
-                "process_id": 1, "integrity_level": "medium", "elevated": False,
-            },
+        result = {
+            **self.integrity_diagnostics,
+            "python_process": dict(self.integrity_diagnostics["python_process"]),
             "target_process": {
+                **self.integrity_diagnostics["target_process"],
                 "process_id": target_process_id,
-                "integrity_level": "medium", "elevated": False,
             },
-            "suspected_integrity_mismatch": False,
         }
+        return result
 
 
 def _context(action_id: str = "cycle:1:COLLECT", *, intent: str = "GET") -> ActionExecutionContext:
@@ -147,9 +158,51 @@ def test_allowlist_parser_is_comma_separated_and_strict() -> None:
         parse_action_allowlist("COLLECT,CLICK")
 
 
+def test_allowlist_parser_normalizes_cast_and_collect_case() -> None:
+    assert parse_action_allowlist("cast, collect") == {
+        ActionIntent.CAST, ActionIntent.COLLECT,
+    }
+
+
 def test_user32_is_loaded_with_last_error_enabled() -> None:
     source = inspect.getsource(CtypesWindowsInputApi.__init__)
     assert 'ctypes.WinDLL("user32", use_last_error=True)' in source
+    assert "GetForegroundWindow.argtypes = ()" in source
+
+
+def test_integrity_mismatch_fails_before_sink_becomes_sendable() -> None:
+    api = FakeWindowsApi()
+    api.integrity_diagnostics["target_process"].update({
+        "integrity_level": "high", "integrity_rid": 12288, "elevated": True,
+    })
+    events: list[tuple[str, dict]] = []
+    with pytest.raises(ActionIntegrityPreflightError, match="elevated PowerShell") as exc:
+        _sink(api, events=events)
+    assert exc.value.reason == "integrity_mismatch"
+    assert api.send_calls == []
+    assert all(name != "action_sink_initialized" for name, _ in events)
+
+
+@pytest.mark.parametrize(("python_rid", "target_rid"), [(12288, 12288), (8192, 8192)])
+def test_equal_known_integrity_levels_pass_preflight(
+    python_rid: int, target_rid: int
+) -> None:
+    api = FakeWindowsApi()
+    api.integrity_diagnostics["python_process"]["integrity_rid"] = python_rid
+    api.integrity_diagnostics["target_process"]["integrity_rid"] = target_rid
+    sink = _sink(api)
+    assert sink.summary()["integrity_diagnostics"]["python_process"][
+        "integrity_rid"
+    ] == python_rid
+
+
+def test_unknown_integrity_fails_closed_for_real_sendinput() -> None:
+    api = FakeWindowsApi()
+    api.integrity_diagnostics["python_process"]["integrity_rid"] = None
+    with pytest.raises(ActionIntegrityPreflightError) as exc:
+        _sink(api)
+    assert exc.value.reason == "integrity_unknown"
+    assert api.send_calls == []
 
 
 def test_windows_input_struct_layout_matches_pointer_architecture() -> None:
@@ -344,6 +397,25 @@ def test_window_safety_rejections_emit_no_input(change: dict, reason: str) -> No
     assert result.rejection_reason == reason
     assert result.applied is False
     assert api.send_calls == []
+
+
+def test_null_foreground_rejects_without_input_and_throttles_event() -> None:
+    api = FakeWindowsApi()
+    api.snapshot = replace(api.snapshot, foreground_hwnd=None)
+    events: list[tuple[str, dict]] = []
+    sink = _sink(api, events=events)
+    first = sink.apply(
+        ActionRequest(ActionIntent.COLLECT, 0.99, "test"), _context("get:1")
+    )
+    second = sink.apply(
+        ActionRequest(ActionIntent.COLLECT, 0.99, "test"), _context("get:2")
+    )
+    assert first.rejection_reason == second.rejection_reason == (
+        "foreground_window_unavailable"
+    )
+    assert api.send_calls == []
+    assert [name for name, _ in events].count("foreground_window_unavailable") == 1
+    assert sink.summary()["foreground_unavailable_count"] == 1
 
 
 def test_context_target_hwnd_must_match_startup_target() -> None:

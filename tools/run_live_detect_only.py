@@ -161,6 +161,15 @@ def main() -> int:
     print(f"video_path: {summary.get('video_path')}")
     print(f"completed_cycles: {summary.get('completed_cycles')}")
     print(f"actions_applied: {summary['actions_applied']}")
+    if summary["result"] == "preflight_failed":
+        print("preflight failed:", file=sys.stderr)
+        print(summary.get("preflight_failure_reason"), file=sys.stderr)
+        message = summary.get("preflight_failure_message")
+        if message:
+            lines = str(message).splitlines()
+            if lines and lines[0] == summary.get("preflight_failure_reason"):
+                lines = lines[1:]
+            print("\n".join(lines), file=sys.stderr)
     return 0 if summary["result"] in {
         "completed", "completed_target_cycles", "interrupted_by_user",
     } else 2

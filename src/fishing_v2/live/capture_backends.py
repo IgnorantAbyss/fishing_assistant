@@ -14,6 +14,7 @@ from src.screen_capture import (
     WindowInfo,
     frame_sha256,
     inspect_window_handle,
+    query_foreground_window,
     resolve_exact_window,
     surface_to_bgr,
     validate_bgr_frame,
@@ -97,6 +98,8 @@ class WindowsGraphicsCaptureSession:
             "desktop_region_capture": False,
             "overlay_capture_warning": False,
         }
+        self._foreground_unavailable_count = 0
+        self._foreground_unavailable_active = False
 
     def open(self) -> WindowInfo:
         if self._provider is not None:
@@ -182,8 +185,21 @@ class WindowsGraphicsCaptureSession:
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetForegroundWindow.argtypes = ()
         user32.GetForegroundWindow.restype = wintypes.HWND
-        return int(user32.GetForegroundWindow()) == self.window_info.window_handle
+        matches, unavailable, foreground_hwnd = query_foreground_window(
+            self.window_info.window_handle, user32.GetForegroundWindow
+        )
+        if unavailable and not self._foreground_unavailable_active:
+            self._foreground_unavailable_count += 1
+        self._foreground_unavailable_active = unavailable
+        self._diagnostics.update({
+            "foreground": matches,
+            "foreground_hwnd": foreground_hwnd,
+            "foreground_window_unavailable": unavailable,
+            "foreground_unavailable_count": self._foreground_unavailable_count,
+        })
+        return matches
 
     def diagnostics(self) -> dict[str, Any]:
         return dict(self._diagnostics)

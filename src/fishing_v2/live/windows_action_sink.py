@@ -32,6 +32,16 @@ EXPECTED_GAME_PROCESS = "BlackDesert64"
 EXPECTED_CLIENT_SIZE = (2560, 1440)
 INPUT_MODES = ("vk", "scancode")
 
+
+class ActionIntegrityPreflightError(RuntimeError):
+    def __init__(
+        self, reason: str, message: str, diagnostics: Mapping[str, Any]
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.diagnostics = dict(diagnostics)
+
+
 VIRTUAL_KEYS = {
     "SPACE": 0x20,
     "W": 0x57,
@@ -215,6 +225,7 @@ class CtypesWindowsInputApi:
             wintypes.HWND, ctypes.POINTER(wintypes.RECT),
         )
         self.user32.GetClientRect.restype = wintypes.BOOL
+        self.user32.GetForegroundWindow.argtypes = ()
         self.user32.GetForegroundWindow.restype = wintypes.HWND
         self.user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
         self.user32.GetAsyncKeyState.restype = ctypes.c_short
@@ -271,7 +282,8 @@ class CtypesWindowsInputApi:
 
     def inspect_window(self, hwnd: int) -> WindowSafetySnapshot:
         handle = wintypes.HWND(hwnd)
-        foreground = int(self.user32.GetForegroundWindow() or 0) or None
+        foreground_result = self.user32.GetForegroundWindow()
+        foreground = int(foreground_result) if foreground_result else None
         exists = bool(self.user32.IsWindow(handle))
         if not exists:
             return WindowSafetySnapshot(
@@ -518,6 +530,8 @@ class WindowsSendInputActionSink:
         self._failed: Counter[str] = Counter()
         self._rejection_reasons: Counter[str] = Counter()
         self._focus_loss_count = 0
+        self._foreground_unavailable_count = 0
+        self._foreground_unavailable_active = False
         integrity_reader = getattr(self.api, "process_integrity_diagnostics", None)
         if callable(integrity_reader):
             try:
@@ -543,6 +557,7 @@ class WindowsSendInputActionSink:
                 },
                 "suspected_integrity_mismatch": None,
             }
+        self._validate_integrity_preflight()
         self._event("action_sink_initialized", {
             "timestamp": self._timestamp(),
             "action_sink_type": self.sink_type,
@@ -560,6 +575,25 @@ class WindowsSendInputActionSink:
             "process_architecture": process_architecture(),
             "integrity_diagnostics": self._integrity_diagnostics,
         })
+
+    def _validate_integrity_preflight(self) -> None:
+        python_process = self._integrity_diagnostics.get("python_process", {})
+        target_process = self._integrity_diagnostics.get("target_process", {})
+        python_rid = python_process.get("integrity_rid")
+        target_rid = target_process.get("integrity_rid")
+        if not isinstance(python_rid, int) or not isinstance(target_rid, int):
+            raise ActionIntegrityPreflightError(
+                "integrity_unknown",
+                "Process integrity could not be verified; real input is fail-closed.",
+                self._integrity_diagnostics,
+            )
+        if python_rid < target_rid:
+            raise ActionIntegrityPreflightError(
+                "integrity_mismatch",
+                "Python process integrity is lower than target process integrity. "
+                "Start the runtime manually from an elevated PowerShell.",
+                self._integrity_diagnostics,
+            )
 
     def _timestamp(self) -> float:
         return max(0.0, float(self.clock()) - self.session_started_at)
@@ -731,6 +765,8 @@ class WindowsSendInputActionSink:
             return "process_name_mismatch"
         if snapshot.client_size != self.expected_client_size:
             return "client_size_mismatch"
+        if snapshot.foreground_hwnd is None:
+            return "foreground_window_unavailable"
         if snapshot.foreground_hwnd != self.target_hwnd:
             return "foreground_window_mismatch"
         return None
@@ -776,6 +812,18 @@ class WindowsSendInputActionSink:
                 error=f"{type(exc).__name__}: {exc}",
             )
         rejection = self._safety_rejection(snapshot, context)
+        if rejection == "foreground_window_unavailable":
+            if not self._foreground_unavailable_active:
+                self._foreground_unavailable_count += 1
+                self._event("foreground_window_unavailable", {
+                    **self._base_payload(request, context, keys),
+                    "foreground_hwnd": None,
+                    "foreground_unavailable_count": self._foreground_unavailable_count,
+                    "action_applied": False,
+                })
+            self._foreground_unavailable_active = True
+        else:
+            self._foreground_unavailable_active = False
         if rejection == "foreground_window_mismatch":
             if not self._focus_suspended:
                 self._focus_suspended = True
@@ -910,6 +958,7 @@ class WindowsSendInputActionSink:
             "rejection_counts_by_reason": dict(self._rejection_reasons),
             "panic_triggered": self._panic_triggered,
             "focus_loss_count": self._focus_loss_count,
+            "foreground_unavailable_count": self._foreground_unavailable_count,
             "input_mode": self.config.input_mode,
             "input_struct_size": ctypes.sizeof(_INPUT),
             "process_architecture": process_architecture(),

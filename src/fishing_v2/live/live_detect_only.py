@@ -29,6 +29,12 @@ from src.fishing_v2.legacy_adapters.get_detector_adapter import LegacyGetDetecto
 from src.fishing_v2.legacy_adapters.hook_detector_adapter import LegacyHookDetectorAdapter
 from src.fishing_v2.legacy_adapters.press_detector_adapter import LegacyPressDetectorAdapter
 from src.fishing_v2.live.session_logger import LiveSessionLogger
+from src.fishing_v2.live.cast_opportunity import (
+    CastAttempt,
+    CastOpportunityConfig,
+    CastOpportunityController,
+    CastOpportunityEvent,
+)
 from src.fishing_v2.live.collect_retry import (
     CollectAttempt,
     CollectRetryConfig,
@@ -43,6 +49,7 @@ from src.fishing_v2.live.diagnostic_evidence import (
 from src.fishing_v2.live.windows_action_sink import (
     ACTION_SINK_NONE,
     ACTION_SINK_SENDINPUT,
+    ActionIntegrityPreflightError,
     EXPECTED_GAME_PROCESS,
     WindowsActionConfig,
     WindowsSendInputActionSink,
@@ -79,6 +86,7 @@ WOULD_FIRE_NAMES = {
     ActionIntent.PRESS_SEQUENCE: "WOULD_PRESS_SEQUENCE",
     ActionIntent.COLLECT: "WOULD_COLLECT",
 }
+LIVE_ACTION_ALLOWLIST = frozenset({ActionIntent.CAST, ActionIntent.COLLECT})
 
 
 class LivePreflightError(RuntimeError):
@@ -264,6 +272,12 @@ def validate_emit_actions(
         raise LivePreflightError(
             "An explicit non-empty --action-allowlist is required when actions are enabled"
         )
+    unsupported = allowlist - LIVE_ACTION_ALLOWLIST
+    if emit_actions and unsupported:
+        names = ", ".join(sorted(item.value for item in unsupported))
+        raise LivePreflightError(
+            f"Live actions are limited to CAST,COLLECT; refused: {names}"
+        )
 
 
 def _prompt_polling(config: Mapping[str, Any]) -> RuntimeSchedulePolicy:
@@ -339,6 +353,9 @@ class LiveDetectOnlyRuntime:
                 "Runtime safety.emit_actions must remain false; the guarded Live sink is CLI-only"
             )
         self.fsm = FishingFSM(fsm_config, initial_state=RuntimeState.SYNCING)
+        self.cast_opportunity = CastOpportunityController(CastOpportunityConfig(
+            visual_ack_timeout_seconds=fsm_config.cast_pending_timeout_sec,
+        ))
         self.activation_policy = DetectorActivationPolicy(activation_config)
         self.controller = RuntimeController(
             ObservationFusion(fusion_config),
@@ -363,6 +380,11 @@ class LiveDetectOnlyRuntime:
         elif self.evidence_recorder is not None:
             raise ValueError("evidence_recorder requires evidence_mode='diagnostic'")
         self._diagnostic_roi_bounds: dict[str, tuple[int, int, int, int]] = {}
+        self._preflight_passed = False
+        self._preflight_failure_reason: str | None = None
+        self._preflight_failure_message: str | None = None
+        self._action_preflight_diagnostics: dict[str, Any] = {}
+        self._foreground_unavailable_event_active = False
 
     def _log_collect_events(
         self,
@@ -393,6 +415,38 @@ class LiveDetectOnlyRuntime:
                     if event.payload.get("collect_visual_acknowledged")
                     else "pending"
                 ),
+                **dict(event.payload),
+            })
+            if event.event_type in {
+                "collect_retry_succeeded",
+                "collect_retry_exhausted",
+                "collect_retry_cancelled",
+            }:
+                self.logger.event("get_episode_terminal", {
+                    "timestamp": timestamp,
+                    "frame_index": frame_index,
+                    "runtime_state": runtime_state,
+                    "terminal_reason": event.payload.get(
+                        "cancellation_reason",
+                        event.payload.get("outcome"),
+                    ),
+                    **dict(event.payload),
+                })
+
+    def _log_cast_events(
+        self,
+        events: tuple[CastOpportunityEvent, ...],
+        *,
+        timestamp: float,
+        frame_index: int,
+        runtime_state: str,
+    ) -> None:
+        for event in events:
+            self.logger.event(event.event_type, {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "runtime_state": runtime_state,
+                "action_applied": False,
                 **dict(event.payload),
             })
 
@@ -435,6 +489,10 @@ class LiveDetectOnlyRuntime:
                 event_callback=self.logger.event,
                 session_started_at=session_started_at,
             )
+        except ActionIntegrityPreflightError as exc:
+            self._preflight_failure_reason = exc.reason
+            self._action_preflight_diagnostics = dict(exc.diagnostics)
+            raise LivePreflightError(f"{exc.reason}\n{exc}") from exc
         except Exception as exc:
             raise LivePreflightError(
                 f"Action sink initialization failed: {type(exc).__name__}: {exc}"
@@ -722,6 +780,7 @@ class LiveDetectOnlyRuntime:
         try:
             self.preflight()
             self._initialize_action_sink(session_started_at=started)
+            self._preflight_passed = True
             self.logger.event("preflight_passed", {
                 "timestamp": 0.0,
                 "resolution": list(EXPECTED_RESOLUTION),
@@ -822,7 +881,15 @@ class LiveDetectOnlyRuntime:
                         run_get = True  # required read-only GET guard before WOULD_CAST
                     get = self.get_detector.observe(frame, context) if run_get else None
                     run_result_banner = bool(
-                        run_detectors and self.fsm.state == RuntimeState.RESULT_PENDING
+                        run_detectors
+                        and (
+                            self.fsm.state == RuntimeState.RESULT_PENDING
+                            or (
+                                self.action_sink is not None
+                                and ActionIntent.CAST in self.action_allowlist
+                                and self.fsm.state == RuntimeState.IDLE
+                            )
+                        )
                     )
                     result_banner = (
                         self.result_banner_observer.observe(frame, context)
@@ -854,9 +921,31 @@ class LiveDetectOnlyRuntime:
                             transition_results.append(self.fsm.force_state(
                                 RuntimeState.SYNC_REQUIRED, elapsed, sync.reason
                             ))
+                    foreground = self.capture.is_foreground()
+                    foreground_diagnostics = getattr(self.capture, "diagnostics", None)
+                    current_capture_diagnostics = (
+                        dict(foreground_diagnostics())
+                        if callable(foreground_diagnostics) else {}
+                    )
+                    self._capture_diagnostics.update(current_capture_diagnostics)
+                    foreground_unavailable = bool(
+                        current_capture_diagnostics.get(
+                            "foreground_window_unavailable", False
+                        )
+                    )
+                    if foreground_unavailable and not self._foreground_unavailable_event_active:
+                        self.logger.event("foreground_window_unavailable", {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "runtime_state": self.fsm.state.value,
+                            "source": "capture_diagnostics",
+                            "foreground": False,
+                            "action_applied": False,
+                        })
+                    self._foreground_unavailable_event_active = foreground_unavailable
                     last_result = self.controller.process(
                         raw_bundle,
-                        foreground=self.capture.is_foreground(),
+                        foreground=foreground,
                         runtime_environment_supported=True,
                         action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
                         preserve_proposal=self.action_sink is not None,
@@ -870,7 +959,23 @@ class LiveDetectOnlyRuntime:
                         self.action_sink is not None
                         and ActionIntent.COLLECT in self.action_allowlist
                     )
+                    cast_opportunity_enabled = bool(
+                        self.action_sink is not None
+                        and ActionIntent.CAST in self.action_allowlist
+                    )
                     qualified_get = last_result.qualified.bundle.get
+                    qualified_banner = last_result.qualified.bundle.result_banner
+                    if cast_opportunity_enabled:
+                        self._log_cast_events(
+                            self.cast_opportunity.observe(
+                                timestamp=elapsed,
+                                runtime_state=self.fsm.state,
+                                prompt_kind=prompt.kind if prompt is not None else None,
+                            ),
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            runtime_state=self.fsm.state.value,
+                        )
                     if collect_retry_enabled:
                         get_confirmation_frames = int(
                             qualified_get.evidence.get("get_confirmation_frames", 0)
@@ -949,15 +1054,6 @@ class LiveDetectOnlyRuntime:
                         and not processing_from_sync_required
                     )
                     if entered_sync_required:
-                        if self.collect_retry.active:
-                            self._log_collect_events(
-                                (self.collect_retry.cancel(
-                                    elapsed, "runtime_entered_sync_required"
-                                ),),
-                                timestamp=elapsed,
-                                frame_index=captured,
-                                runtime_state=self.fsm.state.value,
-                            )
                         self.controller.reset_for_sync_recovery(elapsed)
                         self.recovery_synchronizer.reset(started_at=elapsed)
                         self.deduplicator.reset_for_sync_recovery()
@@ -1218,7 +1314,56 @@ class LiveDetectOnlyRuntime:
                     specialized = self._specialized_payload(last_result)
                     request = last_result.fsm.action_request
                     collect_attempt: CollectAttempt | None = None
-                    if collect_retry_enabled and request.intent == ActionIntent.COLLECT:
+                    cast_attempt: CastAttempt | None = None
+                    if cast_opportunity_enabled and request.intent == ActionIntent.CAST:
+                        self.deduplicator.record_raw_proposal(request)
+                        if last_result.safety.reason == "action_emission_disabled":
+                            cast_attempt, cast_schedule_events = (
+                                self.cast_opportunity.schedule(
+                                    timestamp=elapsed,
+                                    idle_cast_prompt=bool(
+                                        prompt is not None
+                                        and prompt.kind == PromptObservationKind.IDLE_CAST
+                                    ),
+                                    get_observed_absent=bool(
+                                        qualified_get is not None
+                                        and not qualified_get.detected
+                                    ),
+                                    result_banner_absent=bool(
+                                        qualified_banner is not None
+                                        and not qualified_banner.detected
+                                    ),
+                                )
+                            )
+                            self._log_cast_events(
+                                cast_schedule_events,
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                runtime_state=self.fsm.state.value,
+                            )
+                        would_fire = (
+                            self.deduplicator.observe(
+                                request,
+                                safety_reason=last_result.safety.reason,
+                                frame_index=captured,
+                                timestamp=elapsed,
+                                runtime_state=self.fsm.state.value,
+                                prompt_evidence=prompt.evidence if prompt else None,
+                                specialized_evidence=specialized,
+                                identity_suffix=(
+                                    cast_attempt.opportunity_id
+                                    if cast_attempt is not None else None
+                                ),
+                                count_raw=False,
+                            )
+                            if cast_attempt is not None else None
+                        )
+                        if would_fire is not None and cast_attempt is not None:
+                            would_fire["deduplication_key"] = cast_attempt.action_id
+                            would_fire["cast_opportunity_id"] = (
+                                cast_attempt.opportunity_id
+                            )
+                    elif collect_retry_enabled and request.intent == ActionIntent.COLLECT:
                         self.deduplicator.record_raw_proposal(request)
                         if last_result.safety.reason == "action_emission_disabled":
                             collect_attempt, collect_schedule_events = (
@@ -1271,6 +1416,14 @@ class LiveDetectOnlyRuntime:
                             )
                             if collect_attempt is not None else None
                         )
+                        if would_fire is not None and collect_attempt is not None:
+                            would_fire["deduplication_key"] = collect_attempt.attempt_id
+                            would_fire["collect_opportunity_id"] = (
+                                collect_attempt.opportunity_id
+                            )
+                            would_fire["physical_get_episode_id"] = (
+                                self.collect_retry.physical_episode_id
+                            )
                     else:
                         would_fire = self.deduplicator.observe(
                             request,
@@ -1285,7 +1438,15 @@ class LiveDetectOnlyRuntime:
                         event_type = would_fire.pop("event_type")
                         action_id = str(would_fire["deduplication_key"])
                         would_fire["action_id"] = action_id
-                        would_fire["episode_id"] = str(would_fire["cycle_id"])
+                        would_fire["episode_id"] = (
+                            str(self.collect_retry.physical_episode_id)
+                            if collect_attempt is not None
+                            else (
+                                str(cast_attempt.opportunity_id)
+                                if cast_attempt is not None
+                                else str(would_fire["cycle_id"])
+                            )
+                        )
                         screenshot = self.logger.save_screenshot(frame, captured, event_type)
                         would_fire["screenshot_reference"] = screenshot
                         if event_type == "WOULD_HOOK_ACTION" and hook_crossed_at is not None:
@@ -1305,11 +1466,25 @@ class LiveDetectOnlyRuntime:
                                     frame_index=captured,
                                     runtime_state=self.fsm.state.value,
                                 )
+                            if cast_attempt is not None:
+                                self._log_cast_events(
+                                    (CastOpportunityEvent(
+                                        "cast_attempt_started",
+                                        {
+                                            "opportunity_id": cast_attempt.opportunity_id,
+                                            "action_id": cast_attempt.action_id,
+                                            "os_input_emitted": False,
+                                        },
+                                    ),),
+                                    timestamp=elapsed,
+                                    frame_index=captured,
+                                    runtime_state=self.fsm.state.value,
+                                )
                             execution = self.action_sink.apply(
                                 request,
                                 ActionExecutionContext(
                                     action_id=action_id,
-                                    episode_id=str(self.deduplicator.cycle_id),
+                                    episode_id=str(would_fire["episode_id"]),
                                     requested_at=elapsed,
                                     capture_frame_index=captured,
                                     runtime_state=self.fsm.state.value,
@@ -1320,6 +1495,17 @@ class LiveDetectOnlyRuntime:
                                 self._log_collect_events(
                                     self.collect_retry.record_execution(
                                         collect_attempt,
+                                        execution,
+                                        timestamp=execution.completed_at,
+                                    ),
+                                    timestamp=execution.completed_at,
+                                    frame_index=captured,
+                                    runtime_state=self.fsm.state.value,
+                                )
+                            if cast_attempt is not None:
+                                self._log_cast_events(
+                                    self.cast_opportunity.record_execution(
+                                        cast_attempt,
                                         execution,
                                         timestamp=execution.completed_at,
                                     ),
@@ -1409,10 +1595,28 @@ class LiveDetectOnlyRuntime:
             result_name = "interrupted_by_user"
         except LivePreflightError as exc:
             result_name = "preflight_failed"
-            self.logger.event("preflight_failure", {
+            self._preflight_failure_reason = (
+                self._preflight_failure_reason or "preflight_error"
+            )
+            self._preflight_failure_message = str(exc)
+            python_integrity = self._action_preflight_diagnostics.get(
+                "python_process", {}
+            )
+            target_integrity = self._action_preflight_diagnostics.get(
+                "target_process", {}
+            )
+            self.logger.event("preflight_failed", {
                 "timestamp": 0.0,
                 "frame_index": 0,
+                "preflight_passed": False,
+                "preflight_failure_reason": self._preflight_failure_reason,
+                "preflight_failure_message": self._preflight_failure_message,
                 "reason": str(exc),
+                "python_integrity": dict(python_integrity),
+                "target_integrity": dict(target_integrity),
+                "suspected_integrity_mismatch": self._action_preflight_diagnostics.get(
+                    "suspected_integrity_mismatch"
+                ),
             })
         finally:
             elapsed_total = max(0.0, self.clock() - started)
@@ -1479,6 +1683,8 @@ class LiveDetectOnlyRuntime:
                 "rejection_counts_by_reason": {},
                 "panic_triggered": False,
                 "focus_loss_count": 0,
+                "foreground_unavailable_count": 0,
+                "integrity_diagnostics": self._action_preflight_diagnostics,
             }
             if self.action_sink is not None:
                 sink_summary = getattr(self.action_sink, "summary", None)
@@ -1513,9 +1719,32 @@ class LiveDetectOnlyRuntime:
                 "capture_diagnostics": self._capture_diagnostics,
                 "completed_cycles": completed_cycles,
                 "max_completed_cycles": self.live_config.max_completed_cycles,
+                **self.cast_opportunity.summary(),
                 **self.collect_retry.summary(),
                 **action_summary,
                 **evidence_summary,
+                "preflight_passed": self._preflight_passed,
+                "preflight_failure_reason": self._preflight_failure_reason,
+                "preflight_failure_message": self._preflight_failure_message,
+                "python_integrity": dict(
+                    action_summary.get("integrity_diagnostics", {}).get(
+                        "python_process", {}
+                    )
+                ),
+                "target_integrity": dict(
+                    action_summary.get("integrity_diagnostics", {}).get(
+                        "target_process", {}
+                    )
+                ),
+                "suspected_integrity_mismatch": action_summary.get(
+                    "integrity_diagnostics", {}
+                ).get("suspected_integrity_mismatch"),
+                "foreground_unavailable_count": max(
+                    int(action_summary.get("foreground_unavailable_count", 0)),
+                    int(self._capture_diagnostics.get(
+                        "foreground_unavailable_count", 0
+                    )),
+                ),
             }
             self.logger.finalize(summary)
         return summary

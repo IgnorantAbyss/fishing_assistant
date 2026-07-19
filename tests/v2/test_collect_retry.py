@@ -100,7 +100,7 @@ def test_attempt_one_is_scheduled_after_initial_settle() -> None:
     attempt, events = _schedule(controller, 10.4)
     assert attempt is not None
     assert attempt.attempt_number == 1
-    assert attempt.attempt_id == "cycle:1:COLLECT:attempt:1"
+    assert attempt.attempt_id == "get_episode:1:COLLECT:attempt:1"
     assert [event.event_type for event in events] == ["collect_attempt_scheduled"]
 
 
@@ -130,7 +130,7 @@ def test_attempt_ids_are_unique_within_opportunity() -> None:
     _observe(controller, 0.75)
     second, _ = _complete(controller, 0.75)
     assert first.attempt_id != second.attempt_id
-    assert first.opportunity_id == second.opportunity_id == OPPORTUNITY
+    assert first.opportunity_id == second.opportunity_id == "get_episode:1:COLLECT"
 
 
 def test_same_inflight_attempt_is_never_scheduled_twice() -> None:
@@ -148,7 +148,9 @@ def test_stable_disappearance_stops_retry_and_acknowledges_collection() -> None:
     _complete(controller, 0.4)
     assert _observe(controller, 0.5, visible=False) == ()
     events = _observe(controller, 0.6, visible=False)
-    assert [event.event_type for event in events] == ["collect_retry_succeeded"]
+    assert [event.event_type for event in events] == [
+        "collect_retry_succeeded", "get_episode_completed",
+    ]
     assert controller.active is False
     assert controller.summary()["collect_completed_count"] == 1
 
@@ -266,7 +268,67 @@ def test_next_get_episode_restarts_at_attempt_one_without_leakage() -> None:
     _observe(controller, 2.0, opportunity="cycle:2:COLLECT")
     attempt, _ = _schedule(controller, 2.4)
     assert attempt is not None
-    assert attempt.attempt_id == "cycle:2:COLLECT:attempt:1"
+    assert attempt.attempt_id == "get_episode:2:COLLECT:attempt:1"
+
+
+def test_runtime_cycle_change_does_not_rebuild_persistent_get_opportunity() -> None:
+    controller = CollectRetryController()
+    _observe(controller, 0.0, opportunity="cycle:1:COLLECT")
+    first, _ = _complete(controller, 0.4)
+    events = _observe(controller, 0.5, opportunity="cycle:2:COLLECT")
+    assert events == ()
+    _observe(controller, 0.75, opportunity="cycle:3:COLLECT")
+    second, _ = _complete(controller, 0.75)
+    assert first.opportunity_id == second.opportunity_id == "get_episode:1:COLLECT"
+    assert second.attempt_number == 2
+    assert controller.summary()["physical_get_episode_count"] == 1
+    assert controller.summary()["collect_opportunity_count"] == 1
+
+
+def test_terminal_get_episode_stays_terminal_across_recovery_cycles() -> None:
+    controller = CollectRetryController(CollectRetryConfig(max_attempts=1))
+    _observe(controller, 0.0, opportunity="cycle:1:COLLECT")
+    _complete(controller, 0.4)
+    _observe(controller, 0.75, opportunity="cycle:2:COLLECT")
+    assert controller.active is False
+    for cycle in range(3, 7):
+        events = _observe(
+            controller, float(cycle), opportunity=f"cycle:{cycle}:COLLECT"
+        )
+        assert all(event.event_type != "get_episode_started" for event in events)
+        assert _schedule(controller, float(cycle))[0] is None
+    summary = controller.summary()
+    assert summary["physical_get_episode_count"] == 1
+    assert summary["collect_attempt_counts_by_get_episode"] == {
+        "get_episode:1": 1
+    }
+    assert summary["collect_terminal_episode_count"] == 1
+
+
+def test_same_physical_get_panel_never_exceeds_twelve_inputs_across_cycles() -> None:
+    controller = CollectRetryController()
+    _observe(controller, 0.0, opportunity="cycle:1:COLLECT")
+    attempts = []
+    for number in range(1, 13):
+        timestamp = 0.401 + (number - 1) * 0.351
+        _observe(
+            controller, timestamp,
+            opportunity=f"cycle:{number}:COLLECT",
+        )
+        attempt, _ = _complete(controller, timestamp)
+        attempts.append(attempt)
+    events = _observe(controller, 4.7, opportunity="cycle:99:COLLECT")
+    assert [item.event_type for item in events] == ["collect_retry_exhausted"]
+    assert [item.attempt_number for item in attempts] == list(range(1, 13))
+    assert {item.opportunity_id for item in attempts} == {
+        "get_episode:1:COLLECT"
+    }
+    for timestamp in (5.0, 10.0, 30.0):
+        _observe(controller, timestamp, opportunity="cycle:100:COLLECT")
+        assert _schedule(controller, timestamp)[0] is None
+    assert controller.summary()["collect_attempt_counts_by_get_episode"] == {
+        "get_episode:1": 12
+    }
 
 
 def test_non_collect_intents_keep_original_one_shot_deduplication() -> None:

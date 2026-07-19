@@ -72,7 +72,7 @@ class LiveSessionLogger:
         if self._event_listener is not None:
             self._event_listener(event_type, payload)
         if event_type in {
-            "preflight_failure", "capture_failure", "capture_backend_fallback",
+            "preflight_failure", "preflight_failed", "capture_failure", "capture_backend_fallback",
             "capture_backend_warning", "SYNC_REQUIRED", "detector_conflict",
         }:
             self._warnings.append(str(payload.get("reason", event_type)))
@@ -156,6 +156,7 @@ class LiveSessionLogger:
             "# Live Detect-Only Session",
             "",
             f"- Result: **{complete.get('result', 'unknown')}**",
+            f"- Preflight passed / reason: **{complete.get('preflight_passed', False)} / {complete.get('preflight_failure_reason')}**",
             f"- Bundle: `{self.bundle_version}`",
             f"- Frames captured / processed: **{complete.get('captured_frames', 0)} / {complete.get('processed_frames', 0)}**",
             f"- Capture FPS: **{complete.get('capture_fps', 0.0):.2f}**",
@@ -174,6 +175,10 @@ class LiveSessionLogger:
             f"- COLLECT visual acknowledged: **{complete.get('collect_visual_acknowledged', False)}**",
             f"- COLLECT completed / visual timeout: **{complete.get('collect_completed_count', 0)} / {complete.get('collect_visual_timeout_count', 0)}**",
             f"- COLLECT attempts / retries: `{complete.get('collect_attempt_counts', {})}` / `{complete.get('collect_retry_counts', {})}`",
+            f"- Physical GET episodes / COLLECT opportunities / terminal episodes: **{complete.get('physical_get_episode_count', 0)} / {complete.get('collect_opportunity_count', 0)} / {complete.get('collect_terminal_episode_count', 0)}**",
+            f"- COLLECT attempts by physical GET episode: `{complete.get('collect_attempt_counts_by_get_episode', {})}`",
+            f"- CAST opportunities / attempts: **{complete.get('cast_opportunity_count', 0)} / {complete.get('cast_attempt_count', 0)}**",
+            f"- CAST visual acknowledged / timeout: **{complete.get('cast_visual_acknowledged_count', 0)} / {complete.get('cast_timeout_count', 0)}**",
             f"- Action rejections by reason: `{complete.get('rejection_counts_by_reason', {})}`",
             f"- Panic / focus loss: **{complete.get('panic_triggered', False)} / {complete.get('focus_loss_count', 0)}**",
             f"- Capture backend: **{complete.get('capture_backend', 'unknown')}**",

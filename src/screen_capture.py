@@ -262,6 +262,18 @@ def find_window_region(window_title: str) -> CaptureRegion:
     return resolve_exact_window(window_title).client_region
 
 
+def query_foreground_window(
+    target_hwnd: int,
+    get_foreground_window: Callable[[], Any],
+) -> tuple[bool, bool, int | None]:
+    """Return (matches target, unavailable, HWND) without coercing NULL."""
+    foreground_hwnd = get_foreground_window()
+    if not foreground_hwnd:
+        return False, True, None
+    value = int(foreground_hwnd)
+    return value == int(target_hwnd), False, value
+
+
 class MSSCaptureSession:
     """Persistent desktop-region capture; this is not HWND surface capture."""
 
@@ -287,6 +299,8 @@ class MSSCaptureSession:
         self.window_info: WindowInfo | None = None
         self._capture: Any | None = None
         self._diagnostics: dict[str, Any] = {"backend": self.backend_name}
+        self._foreground_unavailable_count = 0
+        self._foreground_unavailable_active = False
 
     def open(self) -> CaptureRegion:
         if self._capture is not None:
@@ -380,12 +394,27 @@ class MSSCaptureSession:
             return None
         if os.name != "nt":
             return None
+
         import ctypes
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetForegroundWindow.argtypes = ()
         user32.GetForegroundWindow.restype = wintypes.HWND
-        return int(user32.GetForegroundWindow()) == self.region.window_handle
+
+        matches, unavailable, foreground_hwnd = query_foreground_window(
+            self.region.window_handle, user32.GetForegroundWindow
+        )
+        if unavailable and not self._foreground_unavailable_active:
+            self._foreground_unavailable_count += 1
+        self._foreground_unavailable_active = unavailable
+        self._diagnostics.update({
+            "foreground": matches,
+            "foreground_hwnd": foreground_hwnd,
+            "foreground_window_unavailable": unavailable,
+            "foreground_unavailable_count": self._foreground_unavailable_count,
+        })
+        return matches
 
     def close(self) -> None:
         if self._capture is not None:

@@ -16,11 +16,33 @@ from src.fishing_v2.live.capture_backends import (
     WindowsGraphicsCaptureUnavailable,
     create_live_capture_session,
 )
-from src.screen_capture import CaptureRegion, WindowInfo, resolve_exact_window
+from src.screen_capture import (
+    CaptureRegion,
+    WindowInfo,
+    query_foreground_window,
+    resolve_exact_window,
+)
 from tools.run_live_detect_only import parse_args
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    ("foreground_hwnd", "matches", "unavailable", "normalized"),
+    [
+        (None, False, True, None),
+        (0, False, True, None),
+        (4242, True, False, 4242),
+        (9999, False, False, 9999),
+    ],
+)
+def test_foreground_window_query_handles_null_without_int_conversion(
+    foreground_hwnd, matches, unavailable, normalized
+) -> None:
+    assert query_foreground_window(4242, lambda: foreground_hwnd) == (
+        matches, unavailable, normalized,
+    )
 
 
 def _window_info(

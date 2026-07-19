@@ -18,6 +18,7 @@ from src.fishing_v2.domain.observations import (
     PressObservation,
     PromptObservation,
     PromptObservationKind,
+    ResultBannerObservation,
 )
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
@@ -29,6 +30,7 @@ from src.fishing_v2.live.live_detect_only import (
     validate_emit_actions,
 )
 from src.fishing_v2.live.session_logger import LiveSessionLogger, create_live_session_directory
+from src.fishing_v2.live.windows_action_sink import ActionIntegrityPreflightError
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle
 from src.fishing_v2.perception.prototype_prompt_observer import (
@@ -198,6 +200,12 @@ def test_emit_actions_true_requires_explicit_sink_before_capture_initialization(
     assert "REFUSED" in result.stderr
 
 
+@pytest.mark.parametrize("intent", ["START_HOOK", "HOOK_ACTION", "PRESS_SEQUENCE"])
+def test_live_action_mode_refuses_non_cast_collect_intents(intent: str) -> None:
+    with pytest.raises(LivePreflightError, match="limited to CAST,COLLECT"):
+        validate_emit_actions(True, "sendinput", f"CAST,COLLECT,{intent}")
+
+
 def test_wrong_resolution_fails_preflight_and_closes_capture(tmp_path: Path) -> None:
     capture = MockCapture(np.zeros((720, 1280, 3), dtype=np.uint8))
     summary = _runtime(tmp_path, capture, FakeClock()).run(max_frames=1)
@@ -309,6 +317,61 @@ def test_explicit_sendinput_mode_initializes_only_after_valid_target_preflight(
     assert summary["actions_applied"] == 0
 
 
+def test_integrity_mismatch_fails_live_preflight_before_capture_loop_or_input(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    factory_calls = []
+    diagnostics = {
+        "python_process": {
+            "process_id": 1, "integrity_level": "medium",
+            "integrity_rid": 8192, "elevated": False,
+        },
+        "target_process": {
+            "process_id": 99, "integrity_level": "high",
+            "integrity_rid": 12288, "elevated": True,
+        },
+        "suspected_integrity_mismatch": True,
+    }
+
+    def factory(**kwargs):
+        factory_calls.append(kwargs)
+        raise ActionIntegrityPreflightError(
+            "integrity_mismatch",
+            "Python process integrity is lower than target process integrity. "
+            "Start the runtime manually from an elevated PowerShell.",
+            diagnostics,
+        )
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path, capture, FakeClock(), emit_actions=True,
+        action_sink_name="sendinput", action_allowlist="CAST,COLLECT",
+        action_sink_factory=factory,
+    )
+    summary = runtime.run(max_frames=10)
+    assert len(factory_calls) == 1
+    assert capture.calls == 1
+    assert summary["result"] == "preflight_failed"
+    assert summary["preflight_passed"] is False
+    assert summary["preflight_failure_reason"] == "integrity_mismatch"
+    assert "elevated PowerShell" in summary["preflight_failure_message"]
+    assert summary["python_integrity"]["integrity_level"] == "medium"
+    assert summary["target_integrity"]["integrity_level"] == "high"
+    assert summary["suspected_integrity_mismatch"] is True
+    assert summary["actions_applied"] == 0
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(item["event_type"] == "preflight_failed" for item in events)
+
+
 def test_collect_only_live_path_applies_one_stable_action_after_qualified_get(
     tmp_path: Path, supported_frame: np.ndarray
 ) -> None:
@@ -372,13 +435,16 @@ def test_collect_only_live_path_applies_one_stable_action_after_qualified_get(
     assert len(created[0].calls) == 1
     request, context = created[0].calls[0]
     assert request.intent == ActionIntent.COLLECT
-    assert context.action_id == "cycle:1:COLLECT:attempt:1"
+    assert context.action_id == "get_episode:1:COLLECT:attempt:1"
     assert request.payload["elapsed_seconds"] >= 0.4
     assert summary["unique_would_fire"] == {"WOULD_COLLECT": 1}
     assert summary["actions_applied"] == 1
     assert summary["applied_action_counts"] == {"COLLECT": 1}
-    assert summary["collect_attempt_counts"] == {"cycle:1:COLLECT": 1}
-    assert summary["collect_retry_counts"] == {"cycle:1:COLLECT": 0}
+    assert summary["collect_attempt_counts"] == {"get_episode:1:COLLECT": 1}
+    assert summary["collect_retry_counts"] == {"get_episode:1:COLLECT": 0}
+    assert summary["collect_attempt_counts_by_get_episode"] == {
+        "get_episode:1": 1
+    }
     assert summary["collect_completed_count"] == 0
     events = [
         json.loads(line)
@@ -390,6 +456,97 @@ def test_collect_only_live_path_applies_one_stable_action_after_qualified_get(
     assert "collect_attempt_started" in event_names
     assert "collect_attempt_emitted" in event_names
     assert "collect_attempt_waiting_ack" in event_names
+
+
+def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class CastThenWaitingObserver:
+        def observe(self, _frame, context):
+            kind = (
+                PromptObservationKind.IDLE_CAST
+                if context.frame_index < 5
+                else PromptObservationKind.WAITING_IN_PROGRESS
+            )
+            return PromptObservation(
+                kind, 0.99, {kind.value: 0.99}, "test",
+                context.frame_index, context.timestamp,
+            )
+
+    class AbsentResultBanner:
+        def observe(self, _frame, context):
+            return ResultBannerObservation(
+                False, 0.99, context.frame_index, context.timestamp,
+                evidence={"reason": "absent"},
+            )
+
+    class CompleteFakeSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id, request.intent.value, context.requested_at,
+                context.requested_at, context.requested_at, True, True,
+                2, 2, context.target_hwnd, context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["CAST", "COLLECT"],
+                "attempted_action_counts": {"CAST": len(self.calls)},
+                "applied_action_counts": {"CAST": len(self.calls)},
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteFakeSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path, capture, FakeClock(), duration_seconds=2.0,
+        emit_actions=True, action_sink_name="sendinput",
+        action_allowlist="cast, collect", action_sink_factory=factory,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle, observer=CastThenWaitingObserver()
+    )
+    runtime.result_banner_observer = AbsentResultBanner()
+    runtime.fsm.force_state(RuntimeState.IDLE, 0.0, "test_idle")
+    summary = runtime.run(max_frames=20)
+
+    assert len(created) == 1
+    assert len(created[0].calls) == 1
+    request, context = created[0].calls[0]
+    assert request.intent == ActionIntent.CAST
+    assert context.action_id == "cast_opportunity:1:CAST"
+    assert summary["cast_opportunity_count"] == 1
+    assert summary["cast_attempt_count"] == 1
+    assert summary["cast_visual_acknowledged_count"] == 1
+    assert summary["cast_timeout_count"] == 0
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    event_names = [item["event_type"] for item in events]
+    assert event_names.count("cast_opportunity_started") == 1
+    assert event_names.count("cast_attempt_emitted") == 1
+    assert event_names.count("cast_visual_acknowledged") == 1
 
 
 def test_diagnostic_mode_records_video_and_roi_without_would_fire(
