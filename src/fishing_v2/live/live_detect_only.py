@@ -29,6 +29,12 @@ from src.fishing_v2.legacy_adapters.get_detector_adapter import LegacyGetDetecto
 from src.fishing_v2.legacy_adapters.hook_detector_adapter import LegacyHookDetectorAdapter
 from src.fishing_v2.legacy_adapters.press_detector_adapter import LegacyPressDetectorAdapter
 from src.fishing_v2.live.session_logger import LiveSessionLogger
+from src.fishing_v2.live.collect_retry import (
+    CollectAttempt,
+    CollectRetryConfig,
+    CollectRetryController,
+    CollectRetryEvent,
+)
 from src.fishing_v2.live.diagnostic_evidence import (
     EVIDENCE_MODES,
     DiagnosticEvidenceConfig,
@@ -112,11 +118,11 @@ class WouldFireDeduplicator:
         self.cycle_id = 1
         self.raw_proposals: Counter[str] = Counter()
         self.unique_events: Counter[str] = Counter()
-        self._seen: set[tuple[int, ActionIntent]] = set()
+        self._seen: set[tuple[int, ActionIntent, str | None]] = set()
 
     @property
     def has_cycle_activity(self) -> bool:
-        return any(cycle == self.cycle_id for cycle, _ in self._seen)
+        return any(cycle == self.cycle_id for cycle, _, _ in self._seen)
 
     def finish_cycle(self) -> None:
         if self.has_cycle_activity:
@@ -138,20 +144,26 @@ class WouldFireDeduplicator:
         runtime_state: str,
         prompt_evidence: Mapping[str, Any] | None,
         specialized_evidence: Mapping[str, Any],
+        identity_suffix: str | None = None,
+        count_raw: bool = True,
     ) -> dict[str, Any] | None:
         if request.intent == ActionIntent.NONE:
             return None
-        self.raw_proposals[request.intent.value] += 1
+        if count_raw:
+            self.record_raw_proposal(request)
         # This reason means every production safety check passed and only the
         # immutable detect-only emission switch prevented execution.
         if safety_reason != "action_emission_disabled":
             return None
-        key = (self.cycle_id, request.intent)
+        key = (self.cycle_id, request.intent, identity_suffix)
         if key in self._seen:
             return None
         self._seen.add(key)
         event_type = WOULD_FIRE_NAMES[request.intent]
         self.unique_events[event_type] += 1
+        deduplication_key = f"cycle:{self.cycle_id}:{request.intent.value}"
+        if identity_suffix:
+            deduplication_key = f"{deduplication_key}:{identity_suffix}"
         return {
             "event_type": event_type,
             "timestamp": timestamp,
@@ -165,8 +177,12 @@ class WouldFireDeduplicator:
             "safety_decision": "WAIT",
             "safety_reason": safety_reason,
             "action_applied": False,
-            "deduplication_key": f"cycle:{self.cycle_id}:{request.intent.value}",
+            "deduplication_key": deduplication_key,
         }
+
+    def record_raw_proposal(self, request: ActionRequest) -> None:
+        if request.intent != ActionIntent.NONE:
+            self.raw_proposals[request.intent.value] += 1
 
 
 class DiagnosticOverlay:
@@ -305,6 +321,9 @@ class LiveDetectOnlyRuntime:
         self.overlay = DiagnosticOverlay(live_config.show_overlay)
         self.deduplicator = WouldFireDeduplicator()
         self._raw_config = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        self.collect_retry = CollectRetryController(
+            CollectRetryConfig.from_mapping(self._raw_config.get("collect"))
+        )
         banner_config = ResultBannerConfig.from_mapping(
             self._raw_config["result"]["banner_observer"]
         )
@@ -344,6 +363,38 @@ class LiveDetectOnlyRuntime:
         elif self.evidence_recorder is not None:
             raise ValueError("evidence_recorder requires evidence_mode='diagnostic'")
         self._diagnostic_roi_bounds: dict[str, tuple[int, int, int, int]] = {}
+
+    def _log_collect_events(
+        self,
+        events: tuple[CollectRetryEvent, ...],
+        *,
+        timestamp: float,
+        frame_index: int,
+        runtime_state: str,
+    ) -> None:
+        integrity_diagnostics: Mapping[str, Any] = {}
+        if self.action_sink is not None:
+            sink_summary = getattr(self.action_sink, "summary", None)
+            if callable(sink_summary):
+                integrity_diagnostics = dict(
+                    sink_summary().get("integrity_diagnostics", {})
+                )
+        for event in events:
+            self.logger.event(event.event_type, {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "runtime_state": runtime_state,
+                "target_hwnd": self._capture_diagnostics.get("hwnd"),
+                "foreground_hwnd": None,
+                "os_input_emitted": False,
+                "integrity_diagnostics": integrity_diagnostics,
+                "visual_acknowledgement_state": (
+                    "acknowledged"
+                    if event.payload.get("collect_visual_acknowledged")
+                    else "pending"
+                ),
+                **dict(event.payload),
+            })
 
     def _initialize_action_sink(self, *, session_started_at: float) -> None:
         if not self.emit_actions or self.action_sink_name == ACTION_SINK_NONE:
@@ -815,6 +866,43 @@ class LiveDetectOnlyRuntime:
                             "Recorded-observation controller invariant violated: action_applied=true"
                         )
                     processed += 1
+                    collect_retry_enabled = bool(
+                        self.action_sink is not None
+                        and ActionIntent.COLLECT in self.action_allowlist
+                    )
+                    qualified_get = last_result.qualified.bundle.get
+                    if collect_retry_enabled:
+                        get_confirmation_frames = int(
+                            qualified_get.evidence.get("get_confirmation_frames", 0)
+                            if qualified_get is not None else 0
+                        )
+                        collect_observation_events = self.collect_retry.observe_panel(
+                            opportunity_id=(
+                                f"cycle:{self.deduplicator.cycle_id}:COLLECT"
+                            ),
+                            timestamp=elapsed,
+                            panel_observed=qualified_get is not None,
+                            panel_visible=bool(qualified_get and qualified_get.detected),
+                            get_confidence=(
+                                qualified_get.confidence if qualified_get is not None else 0.0
+                            ),
+                            get_confirmation_frames=get_confirmation_frames,
+                        )
+                        self._log_collect_events(
+                            collect_observation_events,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            runtime_state=self.fsm.state.value,
+                        )
+                        if any(
+                            item.event_type == "collect_retry_exhausted"
+                            for item in collect_observation_events
+                        ) and self.fsm.state != RuntimeState.SYNC_REQUIRED:
+                            transition_results.append(self.fsm.force_state(
+                                RuntimeState.SYNC_REQUIRED,
+                                elapsed,
+                                "collect_visual_ack_timeout",
+                            ))
                     if last_result.fsm.changed:
                         transition_results.append(last_result.fsm)
                         if (
@@ -861,6 +949,15 @@ class LiveDetectOnlyRuntime:
                         and not processing_from_sync_required
                     )
                     if entered_sync_required:
+                        if self.collect_retry.active:
+                            self._log_collect_events(
+                                (self.collect_retry.cancel(
+                                    elapsed, "runtime_entered_sync_required"
+                                ),),
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                runtime_state=self.fsm.state.value,
+                            )
                         self.controller.reset_for_sync_recovery(elapsed)
                         self.recovery_synchronizer.reset(started_at=elapsed)
                         self.deduplicator.reset_for_sync_recovery()
@@ -1013,7 +1110,6 @@ class LiveDetectOnlyRuntime:
                             "sequence": list(qualified_press.sequence_candidate),
                         })
 
-                    qualified_get = last_result.qualified.bundle.get
                     get_now = bool(qualified_get and qualified_get.detected)
                     if get_now != get_visible:
                         event_type = "get_appearance" if get_now else "get_disappearance"
@@ -1120,15 +1216,71 @@ class LiveDetectOnlyRuntime:
                     sync_required_active = self.fsm.state == RuntimeState.SYNC_REQUIRED
 
                     specialized = self._specialized_payload(last_result)
-                    would_fire = self.deduplicator.observe(
-                        last_result.fsm.action_request,
-                        safety_reason=last_result.safety.reason,
-                        frame_index=captured,
-                        timestamp=elapsed,
-                        runtime_state=self.fsm.state.value,
-                        prompt_evidence=prompt.evidence if prompt else None,
-                        specialized_evidence=specialized,
-                    )
+                    request = last_result.fsm.action_request
+                    collect_attempt: CollectAttempt | None = None
+                    if collect_retry_enabled and request.intent == ActionIntent.COLLECT:
+                        self.deduplicator.record_raw_proposal(request)
+                        if last_result.safety.reason == "action_emission_disabled":
+                            collect_attempt, collect_schedule_events = (
+                                self.collect_retry.schedule_attempt(
+                                    timestamp=elapsed,
+                                    get_confidence=(
+                                        qualified_get.confidence
+                                        if qualified_get is not None else 0.0
+                                    ),
+                                    get_confirmation_frames=int(
+                                        qualified_get.evidence.get(
+                                            "get_confirmation_frames", 0
+                                        ) if qualified_get is not None else 0
+                                    ),
+                                )
+                            )
+                            self._log_collect_events(
+                                collect_schedule_events,
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                runtime_state=self.fsm.state.value,
+                            )
+                        elif last_result.safety.reason in {
+                            "foreground_window_not_confirmed",
+                            "unsupported_runtime_resolution",
+                            "sync_required_blocks_actions",
+                        } and self.collect_retry.active:
+                            self._log_collect_events(
+                                (self.collect_retry.cancel(
+                                    elapsed, last_result.safety.reason
+                                ),),
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                runtime_state=self.fsm.state.value,
+                            )
+                        would_fire = (
+                            self.deduplicator.observe(
+                                request,
+                                safety_reason=last_result.safety.reason,
+                                frame_index=captured,
+                                timestamp=elapsed,
+                                runtime_state=self.fsm.state.value,
+                                prompt_evidence=prompt.evidence if prompt else None,
+                                specialized_evidence=specialized,
+                                identity_suffix=(
+                                    f"attempt:{collect_attempt.attempt_number}"
+                                    if collect_attempt is not None else None
+                                ),
+                                count_raw=False,
+                            )
+                            if collect_attempt is not None else None
+                        )
+                    else:
+                        would_fire = self.deduplicator.observe(
+                            request,
+                            safety_reason=last_result.safety.reason,
+                            frame_index=captured,
+                            timestamp=elapsed,
+                            runtime_state=self.fsm.state.value,
+                            prompt_evidence=prompt.evidence if prompt else None,
+                            specialized_evidence=specialized,
+                        )
                     if would_fire:
                         event_type = would_fire.pop("event_type")
                         action_id = str(would_fire["deduplication_key"])
@@ -1143,8 +1295,18 @@ class LiveDetectOnlyRuntime:
                         self.logger.event(event_type, would_fire)
                         self.logger.update_cycle(self.deduplicator.cycle_id, event_type, would_fire)
                         if self.action_sink is not None:
+                            if collect_attempt is not None:
+                                self._log_collect_events(
+                                    (CollectRetryEvent(
+                                        "collect_attempt_started",
+                                        self.collect_retry.attempt_payload(collect_attempt),
+                                    ),),
+                                    timestamp=elapsed,
+                                    frame_index=captured,
+                                    runtime_state=self.fsm.state.value,
+                                )
                             execution = self.action_sink.apply(
-                                last_result.fsm.action_request,
+                                request,
                                 ActionExecutionContext(
                                     action_id=action_id,
                                     episode_id=str(self.deduplicator.cycle_id),
@@ -1154,13 +1316,35 @@ class LiveDetectOnlyRuntime:
                                     target_hwnd=self._capture_diagnostics.get("hwnd"),
                                 ),
                             )
+                            if collect_attempt is not None:
+                                self._log_collect_events(
+                                    self.collect_retry.record_execution(
+                                        collect_attempt,
+                                        execution,
+                                        timestamp=execution.completed_at,
+                                    ),
+                                    timestamp=execution.completed_at,
+                                    frame_index=captured,
+                                    runtime_state=self.fsm.state.value,
+                                )
                             if execution.applied:
                                 actions_applied += 1
                                 commit = self.controller.commit_external_action(
-                                    last_result.fsm.action_request,
+                                    request,
                                     elapsed,
                                 )
                                 if not commit.action_applied:
+                                    if collect_attempt is not None and self.collect_retry.active:
+                                        self._log_collect_events(
+                                            (self.collect_retry.cancel(
+                                                elapsed,
+                                                "runtime_commit_failed_after_complete_input",
+                                                attempt=collect_attempt,
+                                            ),),
+                                            timestamp=elapsed,
+                                            frame_index=captured,
+                                            runtime_state=self.fsm.state.value,
+                                        )
                                     self.logger.event("action_failed", {
                                         "timestamp": elapsed,
                                         "frame_index": captured,
@@ -1329,6 +1513,7 @@ class LiveDetectOnlyRuntime:
                 "capture_diagnostics": self._capture_diagnostics,
                 "completed_cycles": completed_cycles,
                 "max_completed_cycles": self.live_config.max_completed_cycles,
+                **self.collect_retry.summary(),
                 **action_summary,
                 **evidence_summary,
             }

@@ -77,7 +77,11 @@ class DetectorActivationPolicy:
             press = DetectorActivationMode.ACTIVE
 
         get = DetectorActivationMode.OFF
-        if state in {RuntimeState.SYNCING, RuntimeState.SYNC_REQUIRED}:
+        if state in {
+            RuntimeState.SYNCING,
+            RuntimeState.SYNC_REQUIRED,
+            RuntimeState.COLLECT_PENDING,
+        }:
             get = DetectorActivationMode.ARMED
         if state == RuntimeState.RESULT_PENDING:
             get = DetectorActivationMode.BURST

@@ -127,6 +127,13 @@ get_detector:
   max_attempts: 12
   max_duration_seconds: 5.0
 
+collect:
+  initial_settle_ms: 400
+  retry_interval_ms: 350
+  max_attempts: 12
+  max_duration_seconds: 5.0
+  disappearance_confirmation_frames: 2
+
 result:
   minimum_result_pending_sec: 1.5
   maximum_result_pending_sec: 10.0

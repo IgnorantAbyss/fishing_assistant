@@ -332,6 +332,7 @@ def test_collect_only_live_path_applies_one_stable_action_after_qualified_get(
                 context.action_id, request.intent.value, context.requested_at,
                 context.requested_at, context.requested_at, True, True,
                 2, 2, context.target_hwnd, context.target_hwnd,
+                os_input_emitted=True,
             )
 
         def summary(self):
@@ -371,10 +372,24 @@ def test_collect_only_live_path_applies_one_stable_action_after_qualified_get(
     assert len(created[0].calls) == 1
     request, context = created[0].calls[0]
     assert request.intent == ActionIntent.COLLECT
-    assert context.action_id == "cycle:1:COLLECT"
+    assert context.action_id == "cycle:1:COLLECT:attempt:1"
+    assert request.payload["elapsed_seconds"] >= 0.4
     assert summary["unique_would_fire"] == {"WOULD_COLLECT": 1}
     assert summary["actions_applied"] == 1
     assert summary["applied_action_counts"] == {"COLLECT": 1}
+    assert summary["collect_attempt_counts"] == {"cycle:1:COLLECT": 1}
+    assert summary["collect_retry_counts"] == {"cycle:1:COLLECT": 0}
+    assert summary["collect_completed_count"] == 0
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    event_names = [item["event_type"] for item in events]
+    assert "collect_retry_started" in event_names
+    assert "collect_attempt_scheduled" in event_names
+    assert "collect_attempt_started" in event_names
+    assert "collect_attempt_emitted" in event_names
+    assert "collect_attempt_waiting_ack" in event_names
 
 
 def test_diagnostic_mode_records_video_and_roi_without_would_fire(
