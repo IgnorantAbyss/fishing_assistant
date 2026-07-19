@@ -157,6 +157,7 @@ safety:
   cooldown_sec: 0.25
 
 action:
+  input_mode: vk
   key_hold_ms: 40
   sequence_interval_ms: 60
   minimum_action_interval_ms: 150

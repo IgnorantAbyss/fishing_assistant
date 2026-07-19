@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 from dataclasses import replace
+import inspect
 from pathlib import Path
 
 import pytest
@@ -9,11 +11,20 @@ from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
 from src.fishing_v2.live.windows_action_sink import (
     EXPECTED_CLIENT_SIZE,
     EXPECTED_GAME_PROCESS,
+    CtypesWindowsInputApi,
+    ULONG_PTR,
+    SendInputCallResult,
     VIRTUAL_KEYS,
     WindowSafetySnapshot,
     WindowsActionConfig,
     WindowsSendInputActionSink,
+    _HARDWAREINPUT,
+    _INPUT,
+    _INPUTUNION,
+    _KEYBDINPUT,
+    _MOUSEINPUT,
     parse_action_allowlist,
+    process_architecture,
 )
 from src.fishing_v2.ports.action_sink import ActionExecutionContext
 from tools.run_live_detect_only import parse_args
@@ -33,11 +44,12 @@ class FakeClock:
 class FakeWindowsApi:
     def __init__(self) -> None:
         self.snapshot = WindowSafetySnapshot(
-            4242, True, True, False, "黑色沙漠 - 525411", 99,
+            4242, True, True, False, "test-window", 99,
             EXPECTED_GAME_PROCESS, EXPECTED_CLIENT_SIZE, 4242,
         )
         self.send_results: list[int] = []
         self.send_calls: list[tuple[int, bool]] = []
+        self.input_modes: list[str] = []
         self.panic_values: list[bool] = []
         self.inspect_calls = 0
 
@@ -45,12 +57,40 @@ class FakeWindowsApi:
         self.inspect_calls += 1
         return self.snapshot
 
-    def send_key_event(self, virtual_key: int, *, key_up: bool) -> int:
+    def send_key_event(
+        self, virtual_key: int, *, key_up: bool, input_mode: str
+    ) -> SendInputCallResult:
         self.send_calls.append((virtual_key, key_up))
-        return self.send_results.pop(0) if self.send_results else 1
+        self.input_modes.append(input_mode)
+        returned = self.send_results.pop(0) if self.send_results else 1
+        scan_codes = {
+            VIRTUAL_KEYS["R"]: 0x13, VIRTUAL_KEYS["SPACE"]: 0x39,
+            VIRTUAL_KEYS["W"]: 0x11, VIRTUAL_KEYS["A"]: 0x1E,
+            VIRTUAL_KEYS["S"]: 0x1F, VIRTUAL_KEYS["D"]: 0x20,
+        }
+        flags = (0x0008 if input_mode == "scancode" else 0) | (0x0002 if key_up else 0)
+        return SendInputCallResult(
+            returned, 87 if returned == 0 else 0,
+            "The parameter is incorrect." if returned == 0 else "The operation completed successfully.",
+            1, ctypes.sizeof(_INPUT), ctypes.sizeof(_INPUT),
+            process_architecture(), input_mode,
+            virtual_key, scan_codes.get(virtual_key, 0), flags,
+        )
 
     def panic_pressed(self, _virtual_key: int) -> bool:
         return self.panic_values.pop(0) if self.panic_values else False
+
+    def process_integrity_diagnostics(self, target_process_id: int):
+        return {
+            "python_process": {
+                "process_id": 1, "integrity_level": "medium", "elevated": False,
+            },
+            "target_process": {
+                "process_id": target_process_id,
+                "integrity_level": "medium", "elevated": False,
+            },
+            "suspected_integrity_mismatch": False,
+        }
 
 
 def _context(action_id: str = "cycle:1:COLLECT", *, intent: str = "GET") -> ActionExecutionContext:
@@ -69,7 +109,7 @@ def _sink(
     event_rows = events if events is not None else []
     return WindowsSendInputActionSink(
         target_hwnd=4242,
-        expected_title="黑色沙漠 - 525411",
+        expected_title="test-window",
         expected_process_id=99,
         allowlist=parse_action_allowlist(allowlist),
         config=config or WindowsActionConfig(),
@@ -107,6 +147,119 @@ def test_allowlist_parser_is_comma_separated_and_strict() -> None:
         parse_action_allowlist("COLLECT,CLICK")
 
 
+def test_user32_is_loaded_with_last_error_enabled() -> None:
+    source = inspect.getsource(CtypesWindowsInputApi.__init__)
+    assert 'ctypes.WinDLL("user32", use_last_error=True)' in source
+
+
+def test_windows_input_struct_layout_matches_pointer_architecture() -> None:
+    pointer_size = ctypes.sizeof(ctypes.c_void_p)
+    assert ctypes.sizeof(ULONG_PTR) == pointer_size
+    assert ctypes.sizeof(_HARDWAREINPUT) == 8
+    if pointer_size == 8:
+        assert ctypes.sizeof(_KEYBDINPUT) == 24
+        assert ctypes.sizeof(_MOUSEINPUT) == 32
+        assert ctypes.sizeof(_INPUTUNION) == 32
+        assert ctypes.sizeof(_INPUT) == 40
+    elif pointer_size == 4:
+        assert ctypes.sizeof(_KEYBDINPUT) == 16
+        assert ctypes.sizeof(_MOUSEINPUT) == 24
+        assert ctypes.sizeof(_INPUTUNION) == 24
+        assert ctypes.sizeof(_INPUT) == 28
+    else:  # pragma: no cover - unsupported Windows architecture
+        pytest.fail(f"Unsupported pointer size: {pointer_size}")
+
+
+class CapturingUser32:
+    def __init__(self, *, return_count: int, last_error: int = 0) -> None:
+        self.return_count = return_count
+        self.last_error = last_error
+        self.calls = []
+
+    @staticmethod
+    def MapVirtualKeyW(virtual_key: int, _mode: int) -> int:
+        return 0x13 if virtual_key == 0x52 else 0
+
+    def SendInput(self, input_count, pointer, cb_size):
+        event = pointer.contents
+        self.calls.append({
+            "input_count": input_count,
+            "cb_size": cb_size,
+            "type": event.type,
+            "wVk": event.ki.wVk,
+            "wScan": event.ki.wScan,
+            "flags": event.ki.dwFlags,
+            "extra": event.ki.dwExtraInfo,
+        })
+        ctypes.set_last_error(self.last_error)
+        return self.return_count
+
+
+def _ctypes_api_with(user32: CapturingUser32) -> CtypesWindowsInputApi:
+    api = CtypesWindowsInputApi.__new__(CtypesWindowsInputApi)
+    api.user32 = user32
+    return api
+
+
+def test_sendinput_zero_captures_last_error_and_correct_cb_size() -> None:
+    user32 = CapturingUser32(return_count=0, last_error=87)
+    result = _ctypes_api_with(user32).send_key_event(
+        VIRTUAL_KEYS["R"], key_up=False, input_mode="vk"
+    )
+    assert result.return_count == 0
+    assert result.windows_error_code == 87
+    assert result.windows_error_message
+    assert result.input_count == 1
+    assert result.cb_size == result.input_struct_size == ctypes.sizeof(_INPUT)
+    assert user32.calls[0]["cb_size"] == ctypes.sizeof(_INPUT)
+
+
+def test_virtual_key_r_mapping_uses_vk_and_keyup_flags() -> None:
+    down_user32 = CapturingUser32(return_count=1)
+    down = _ctypes_api_with(down_user32).send_key_event(
+        VIRTUAL_KEYS["R"], key_up=False, input_mode="vk"
+    )
+    up_user32 = CapturingUser32(return_count=1)
+    up = _ctypes_api_with(up_user32).send_key_event(
+        VIRTUAL_KEYS["R"], key_up=True, input_mode="vk"
+    )
+    assert down.virtual_key == up.virtual_key == 0x52
+    assert down.scan_code == up.scan_code == 0x13
+    assert down.flags == 0
+    assert up.flags == CtypesWindowsInputApi.KEYEVENTF_KEYUP
+    assert down_user32.calls[0]["wVk"] == 0x52
+    assert down_user32.calls[0]["wScan"] == 0
+    assert down_user32.calls[0]["extra"] == 0
+
+
+def test_scancode_r_mapping_uses_scan_and_keyup_flags() -> None:
+    down_user32 = CapturingUser32(return_count=1)
+    down = _ctypes_api_with(down_user32).send_key_event(
+        VIRTUAL_KEYS["R"], key_up=False, input_mode="scancode"
+    )
+    up_user32 = CapturingUser32(return_count=1)
+    up = _ctypes_api_with(up_user32).send_key_event(
+        VIRTUAL_KEYS["R"], key_up=True, input_mode="scancode"
+    )
+    assert down.flags == CtypesWindowsInputApi.KEYEVENTF_SCANCODE
+    assert up.flags == (
+        CtypesWindowsInputApi.KEYEVENTF_SCANCODE
+        | CtypesWindowsInputApi.KEYEVENTF_KEYUP
+    )
+    assert down_user32.calls[0]["wVk"] == 0
+    assert down_user32.calls[0]["wScan"] == 0x13
+
+
+def test_scancode_sink_mode_does_not_duplicate_vk_events() -> None:
+    api = FakeWindowsApi()
+    sink = _sink(api, config=WindowsActionConfig(input_mode="scancode"))
+    result = sink.apply(ActionRequest(ActionIntent.COLLECT, 0.99, "test"), _context())
+    assert result.os_input_emitted is True
+    assert api.input_modes == ["scancode", "scancode"]
+    assert len(api.send_calls) == 2
+    assert result.input_flags == (0x0008, 0x000A)
+
+
 @pytest.mark.parametrize(
     "intent",
     [ActionIntent.CAST, ActionIntent.START_HOOK, ActionIntent.HOOK_ACTION],
@@ -116,6 +269,7 @@ def test_space_action_mappings_emit_one_down_and_up(intent: ActionIntent) -> Non
     sink = _sink(api, allowlist=intent.value)
     result = sink.apply(ActionRequest(intent, 0.99, "test"), _context(f"1:{intent.value}"))
     assert result.applied is True
+    assert result.os_input_emitted is True
     assert api.send_calls == [(VIRTUAL_KEYS["SPACE"], False), (VIRTUAL_KEYS["SPACE"], True)]
 
 
@@ -226,6 +380,7 @@ def test_panic_during_sequence_cancels_remaining_keys_as_partial() -> None:
     )
     assert result.applied is False
     assert result.partial_execution is True
+    assert result.os_input_emitted is False
     assert result.emitted_event_count == 2
     assert len(api.send_calls) == 2
 
@@ -251,6 +406,7 @@ def test_partial_sendinput_is_not_applied_and_is_not_retried() -> None:
     second = sink.apply(request, _context())
     assert first.partial_execution is True
     assert first.success is first.applied is False
+    assert first.os_input_emitted is False
     assert second.rejection_reason == "partial_action_not_retried"
     assert len(api.send_calls) == 2
 
@@ -265,7 +421,22 @@ def test_zero_sendinput_return_is_failed_not_partial_or_applied() -> None:
     assert result.applied is False
     assert result.partial_execution is False
     assert result.emitted_event_count == 0
+    assert result.os_input_emitted is False
+    assert result.windows_error_code == 87
+    assert result.windows_error_message == "The parameter is incorrect."
     assert any(name == "action_failed" for name, _ in events)
+
+
+def test_zero_event_failure_is_not_retried_for_same_action_id() -> None:
+    api = FakeWindowsApi()
+    api.send_results = [0]
+    sink = _sink(api)
+    request = ActionRequest(ActionIntent.COLLECT, 0.99, "test")
+    first = sink.apply(request, _context())
+    second = sink.apply(request, _context())
+    assert first.emitted_event_count == 0
+    assert second.rejection_reason == "failed_action_not_retried"
+    assert len(api.send_calls) == 1
 
 
 def test_focus_loss_suspends_and_matching_foreground_restores() -> None:
@@ -321,6 +492,7 @@ def test_summary_contains_required_action_counters() -> None:
     assert summary["applied_action_counts"] == {"COLLECT": 1}
     assert summary["rejected_action_counts"] == {"HOOK_ACTION": 1}
     assert summary["partial_action_counts"] == {}
+    assert summary["failed_action_counts"] == {}
     assert summary["rejection_counts_by_reason"] == {"action_not_allowlisted": 1}
     assert summary["panic_triggered"] is False
     assert summary["focus_loss_count"] == 0
@@ -338,9 +510,17 @@ def test_action_result_records_timestamps_hwnds_and_complete_counts() -> None:
     assert result.completed_at >= result.started_at
     assert result.target_hwnd == result.foreground_hwnd == 4242
     assert result.success is result.applied is True
+    assert result.os_input_emitted is True
     assert result.emitted_event_count == result.expected_event_count == 2
     assert result.rejection_reason is result.error is None
     assert result.partial_execution is False
+    assert result.sendinput_input_count == 1
+    assert result.sendinput_cb_size == result.input_struct_size == ctypes.sizeof(_INPUT)
+    assert result.input_mode == "vk"
+    assert result.virtual_key == 0x52
+    assert result.scan_code == 0x13
+    assert result.input_flags == (0, 0x0002)
+    assert result.integrity_diagnostics["suspected_integrity_mismatch"] is False
 
 
 def test_implementation_has_no_background_or_mouse_input_path() -> None:

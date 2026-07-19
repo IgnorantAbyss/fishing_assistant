@@ -13,6 +13,8 @@ from ctypes import wintypes
 from dataclasses import asdict, dataclass
 import os
 from pathlib import Path
+import platform
+import struct
 import time
 from typing import Any, Callable, Mapping, Protocol
 
@@ -28,6 +30,7 @@ ACTION_SINK_SENDINPUT = "sendinput"
 ACTION_SINKS = (ACTION_SINK_NONE, ACTION_SINK_SENDINPUT)
 EXPECTED_GAME_PROCESS = "BlackDesert64"
 EXPECTED_CLIENT_SIZE = (2560, 1440)
+INPUT_MODES = ("vk", "scancode")
 
 VIRTUAL_KEYS = {
     "SPACE": 0x20,
@@ -42,6 +45,7 @@ VIRTUAL_KEYS = {
 
 @dataclass(frozen=True)
 class WindowsActionConfig:
+    input_mode: str = "vk"
     key_hold_ms: int = 40
     sequence_interval_ms: int = 60
     minimum_action_interval_ms: int = 150
@@ -49,6 +53,8 @@ class WindowsActionConfig:
     max_actions_per_minute: int = 30
 
     def __post_init__(self) -> None:
+        if self.input_mode not in INPUT_MODES:
+            raise ValueError(f"input_mode must be one of {INPUT_MODES}")
         if self.key_hold_ms < 1:
             raise ValueError("key_hold_ms must be positive")
         if self.sequence_interval_ms < 0:
@@ -89,9 +95,37 @@ class WindowSafetySnapshot:
 class WindowsInputApi(Protocol):
     def inspect_window(self, hwnd: int) -> WindowSafetySnapshot: ...
 
-    def send_key_event(self, virtual_key: int, *, key_up: bool) -> int: ...
+    def send_key_event(
+        self, virtual_key: int, *, key_up: bool, input_mode: str
+    ) -> "SendInputCallResult": ...
 
     def panic_pressed(self, virtual_key: int) -> bool: ...
+
+    def process_integrity_diagnostics(self, target_process_id: int) -> Mapping[str, Any]: ...
+
+
+def process_architecture() -> str:
+    return f"{platform.machine() or 'unknown'}/{struct.calcsize('P') * 8}-bit"
+
+
+@dataclass(frozen=True)
+class SendInputCallResult:
+    return_count: int
+    windows_error_code: int
+    windows_error_message: str
+    input_count: int
+    cb_size: int
+    input_struct_size: int
+    process_architecture: str
+    input_mode: str
+    virtual_key: int
+    scan_code: int
+    flags: int
+
+
+# Windows uses LLP64. WPARAM is the pointer-width unsigned integer required
+# for ULONG_PTR even though DWORD/ULONG remain 32-bit on 64-bit Windows.
+ULONG_PTR = wintypes.WPARAM
 
 
 class _KEYBDINPUT(ctypes.Structure):
@@ -100,12 +134,35 @@ class _KEYBDINPUT(ctypes.Structure):
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.c_size_t),
+        ("dwExtraInfo", ULONG_PTR),
+    )
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = (
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    )
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = (
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
     )
 
 
 class _INPUTUNION(ctypes.Union):
-    _fields_ = (("ki", _KEYBDINPUT),)
+    _fields_ = (
+        ("mi", _MOUSEINPUT),
+        ("ki", _KEYBDINPUT),
+        ("hi", _HARDWAREINPUT),
+    )
 
 
 class _INPUT(ctypes.Structure):
@@ -118,13 +175,20 @@ class CtypesWindowsInputApi:
 
     INPUT_KEYBOARD = 1
     KEYEVENTF_KEYUP = 0x0002
+    KEYEVENTF_SCANCODE = 0x0008
+    MAPVK_VK_TO_VSC = 0
+    SENDINPUT_INPUT_COUNT = 1
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    TOKEN_QUERY = 0x0008
+    TOKEN_ELEVATION = 20
+    TOKEN_INTEGRITY_LEVEL = 25
 
     def __init__(self) -> None:
         if os.name != "nt":
             raise RuntimeError("Windows SendInput is available only on Windows")
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
         self.user32.SendInput.argtypes = (
             wintypes.UINT,
             ctypes.POINTER(_INPUT),
@@ -154,6 +218,8 @@ class CtypesWindowsInputApi:
         self.user32.GetForegroundWindow.restype = wintypes.HWND
         self.user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
         self.user32.GetAsyncKeyState.restype = ctypes.c_short
+        self.user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
+        self.user32.MapVirtualKeyW.restype = wintypes.UINT
         self.kernel32.OpenProcess.argtypes = (
             wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
         )
@@ -165,6 +231,26 @@ class CtypesWindowsInputApi:
         self.kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
         self.kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         self.kernel32.CloseHandle.restype = wintypes.BOOL
+        self.advapi32.OpenProcessToken.argtypes = (
+            wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
+        )
+        self.advapi32.OpenProcessToken.restype = wintypes.BOOL
+        self.advapi32.GetTokenInformation.argtypes = (
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+            wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+        )
+        self.advapi32.GetTokenInformation.restype = wintypes.BOOL
+        self.advapi32.GetSidSubAuthorityCount.argtypes = (ctypes.c_void_p,)
+        self.advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+        self.advapi32.GetSidSubAuthority.argtypes = (ctypes.c_void_p, wintypes.DWORD)
+        self.advapi32.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
+
+    @staticmethod
+    def _format_windows_error(error_code: int) -> str:
+        try:
+            return ctypes.FormatError(error_code).strip()
+        except Exception:
+            return f"Windows error {error_code}"
 
     def _process_name(self, process_id: int) -> str:
         process = self.kernel32.OpenProcess(
@@ -214,22 +300,155 @@ class CtypesWindowsInputApi:
             foreground,
         )
 
-    def send_key_event(self, virtual_key: int, *, key_up: bool) -> int:
+    def send_key_event(
+        self,
+        virtual_key: int,
+        *,
+        key_up: bool,
+        input_mode: str,
+    ) -> SendInputCallResult:
+        if input_mode not in INPUT_MODES:
+            raise ValueError(f"input_mode must be one of {INPUT_MODES}")
+        scan_code = int(self.user32.MapVirtualKeyW(virtual_key, self.MAPVK_VK_TO_VSC))
+        flags = self.KEYEVENTF_KEYUP if key_up else 0
+        if input_mode == "scancode":
+            flags |= self.KEYEVENTF_SCANCODE
         event = _INPUT(
             type=self.INPUT_KEYBOARD,
             ki=_KEYBDINPUT(
-                wVk=virtual_key,
-                wScan=0,
-                dwFlags=self.KEYEVENTF_KEYUP if key_up else 0,
+                wVk=virtual_key if input_mode == "vk" else 0,
+                wScan=scan_code if input_mode == "scancode" else 0,
+                dwFlags=flags,
                 time=0,
                 dwExtraInfo=0,
             ),
         )
-        return int(self.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(_INPUT)))
+        cb_size = ctypes.sizeof(_INPUT)
+        ctypes.set_last_error(0)
+        return_count = int(self.user32.SendInput(
+            self.SENDINPUT_INPUT_COUNT,
+            ctypes.pointer(event),
+            cb_size,
+        ))
+        # Capture immediately. No other Win32 call is permitted before this.
+        error_code = int(ctypes.get_last_error())
+        error_message = self._format_windows_error(error_code)
+        return SendInputCallResult(
+            return_count=return_count,
+            windows_error_code=error_code,
+            windows_error_message=error_message,
+            input_count=self.SENDINPUT_INPUT_COUNT,
+            cb_size=cb_size,
+            input_struct_size=ctypes.sizeof(_INPUT),
+            process_architecture=process_architecture(),
+            input_mode=input_mode,
+            virtual_key=virtual_key,
+            scan_code=scan_code,
+            flags=flags,
+        )
 
     def panic_pressed(self, virtual_key: int) -> bool:
         # Polling only: no global keyboard hook is installed.
         return bool(int(self.user32.GetAsyncKeyState(virtual_key)) & 0x8001)
+
+    @staticmethod
+    def _integrity_name(rid: int) -> str:
+        if rid < 0x1000:
+            return "untrusted"
+        if rid < 0x2000:
+            return "low"
+        if rid < 0x3000:
+            return "medium_plus" if rid >= 0x2100 else "medium"
+        if rid < 0x4000:
+            return "high"
+        if rid < 0x5000:
+            return "system"
+        return "protected"
+
+    def _query_process_integrity(self, process_id: int) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "process_id": int(process_id),
+            "integrity_level": "unknown",
+            "integrity_rid": None,
+            "elevated": None,
+            "error": None,
+        }
+        process = self.kernel32.OpenProcess(
+            self.PROCESS_QUERY_LIMITED_INFORMATION, False, process_id
+        )
+        if not process:
+            code = int(ctypes.get_last_error())
+            result["error"] = {
+                "windows_error_code": code,
+                "windows_error_message": self._format_windows_error(code),
+            }
+            return result
+        token = wintypes.HANDLE()
+        try:
+            if not self.advapi32.OpenProcessToken(
+                process, self.TOKEN_QUERY, ctypes.byref(token)
+            ):
+                code = int(ctypes.get_last_error())
+                result["error"] = {
+                    "windows_error_code": code,
+                    "windows_error_message": self._format_windows_error(code),
+                }
+                return result
+            elevation = wintypes.DWORD()
+            returned = wintypes.DWORD()
+            if self.advapi32.GetTokenInformation(
+                token, self.TOKEN_ELEVATION, ctypes.byref(elevation),
+                ctypes.sizeof(elevation), ctypes.byref(returned),
+            ):
+                result["elevated"] = bool(elevation.value)
+            required = wintypes.DWORD()
+            self.advapi32.GetTokenInformation(
+                token, self.TOKEN_INTEGRITY_LEVEL, None, 0, ctypes.byref(required)
+            )
+            if required.value <= 0:
+                return result
+            buffer = ctypes.create_string_buffer(required.value)
+            if not self.advapi32.GetTokenInformation(
+                token, self.TOKEN_INTEGRITY_LEVEL, buffer,
+                required.value, ctypes.byref(required),
+            ):
+                return result
+            # TOKEN_MANDATORY_LABEL begins with SID_AND_ATTRIBUTES. On both
+            # architectures its first field is the SID pointer.
+            sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            if not sid:
+                return result
+            count_pointer = self.advapi32.GetSidSubAuthorityCount(sid)
+            if not count_pointer or count_pointer.contents.value < 1:
+                return result
+            index = int(count_pointer.contents.value) - 1
+            rid_pointer = self.advapi32.GetSidSubAuthority(sid, index)
+            if not rid_pointer:
+                return result
+            rid = int(rid_pointer.contents.value)
+            result["integrity_rid"] = rid
+            result["integrity_level"] = self._integrity_name(rid)
+            return result
+        finally:
+            if token:
+                self.kernel32.CloseHandle(token)
+            self.kernel32.CloseHandle(process)
+
+    def process_integrity_diagnostics(self, target_process_id: int) -> Mapping[str, Any]:
+        python_process = self._query_process_integrity(os.getpid())
+        target_process = self._query_process_integrity(target_process_id)
+        python_rid = python_process.get("integrity_rid")
+        target_rid = target_process.get("integrity_rid")
+        suspected_mismatch = (
+            python_rid < target_rid
+            if isinstance(python_rid, int) and isinstance(target_rid, int)
+            else None
+        )
+        return {
+            "python_process": python_process,
+            "target_process": target_process,
+            "suspected_integrity_mismatch": suspected_mismatch,
+        }
 
 
 def parse_action_allowlist(value: str | tuple[str, ...] | list[str]) -> frozenset[ActionIntent]:
@@ -289,15 +508,41 @@ class WindowsSendInputActionSink:
         self._panic_triggered = False
         self._focus_suspended = False
         self._applied_action_ids: set[str] = set()
-        self._nonretryable_action_ids: set[str] = set()
+        self._nonretryable_action_ids: dict[str, str] = {}
         self._attempt_times: deque[float] = deque()
         self._last_attempt_at: float | None = None
         self._attempted: Counter[str] = Counter()
         self._applied: Counter[str] = Counter()
         self._rejected: Counter[str] = Counter()
         self._partial: Counter[str] = Counter()
+        self._failed: Counter[str] = Counter()
         self._rejection_reasons: Counter[str] = Counter()
         self._focus_loss_count = 0
+        integrity_reader = getattr(self.api, "process_integrity_diagnostics", None)
+        if callable(integrity_reader):
+            try:
+                self._integrity_diagnostics = dict(
+                    integrity_reader(self.expected_process_id)
+                )
+            except Exception as exc:
+                self._integrity_diagnostics = {
+                    "python_process": {"process_id": os.getpid(), "integrity_level": "unknown"},
+                    "target_process": {
+                        "process_id": self.expected_process_id,
+                        "integrity_level": "unknown",
+                    },
+                    "suspected_integrity_mismatch": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        else:
+            self._integrity_diagnostics = {
+                "python_process": {"process_id": os.getpid(), "integrity_level": "unknown"},
+                "target_process": {
+                    "process_id": self.expected_process_id,
+                    "integrity_level": "unknown",
+                },
+                "suspected_integrity_mismatch": None,
+            }
         self._event("action_sink_initialized", {
             "timestamp": self._timestamp(),
             "action_sink_type": self.sink_type,
@@ -308,6 +553,12 @@ class WindowsSendInputActionSink:
             "expected_client_size": list(self.expected_client_size),
             "action_allowlist": sorted(item.value for item in self.allowlist),
             "panic_key": self.config.panic_key.upper(),
+            "input_mode": self.config.input_mode,
+            "action_applied_semantics": "complete_os_input_not_visual_acknowledgement",
+            "input_struct_size": ctypes.sizeof(_INPUT),
+            "python_pointer_size": ctypes.sizeof(ctypes.c_void_p),
+            "process_architecture": process_architecture(),
+            "integrity_diagnostics": self._integrity_diagnostics,
         })
 
     def _timestamp(self) -> float:
@@ -368,7 +619,10 @@ class WindowsSendInputActionSink:
         rejection_reason: str | None = None,
         error: str | None = None,
         partial: bool = False,
+        calls: tuple[SendInputCallResult, ...] = (),
+        virtual_key: int | None = None,
     ) -> ActionExecutionResult:
+        last_call = calls[-1] if calls else None
         return ActionExecutionResult(
             action_id=context.action_id,
             intent_type=request.intent.value,
@@ -384,6 +638,34 @@ class WindowsSendInputActionSink:
             rejection_reason=rejection_reason,
             error=error,
             partial_execution=partial,
+            os_input_emitted=applied,
+            windows_error_code=(
+                last_call.windows_error_code if last_call is not None else None
+            ),
+            windows_error_message=(
+                last_call.windows_error_message if last_call is not None else None
+            ),
+            sendinput_input_count=(
+                last_call.input_count if last_call is not None else 0
+            ),
+            sendinput_cb_size=(
+                last_call.cb_size if last_call is not None else ctypes.sizeof(_INPUT)
+            ),
+            input_struct_size=(
+                last_call.input_struct_size
+                if last_call is not None else ctypes.sizeof(_INPUT)
+            ),
+            process_architecture=(
+                last_call.process_architecture
+                if last_call is not None else process_architecture()
+            ),
+            input_mode=self.config.input_mode,
+            virtual_key=(
+                last_call.virtual_key if last_call is not None else virtual_key
+            ),
+            scan_code=(last_call.scan_code if last_call is not None else None),
+            input_flags=tuple(call.flags for call in calls),
+            integrity_diagnostics=self._integrity_diagnostics,
         )
 
     def _base_payload(
@@ -401,6 +683,9 @@ class WindowsSendInputActionSink:
             "target_hwnd": self.target_hwnd,
             "key_sequence": list(keys),
             "timestamp": context.requested_at,
+            "input_mode": self.config.input_mode,
+            "process_architecture": process_architecture(),
+            "input_struct_size": ctypes.sizeof(_INPUT),
         }
 
     def _reject(
@@ -419,6 +704,7 @@ class WindowsSendInputActionSink:
             request, context, started_at=None, emitted=0,
             expected=len(keys) * 2, foreground_hwnd=foreground_hwnd,
             success=False, applied=False, rejection_reason=reason, error=error,
+            virtual_key=VIRTUAL_KEYS[keys[0]] if keys else None,
         )
         self._event("action_rejected", {
             **self._base_payload(request, context, keys),
@@ -475,7 +761,9 @@ class WindowsSendInputActionSink:
         if context.action_id in self._applied_action_ids:
             return self._reject(request, context, "duplicate_action")
         if context.action_id in self._nonretryable_action_ids:
-            return self._reject(request, context, "partial_action_not_retried")
+            return self._reject(
+                request, context, self._nonretryable_action_ids[context.action_id]
+            )
         try:
             keys = self._key_sequence(request)
         except ValueError as exc:
@@ -528,6 +816,7 @@ class WindowsSendInputActionSink:
         self._attempted[request.intent.value] += 1
         expected = len(keys) * 2
         emitted = 0
+        calls: list[SendInputCallResult] = []
         self._event("action_started", {
             **self._base_payload(request, context, keys),
             "foreground_hwnd": snapshot.foreground_hwnd,
@@ -540,16 +829,32 @@ class WindowsSendInputActionSink:
                 if self.poll_panic(context):
                     error = "panic_triggered_during_sequence"
                     break
-                down = self.api.send_key_event(VIRTUAL_KEYS[key], key_up=False)
-                emitted += max(0, down)
-                if down != 1:
-                    error = f"SendInput key-down returned {down}, expected 1"
+                down = self.api.send_key_event(
+                    VIRTUAL_KEYS[key], key_up=False,
+                    input_mode=self.config.input_mode,
+                )
+                calls.append(down)
+                emitted += max(0, down.return_count)
+                if down.return_count != 1:
+                    error = (
+                        f"SendInput key-down returned {down.return_count}, expected 1; "
+                        f"Windows error {down.windows_error_code}: "
+                        f"{down.windows_error_message}"
+                    )
                     break
                 self.sleep(self.config.key_hold_ms / 1000.0)
-                up = self.api.send_key_event(VIRTUAL_KEYS[key], key_up=True)
-                emitted += max(0, up)
-                if up != 1:
-                    error = f"SendInput key-up returned {up}, expected 1"
+                up = self.api.send_key_event(
+                    VIRTUAL_KEYS[key], key_up=True,
+                    input_mode=self.config.input_mode,
+                )
+                calls.append(up)
+                emitted += max(0, up.return_count)
+                if up.return_count != 1:
+                    error = (
+                        f"SendInput key-up returned {up.return_count}, expected 1; "
+                        f"Windows error {up.windows_error_code}: "
+                        f"{up.windows_error_message}"
+                    )
                     break
                 if index + 1 < len(keys):
                     if self.poll_panic(context):
@@ -565,22 +870,30 @@ class WindowsSendInputActionSink:
             expected=expected, foreground_hwnd=snapshot.foreground_hwnd,
             success=applied, applied=applied,
             rejection_reason=None if applied else "sendinput_incomplete",
-            error=error, partial=partial,
+            error=error, partial=partial, calls=tuple(calls),
+            virtual_key=VIRTUAL_KEYS[keys[0]] if keys else None,
         )
         payload = {
             **self._base_payload(request, context, keys),
             **asdict(result),
             "sendinput_return_count": emitted,
+            "opportunity_result": (
+                "os_input_emitted" if applied
+                else "partial_not_applied" if partial
+                else "failed_not_applied"
+            ),
         }
         if applied:
             self._applied_action_ids.add(context.action_id)
             self._applied[request.intent.value] += 1
             self._event("action_applied", payload)
         elif partial:
-            self._nonretryable_action_ids.add(context.action_id)
+            self._nonretryable_action_ids[context.action_id] = "partial_action_not_retried"
             self._partial[request.intent.value] += 1
             self._event("action_partial", payload)
         else:
+            self._nonretryable_action_ids[context.action_id] = "failed_action_not_retried"
+            self._failed[request.intent.value] += 1
             self._event("action_failed", payload)
         return result
 
@@ -590,9 +903,15 @@ class WindowsSendInputActionSink:
             "action_allowlist": sorted(item.value for item in self.allowlist),
             "attempted_action_counts": dict(self._attempted),
             "applied_action_counts": dict(self._applied),
+            "os_input_emitted_counts": dict(self._applied),
             "rejected_action_counts": dict(self._rejected),
             "partial_action_counts": dict(self._partial),
+            "failed_action_counts": dict(self._failed),
             "rejection_counts_by_reason": dict(self._rejection_reasons),
             "panic_triggered": self._panic_triggered,
             "focus_loss_count": self._focus_loss_count,
+            "input_mode": self.config.input_mode,
+            "input_struct_size": ctypes.sizeof(_INPUT),
+            "process_architecture": process_architecture(),
+            "integrity_diagnostics": self._integrity_diagnostics,
         }
