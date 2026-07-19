@@ -99,6 +99,18 @@ class CollectRetryController:
         return self._physical_episode_id
 
     @property
+    def episode_open(self) -> bool:
+        return self._episode_open
+
+    @property
+    def episode_terminal(self) -> bool:
+        return self._terminal
+
+    @property
+    def panel_visible(self) -> bool:
+        return self._panel_visible
+
+    @property
     def visual_acknowledged(self) -> bool:
         return self._visual_acknowledged
 

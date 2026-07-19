@@ -178,6 +178,7 @@ class LiveSessionLogger:
             f"- Physical GET episodes / COLLECT opportunities / terminal episodes: **{complete.get('physical_get_episode_count', 0)} / {complete.get('collect_opportunity_count', 0)} / {complete.get('collect_terminal_episode_count', 0)}**",
             f"- COLLECT attempts by physical GET episode: `{complete.get('collect_attempt_counts_by_get_episode', {})}`",
             f"- CAST opportunities / attempts: **{complete.get('cast_opportunity_count', 0)} / {complete.get('cast_attempt_count', 0)}**",
+            f"- No-GET clearances: **{complete.get('no_get_clearance_count', 0)}**",
             f"- CAST visual acknowledged / timeout: **{complete.get('cast_visual_acknowledged_count', 0)} / {complete.get('cast_timeout_count', 0)}**",
             f"- Action rejections by reason: `{complete.get('rejection_counts_by_reason', {})}`",
             f"- Panic / focus loss: **{complete.get('panic_triggered', False)} / {complete.get('focus_loss_count', 0)}**",

@@ -30,10 +30,14 @@ from src.fishing_v2.legacy_adapters.hook_detector_adapter import LegacyHookDetec
 from src.fishing_v2.legacy_adapters.press_detector_adapter import LegacyPressDetectorAdapter
 from src.fishing_v2.live.session_logger import LiveSessionLogger
 from src.fishing_v2.live.cast_opportunity import (
+    CastBlocker,
     CastAttempt,
     CastOpportunityConfig,
     CastOpportunityController,
     CastOpportunityEvent,
+    PostCycleClearanceStatus,
+    PostCycleClearanceTracker,
+    PresenceState,
 )
 from src.fishing_v2.live.collect_retry import (
     CollectAttempt,
@@ -353,9 +357,13 @@ class LiveDetectOnlyRuntime:
                 "Runtime safety.emit_actions must remain false; the guarded Live sink is CLI-only"
             )
         self.fsm = FishingFSM(fsm_config, initial_state=RuntimeState.SYNCING)
-        self.cast_opportunity = CastOpportunityController(CastOpportunityConfig(
+        cast_config = CastOpportunityConfig(
             visual_ack_timeout_seconds=fsm_config.cast_pending_timeout_sec,
-        ))
+            clearance_freshness_seconds=fsm_config.cast_pending_timeout_sec,
+            stable_idle_frames_required=fsm_config.stable_frames,
+        )
+        self.cast_opportunity = CastOpportunityController(cast_config)
+        self.cast_clearance = PostCycleClearanceTracker(cast_config)
         self.activation_policy = DetectorActivationPolicy(activation_config)
         self.controller = RuntimeController(
             ObservationFusion(fusion_config),
@@ -385,6 +393,7 @@ class LiveDetectOnlyRuntime:
         self._preflight_failure_message: str | None = None
         self._action_preflight_diagnostics: dict[str, Any] = {}
         self._foreground_unavailable_event_active = False
+        self._last_cast_blockers: tuple[str, ...] | None = None
 
     def _log_collect_events(
         self,
@@ -449,6 +458,132 @@ class LiveDetectOnlyRuntime:
                 "action_applied": False,
                 **dict(event.payload),
             })
+
+    def _cast_blockers(
+        self,
+        *,
+        status: PostCycleClearanceStatus,
+        runtime_state: RuntimeState,
+        prompt_kind: PromptObservationKind | None,
+        foreground: bool | None,
+        raw_intent: ActionIntent,
+        safety_reason: str,
+    ) -> tuple[str, ...]:
+        blockers: list[CastBlocker] = []
+        if runtime_state != RuntimeState.IDLE:
+            blockers.append(CastBlocker.RUNTIME_NOT_IDLE)
+        if prompt_kind != PromptObservationKind.IDLE_CAST:
+            blockers.append(CastBlocker.PROMPT_NOT_IDLE_CAST)
+        if (
+            runtime_state == RuntimeState.IDLE
+            and prompt_kind == PromptObservationKind.IDLE_CAST
+            and status.stable_idle_frames
+            < self.cast_clearance.config.stable_idle_frames_required
+        ):
+            blockers.append(CastBlocker.IDLE_NOT_STABLE)
+        if self.collect_retry.episode_open:
+            blockers.append(CastBlocker.PHYSICAL_GET_EPISODE_ACTIVE)
+            blockers.append(CastBlocker.COLLECT_NOT_COMPLETED)
+        if self.cast_opportunity.waiting_for_acknowledgement:
+            blockers.append(CastBlocker.CAST_WAITING_ACK)
+        elif self.cast_opportunity.opportunity_open:
+            blockers.append(CastBlocker.OPPORTUNITY_ALREADY_CONSUMED)
+
+        if not status.clearance_available:
+            freshness_ms = (
+                self.cast_clearance.config.clearance_freshness_seconds * 1000.0
+            )
+            get_absence_stale = bool(
+                status.get_presence_state == PresenceState.ABSENT
+                and status.get_evidence_age_ms is not None
+                and status.get_evidence_age_ms > freshness_ms
+            )
+            banner_absence_stale = bool(
+                status.result_banner_presence_state == PresenceState.ABSENT
+                and status.result_banner_evidence_age_ms is not None
+                and status.result_banner_evidence_age_ms > freshness_ms
+            )
+            if status.clearance_consumed:
+                blockers.append(CastBlocker.OPPORTUNITY_ALREADY_CONSUMED)
+            elif status.get_presence_state == PresenceState.UNKNOWN:
+                blockers.append(CastBlocker.GET_PRESENCE_UNKNOWN)
+            elif status.get_presence_state == PresenceState.PRESENT:
+                blockers.append(CastBlocker.GET_PRESENT)
+            elif status.clearance_expired or get_absence_stale:
+                blockers.append(CastBlocker.GET_ABSENCE_STALE)
+
+            if status.result_banner_presence_state == PresenceState.UNKNOWN:
+                blockers.append(CastBlocker.RESULT_BANNER_UNKNOWN)
+            elif status.result_banner_presence_state == PresenceState.PRESENT:
+                blockers.append(CastBlocker.RESULT_BANNER_PRESENT)
+            elif status.clearance_expired or banner_absence_stale:
+                blockers.append(CastBlocker.RESULT_BANNER_ABSENCE_STALE)
+            if not status.clearance_consumed and not status.clearance_expired:
+                blockers.append(CastBlocker.POST_CYCLE_CLEARANCE_MISSING)
+
+        sink_summary = getattr(self.action_sink, "summary", None)
+        panic_latched = bool(
+            callable(sink_summary) and sink_summary().get("panic_triggered", False)
+        )
+        if panic_latched:
+            blockers.append(CastBlocker.PANIC_LATCHED)
+        if self._foreground_unavailable_event_active:
+            blockers.append(CastBlocker.FOREGROUND_UNAVAILABLE)
+        elif foreground is not True:
+            blockers.append(CastBlocker.FOREGROUND_NOT_CONFIRMED)
+        if (
+            raw_intent == ActionIntent.CAST
+            and safety_reason != "action_emission_disabled"
+            and not any(item in blockers for item in {
+                CastBlocker.PANIC_LATCHED,
+                CastBlocker.FOREGROUND_UNAVAILABLE,
+                CastBlocker.FOREGROUND_NOT_CONFIRMED,
+            })
+        ):
+            blockers.append(CastBlocker.SAFETY_NOT_READY)
+        return tuple(dict.fromkeys(item.value for item in blockers))
+
+    def _log_cast_blockers(
+        self,
+        blockers: tuple[str, ...],
+        *,
+        status: PostCycleClearanceStatus,
+        timestamp: float,
+        frame_index: int,
+        prompt_kind: PromptObservationKind | None,
+        raw_intent: ActionIntent,
+        cycle_completed: bool,
+        transition_from: RuntimeState | None,
+        transition_to: RuntimeState | None,
+    ) -> None:
+        if blockers == self._last_cast_blockers:
+            return
+        self._last_cast_blockers = blockers
+        if not blockers:
+            return
+        self.logger.event("cast_opportunity_blocked", {
+            "timestamp": timestamp,
+            "frame_index": frame_index,
+            "runtime_state": self.fsm.state.value,
+            "prompt_label": prompt_kind.value if prompt_kind else None,
+            "raw_intent": raw_intent.value,
+            "stable_idle_frames": status.stable_idle_frames,
+            "get_presence_state": status.get_presence_state.value,
+            "get_evidence_age_ms": status.get_evidence_age_ms,
+            "result_banner_presence_state": (
+                status.result_banner_presence_state.value
+            ),
+            "result_banner_evidence_age_ms": (
+                status.result_banner_evidence_age_ms
+            ),
+            "active_get_episode": self.collect_retry.episode_open,
+            "collect_episode_terminal": self.collect_retry.episode_terminal,
+            "cycle_completed": cycle_completed,
+            "transition_from": transition_from.value if transition_from else None,
+            "transition_to": transition_to.value if transition_to else None,
+            "blockers": list(blockers),
+            "action_applied": False,
+        })
 
     def _initialize_action_sink(self, *, session_started_at: float) -> None:
         if not self.emit_actions or self.action_sink_name == ACTION_SINK_NONE:
@@ -877,19 +1012,16 @@ class LiveDetectOnlyRuntime:
                     hook = self.hook_detector.observe(frame, context) if run_detectors and activation.hook != DetectorActivationMode.OFF else None
                     press = self.press_detector.observe(frame, context) if run_detectors and activation.press != DetectorActivationMode.OFF else None
                     run_get = run_detectors and activation.get != DetectorActivationMode.OFF
-                    if self.fsm.state == RuntimeState.IDLE:
-                        run_get = True  # required read-only GET guard before WOULD_CAST
                     get = self.get_detector.observe(frame, context) if run_get else None
+                    get_detector_executed = get is not None
+                    if get is None and self.fsm.state == RuntimeState.IDLE:
+                        get = self.cast_clearance.certified_get_absence(
+                            timestamp=elapsed,
+                            frame_index=captured,
+                        )
                     run_result_banner = bool(
                         run_detectors
-                        and (
-                            self.fsm.state == RuntimeState.RESULT_PENDING
-                            or (
-                                self.action_sink is not None
-                                and ActionIntent.CAST in self.action_allowlist
-                                and self.fsm.state == RuntimeState.IDLE
-                            )
-                        )
+                        and self.fsm.state == RuntimeState.RESULT_PENDING
                     )
                     result_banner = (
                         self.result_banner_observer.observe(frame, context)
@@ -898,7 +1030,7 @@ class LiveDetectOnlyRuntime:
                     detector_runs.update({
                         "hook": int(hook is not None),
                         "press": int(press is not None),
-                        "get": int(get is not None),
+                        "get": int(get_detector_executed),
                         "result_banner": int(result_banner is not None),
                     })
                     raw_bundle = ObservationBundle(
@@ -965,17 +1097,6 @@ class LiveDetectOnlyRuntime:
                     )
                     qualified_get = last_result.qualified.bundle.get
                     qualified_banner = last_result.qualified.bundle.result_banner
-                    if cast_opportunity_enabled:
-                        self._log_cast_events(
-                            self.cast_opportunity.observe(
-                                timestamp=elapsed,
-                                runtime_state=self.fsm.state,
-                                prompt_kind=prompt.kind if prompt is not None else None,
-                            ),
-                            timestamp=elapsed,
-                            frame_index=captured,
-                            runtime_state=self.fsm.state.value,
-                        )
                     if collect_retry_enabled:
                         get_confirmation_frames = int(
                             qualified_get.evidence.get("get_confirmation_frames", 0)
@@ -1027,6 +1148,44 @@ class LiveDetectOnlyRuntime:
                                 "action_intent": ActionIntent.NONE.value,
                                 "action_applied": False,
                             })
+                    if cast_opportunity_enabled:
+                        clearance_events = self.cast_clearance.observe(
+                            timestamp=elapsed,
+                            previous_state=last_result.fsm.previous_state,
+                            current_state=self.fsm.state,
+                            prompt_kind=(
+                                prompt.kind if prompt is not None else None
+                            ),
+                            prompt_frame_index=(
+                                prompt.frame_index if prompt is not None else None
+                            ),
+                            get_observation=qualified_get,
+                            get_activation_mode=(
+                                last_result.qualified.get.activation_mode
+                            ),
+                            result_banner=qualified_banner,
+                            physical_get_episode_open=(
+                                self.collect_retry.episode_open
+                            ),
+                        )
+                        self._log_cast_events(
+                            clearance_events,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            runtime_state=self.fsm.state.value,
+                        )
+                        self._log_cast_events(
+                            self.cast_opportunity.observe(
+                                timestamp=elapsed,
+                                runtime_state=self.fsm.state,
+                                prompt_kind=(
+                                    prompt.kind if prompt is not None else None
+                                ),
+                            ),
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            runtime_state=self.fsm.state.value,
+                        )
 
                     if ready_burst_update is not None:
                         burst_payload = {
@@ -1114,7 +1273,7 @@ class LiveDetectOnlyRuntime:
                             "prompt": prompt_due,
                             "hook": hook is not None,
                             "press": press is not None,
-                            "get": get is not None,
+                            "get": get_detector_executed,
                             "result_banner": result_banner is not None,
                         }
                         try:
@@ -1247,6 +1406,22 @@ class LiveDetectOnlyRuntime:
                         unknown_started = None
                         unknown_saved = False
 
+                    cycle_completed_this_frame = any(
+                        item.next_state == RuntimeState.IDLE
+                        and item.previous_state not in {
+                            RuntimeState.IDLE,
+                            RuntimeState.SYNCING,
+                            RuntimeState.SYNC_REQUIRED,
+                        }
+                        for item in transition_results
+                    )
+                    diagnostic_transition = next(
+                        (
+                            item for item in reversed(transition_results)
+                            if item.previous_state != item.next_state
+                        ),
+                        None,
+                    )
                     for transition_result in transition_results:
                         if transition_result.previous_state == transition_result.next_state:
                             continue
@@ -1315,26 +1490,67 @@ class LiveDetectOnlyRuntime:
                     request = last_result.fsm.action_request
                     collect_attempt: CollectAttempt | None = None
                     cast_attempt: CastAttempt | None = None
+                    cast_blockers: tuple[str, ...] = ()
+                    if cast_opportunity_enabled:
+                        clearance_status = self.cast_clearance.status(elapsed)
+                        cast_blockers = self._cast_blockers(
+                            status=clearance_status,
+                            runtime_state=self.fsm.state,
+                            prompt_kind=(
+                                prompt.kind if prompt is not None else None
+                            ),
+                            foreground=foreground,
+                            raw_intent=request.intent,
+                            safety_reason=last_result.safety.reason,
+                        )
+                        self._log_cast_blockers(
+                            cast_blockers,
+                            status=clearance_status,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            prompt_kind=(
+                                prompt.kind if prompt is not None else None
+                            ),
+                            raw_intent=request.intent,
+                            cycle_completed=cycle_completed_this_frame,
+                            transition_from=(
+                                diagnostic_transition.previous_state
+                                if diagnostic_transition is not None else None
+                            ),
+                            transition_to=(
+                                diagnostic_transition.next_state
+                                if diagnostic_transition is not None else None
+                            ),
+                        )
                     if cast_opportunity_enabled and request.intent == ActionIntent.CAST:
                         self.deduplicator.record_raw_proposal(request)
-                        if last_result.safety.reason == "action_emission_disabled":
+                        if (
+                            last_result.safety.reason == "action_emission_disabled"
+                            and not cast_blockers
+                        ):
+                            clearance = self.cast_clearance.current(elapsed)
                             cast_attempt, cast_schedule_events = (
                                 self.cast_opportunity.schedule(
                                     timestamp=elapsed,
-                                    idle_cast_prompt=bool(
-                                        prompt is not None
-                                        and prompt.kind == PromptObservationKind.IDLE_CAST
+                                    clearance_id=(
+                                        clearance.clearance_id
+                                        if clearance is not None else None
                                     ),
-                                    get_observed_absent=bool(
-                                        qualified_get is not None
-                                        and not qualified_get.detected
+                                    runtime_state=self.fsm.state,
+                                    prompt_kind=(
+                                        prompt.kind if prompt is not None else None
                                     ),
-                                    result_banner_absent=bool(
-                                        qualified_banner is not None
-                                        and not qualified_banner.detected
+                                    physical_get_episode_open=(
+                                        self.collect_retry.episode_open
                                     ),
                                 )
                             )
+                            if cast_attempt is not None and not self.cast_clearance.consume(
+                                cast_attempt.clearance_id
+                            ):
+                                raise RuntimeError(
+                                    "CAST opportunity consumed an invalid clearance"
+                                )
                             self._log_cast_events(
                                 cast_schedule_events,
                                 timestamp=elapsed,
@@ -1719,6 +1935,7 @@ class LiveDetectOnlyRuntime:
                 "capture_diagnostics": self._capture_diagnostics,
                 "completed_cycles": completed_cycles,
                 "max_completed_cycles": self.live_config.max_completed_cycles,
+                **self.cast_clearance.summary(),
                 **self.cast_opportunity.summary(),
                 **self.collect_retry.summary(),
                 **action_summary,

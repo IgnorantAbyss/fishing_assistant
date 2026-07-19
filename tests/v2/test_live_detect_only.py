@@ -465,7 +465,7 @@ def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
         def observe(self, _frame, context):
             kind = (
                 PromptObservationKind.IDLE_CAST
-                if context.frame_index < 5
+                if context.frame_index < 48
                 else PromptObservationKind.WAITING_IN_PROGRESS
             )
             return PromptObservation(
@@ -519,7 +519,7 @@ def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
         "client_size": [2560, 1440],
     })
     runtime = _runtime(
-        tmp_path, capture, FakeClock(), duration_seconds=2.0,
+        tmp_path, capture, FakeClock(), duration_seconds=4.0,
         emit_actions=True, action_sink_name="sendinput",
         action_allowlist="cast, collect", action_sink_factory=factory,
     )
@@ -527,8 +527,8 @@ def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
         runtime.prompt_bundle, observer=CastThenWaitingObserver()
     )
     runtime.result_banner_observer = AbsentResultBanner()
-    runtime.fsm.force_state(RuntimeState.IDLE, 0.0, "test_idle")
-    summary = runtime.run(max_frames=20)
+    runtime.fsm.force_state(RuntimeState.RESULT_PENDING, 0.0, "test_result_pending")
+    summary = runtime.run(max_frames=80)
 
     assert len(created) == 1
     assert len(created[0].calls) == 1
@@ -536,9 +536,14 @@ def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
     assert request.intent == ActionIntent.CAST
     assert context.action_id == "cast_opportunity:1:CAST"
     assert summary["cast_opportunity_count"] == 1
+    assert summary["no_get_clearance_count"] == 1
     assert summary["cast_attempt_count"] == 1
     assert summary["cast_visual_acknowledged_count"] == 1
     assert summary["cast_timeout_count"] == 0
+    assert summary["completed_cycles"] == 1
+    assert summary["physical_get_episode_count"] == 0
+    assert summary["raw_action_proposals"]["CAST"] > 0
+    assert summary["unique_would_fire"] == {"WOULD_CAST": 1}
     events = [
         json.loads(line)
         for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
@@ -547,6 +552,14 @@ def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
     assert event_names.count("cast_opportunity_started") == 1
     assert event_names.count("cast_attempt_emitted") == 1
     assert event_names.count("cast_visual_acknowledged") == 1
+    blocked = [
+        item for item in events
+        if item["event_type"] == "cast_opportunity_blocked"
+    ]
+    assert blocked
+    assert all("blockers" in item for item in blocked)
+    assert all("get_presence_state" in item for item in blocked)
+    assert all("result_banner_presence_state" in item for item in blocked)
 
 
 def test_diagnostic_mode_records_video_and_roi_without_would_fire(
