@@ -1,3 +1,5 @@
+import pytest
+
 from src.fishing_v2.domain.observations import (
     GetObservation,
     PromptObservationKind,
@@ -35,10 +37,14 @@ def _execution(action_id: str, timestamp: float, *, applied: bool = True):
     )
 
 
-def _schedule(controller: CastOpportunityController, timestamp: float = 0.0):
+def _schedule(
+    controller: CastOpportunityController,
+    timestamp: float = 0.0,
+    clearance_id: str = "no_get_clearance:1",
+):
     return controller.schedule(
         timestamp=timestamp,
-        clearance_id="no_get_clearance:1",
+        clearance_id=clearance_id,
         runtime_state=RuntimeState.IDLE,
         prompt_kind=PromptObservationKind.IDLE_CAST,
         physical_get_episode_open=False,
@@ -103,6 +109,8 @@ def _observe_clearance(
     collect_complete_emission_count: int | None = None,
     collect_terminal_reason: str | None = None,
     cycle_id: str | None = None,
+    foreground_confirmed: bool = True,
+    panic_latched: bool = False,
 ):
     return tracker.observe(
         timestamp=timestamp,
@@ -125,6 +133,8 @@ def _observe_clearance(
         ),
         collect_terminal_reason=collect_terminal_reason,
         runtime_cycle_id=cycle_id,
+        foreground_confirmed=foreground_confirmed,
+        panic_latched=panic_latched,
     )
 
 
@@ -360,31 +370,50 @@ def test_session_143049_collected_get_creates_one_fresh_clearance() -> None:
         collect_terminal_reason="qualified_get_panel_stably_disappeared",
         cycle_id="cycle:0",
     )
-    assert events == ()
+    assert [item.event_type for item in events] == [
+        "post_collect_result_banner_confirmation_started"
+    ]
     status = tracker.status(17.892596)
     assert status.get_presence_state == PresenceState.ABSENT
     assert status.get_absence_source == "post_collect_visual_ack"
 
-    created = _observe_clearance(
+    first_absent = _observe_clearance(
         tracker, frame=174, timestamp=18.102079,
+        previous=RuntimeState.COLLECT_PENDING,
+        current=RuntimeState.COLLECT_PENDING,
+        get=None, banner=_banner(174, 18.102079, False),
+        mode=DetectorActivationMode.OFF,
+        episode_id="get_episode:1", episode_terminal=True,
+        panel_visible=False, collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+        cycle_id="cycle:0",
+    )
+    assert not any(
+        item.event_type == "post_cycle_clearance_created"
+        for item in first_absent
+    )
+    created = _observe_clearance(
+        tracker, frame=175, timestamp=18.302079,
         previous=RuntimeState.COLLECT_PENDING, current=RuntimeState.IDLE,
-        get=None, banner=None, mode=DetectorActivationMode.OFF,
+        get=None, banner=_banner(175, 18.302079, False),
+        mode=DetectorActivationMode.OFF,
         episode_id="get_episode:1", episode_terminal=True,
         panel_visible=False, collect_acknowledged=True,
         collect_terminal_reason="qualified_get_panel_stably_disappeared",
         cycle_id="cycle:0",
     )
     assert [item.event_type for item in created] == [
+        "result_banner_absence_certificate_created",
         "post_cycle_clearance_created"
     ]
-    clearance = tracker.current(18.102079)
+    clearance = tracker.current(18.302079)
     assert clearance is not None
     assert clearance.source == "collected_get_visual_ack"
     assert clearance.get_episode_id == "get_episode:1"
     assert clearance.get_absence_certified is True
     assert clearance.result_banner_absence_certified is True
     certified = tracker.certified_get_absence(
-        timestamp=18.102079, frame_index=174
+        timestamp=18.302079, frame_index=175
     )
     assert certified is not None
     assert certified.source == "post_collect_visual_ack"
@@ -398,7 +427,7 @@ def test_session_143049_collected_get_creates_one_fresh_clearance() -> None:
     }
     controller = CastOpportunityController()
     attempt, _ = controller.schedule(
-        timestamp=18.102079,
+        timestamp=18.302079,
         clearance_id=clearance.clearance_id,
         runtime_state=RuntimeState.IDLE,
         prompt_kind=PromptObservationKind.IDLE_CAST,
@@ -416,8 +445,8 @@ def test_session_143049_collected_get_creates_one_fresh_clearance() -> None:
     request = ActionRequest(ActionIntent.CAST, 0.99, "post-collect clearance")
     values = dict(
         safety_reason="action_emission_disabled",
-        frame_index=174,
-        timestamp=18.102079,
+        frame_index=175,
+        timestamp=18.302079,
         runtime_state=RuntimeState.IDLE.value,
         prompt_evidence={"predicted_label": "IDLE_CAST"},
         specialized_evidence={"get": {"certified_absence": True}},
@@ -447,7 +476,8 @@ def test_collected_get_clearance_rejects_stale_absence_or_terminal_visible_panel
     _observe_clearance(
         tracker, frame=3, timestamp=1.2,
         previous=RuntimeState.GET, current=RuntimeState.COLLECT_PENDING,
-        get=None, banner=None, mode=DetectorActivationMode.OFF,
+        get=None, banner=_banner(3, 1.2, True),
+        mode=DetectorActivationMode.OFF,
         episode_open=True, episode_id="get_episode:1",
         episode_terminal=True, panel_visible=True, collect_acknowledged=True,
         collect_terminal_reason="qualified_get_panel_stably_disappeared",
@@ -457,7 +487,8 @@ def test_collected_get_clearance_rejects_stale_absence_or_terminal_visible_panel
         tracker, frame=4, timestamp=1.3,
         previous=RuntimeState.COLLECT_PENDING,
         current=RuntimeState.COLLECT_PENDING,
-        get=None, banner=None, mode=DetectorActivationMode.OFF,
+        get=_get(4, 1.3, False), banner=_banner(4, 1.3, False),
+        mode=DetectorActivationMode.OFF,
         episode_id="get_episode:1", episode_terminal=True,
         panel_visible=False, collect_acknowledged=True,
         collect_terminal_reason="qualified_get_panel_stably_disappeared",
@@ -470,7 +501,9 @@ def test_collected_get_clearance_rejects_stale_absence_or_terminal_visible_panel
         panel_visible=False, collect_acknowledged=True,
         collect_terminal_reason="qualified_get_panel_stably_disappeared",
     )
-    assert events == ()
+    assert [event.event_type for event in events] == [
+        "result_banner_absence_certificate_expired"
+    ]
     assert tracker.current(2.4) is None
 
 
@@ -493,14 +526,110 @@ def test_result_banner_present_blocks_collected_get_clearance() -> None:
     events = _observe_clearance(
         tracker, frame=3, timestamp=1.2,
         previous=RuntimeState.COLLECT_PENDING, current=RuntimeState.IDLE,
-        get=None, banner=None, mode=DetectorActivationMode.OFF,
+        get=_get(3, 1.2, False), banner=_banner(3, 1.2, True),
+        mode=DetectorActivationMode.OFF,
         episode_id="get_episode:1", episode_terminal=True,
         panel_visible=False, collect_acknowledged=True,
         collect_terminal_reason="qualified_get_panel_stably_disappeared",
     )
-    assert events == ()
+    assert [item.event_type for item in events] == [
+        "post_collect_result_banner_confirmation_started"
+    ]
     assert tracker.status(1.2).result_banner_presence_state == PresenceState.PRESENT
     assert tracker.current(1.2) is None
+    disappeared = _observe_clearance(
+        tracker, frame=4, timestamp=1.4,
+        previous=RuntimeState.COLLECT_PENDING, current=RuntimeState.IDLE,
+        get=None, banner=_banner(4, 1.4, False),
+        mode=DetectorActivationMode.OFF,
+        episode_id="get_episode:1", episode_terminal=True,
+        panel_visible=False, collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+    )
+    assert [item.event_type for item in disappeared] == [
+        "result_banner_absence_certificate_created",
+        "post_cycle_clearance_created",
+    ]
+
+
+def test_result_banner_certificate_is_scoped_to_physical_get_episode() -> None:
+    tracker = PostCycleClearanceTracker(CastOpportunityConfig(
+        stable_idle_frames_required=1
+    ))
+    _observe_clearance(
+        tracker, frame=1, timestamp=1.0,
+        previous=RuntimeState.HOOK, current=RuntimeState.GET,
+        get=_get(1, 1.0, True), banner=None,
+        episode_open=True, episode_id="get_episode:1", panel_visible=True,
+    )
+    _observe_clearance(
+        tracker, frame=2, timestamp=1.2,
+        previous=RuntimeState.GET, current=RuntimeState.COLLECT_PENDING,
+        get=_get(2, 1.2, False), banner=_banner(2, 1.2, False),
+        episode_id="get_episode:1", episode_terminal=True,
+        collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+    )
+    certificate = tracker.status(1.2).result_banner_absence_certificate
+    assert certificate is not None
+    assert certificate.originating_get_episode_id == "get_episode:1"
+
+    _observe_clearance(
+        tracker, frame=3, timestamp=2.0,
+        previous=RuntimeState.HOOK, current=RuntimeState.GET,
+        get=_get(3, 2.0, True), banner=None,
+        episode_open=True, episode_id="get_episode:2", panel_visible=True,
+    )
+    status = tracker.status(2.0)
+    assert status.result_banner_absence_certificate is None
+    assert status.result_banner_presence_state == PresenceState.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("foreground_confirmed", "panic_latched"),
+    [(False, False), (True, True)],
+)
+def test_post_collect_clearance_waits_for_focus_and_panic_safety(
+    foreground_confirmed: bool,
+    panic_latched: bool,
+) -> None:
+    tracker = PostCycleClearanceTracker(CastOpportunityConfig(
+        stable_idle_frames_required=1
+    ))
+    _observe_clearance(
+        tracker, frame=1, timestamp=1.0,
+        previous=RuntimeState.HOOK, current=RuntimeState.GET,
+        get=_get(1, 1.0, True), banner=None,
+        episode_open=True, episode_id="get_episode:1", panel_visible=True,
+    )
+    blocked = _observe_clearance(
+        tracker, frame=2, timestamp=1.2,
+        previous=RuntimeState.GET, current=RuntimeState.IDLE,
+        get=_get(2, 1.2, False), banner=_banner(2, 1.2, False),
+        episode_id="get_episode:1", episode_terminal=True,
+        collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+        foreground_confirmed=foreground_confirmed,
+        panic_latched=panic_latched,
+    )
+    assert not any(
+        item.event_type == "post_cycle_clearance_created"
+        for item in blocked
+    )
+    created = _observe_clearance(
+        tracker, frame=3, timestamp=1.4,
+        previous=RuntimeState.IDLE, current=RuntimeState.IDLE,
+        get=None, banner=None, mode=DetectorActivationMode.OFF,
+        episode_id="get_episode:1", episode_terminal=True,
+        collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+        foreground_confirmed=True,
+        panic_latched=False,
+    )
+    assert any(
+        item.event_type == "post_cycle_clearance_created"
+        for item in created
+    )
 
 
 def test_session_132835_deterministic_timeline_yields_one_would_cast() -> None:
@@ -590,7 +719,9 @@ def test_cast_is_one_shot_until_waiting_visual_acknowledgement() -> None:
     )
     assert [item.event_type for item in acknowledged] == ["cast_visual_acknowledged"]
     assert controller.terminal_outcome == CastTerminalOutcome.ACKNOWLEDGED
-    next_attempt, _ = _schedule(controller, 2.0)
+    next_attempt, _ = _schedule(
+        controller, 2.0, clearance_id="no_get_clearance:2"
+    )
     assert next_attempt is not None
     assert next_attempt.action_id == "cast_opportunity:2:CAST"
 
@@ -623,6 +754,8 @@ def test_cast_timeout_is_terminal_and_never_retries_across_sync_cycles() -> None
         "cast_pending_count": 0,
         "cast_late_ack_observed_count": 0,
         "cast_terminal_outcome_counts": {"timeout": 1},
+        "last_source_clearance_id": "no_get_clearance:1",
+        "scheduled_clearance_ids": ["no_get_clearance:1"],
     }
 
 
@@ -747,6 +880,226 @@ def test_high_priority_cast_cancel_is_terminal_and_one_shot() -> None:
     assert controller.terminal_outcome == CastTerminalOutcome.CANCELLED
     assert controller.cancel(timestamp=0.3, reason="duplicate") == ()
     assert _schedule(controller, 1.0)[0] is None
+
+
+def test_session_143013_multi_cycle_consumed_clearance_does_not_block_post_collect() -> None:
+    tracker = PostCycleClearanceTracker(CastOpportunityConfig(
+        clearance_freshness_seconds=4.0,
+        stable_idle_frames_required=2,
+    ))
+    controller = CastOpportunityController(CastOpportunityConfig(
+        visual_ack_timeout_seconds=4.0,
+        stable_idle_frames_required=2,
+    ))
+    deduplicator = WouldFireDeduplicator()
+    cast_request = ActionRequest(
+        ActionIntent.CAST, 0.99, "certified post-cycle clearance"
+    )
+
+    # Cycle 1: no GET, one consumed clearance and one acknowledged CAST.
+    _observe_clearance(
+        tracker, frame=1, timestamp=1.0,
+        previous=RuntimeState.HOOK, current=RuntimeState.RESULT_PENDING,
+        get=_get(1, 1.0, False), banner=_banner(1, 1.0, False),
+        prompt=PromptObservationKind.IDLE_CAST, cycle_id="cycle:0",
+    )
+    _observe_clearance(
+        tracker, frame=2, timestamp=1.2,
+        previous=RuntimeState.RESULT_PENDING, current=RuntimeState.IDLE,
+        get=_get(2, 1.2, False), banner=_banner(2, 1.2, False),
+        prompt=PromptObservationKind.IDLE_CAST, cycle_id="cycle:0",
+    )
+    first_clearance = tracker.current(1.2)
+    assert first_clearance is not None
+    assert first_clearance.clearance_id == "no_get_clearance:1"
+    first_attempt, _ = controller.schedule(
+        timestamp=1.3,
+        clearance_id=first_clearance.clearance_id,
+        runtime_state=RuntimeState.IDLE,
+        prompt_kind=PromptObservationKind.IDLE_CAST,
+        physical_get_episode_open=False,
+    )
+    assert first_attempt is not None
+    assert deduplicator.observe(
+        cast_request,
+        safety_reason="action_emission_disabled",
+        frame_index=2,
+        timestamp=1.3,
+        runtime_state=RuntimeState.IDLE.value,
+        prompt_evidence={"predicted_label": "IDLE_CAST"},
+        specialized_evidence={"get": {"certified_absence": True}},
+        identity_suffix=first_attempt.opportunity_id,
+    )["event_type"] == "WOULD_CAST"
+    assert tracker.consume(first_clearance.clearance_id) is True
+    controller.record_execution(
+        first_attempt, _execution(first_attempt.action_id, 1.4), timestamp=1.4
+    )
+    controller.observe(
+        timestamp=1.6, runtime_state=RuntimeState.CAST_PENDING,
+        prompt_kind=PromptObservationKind.WAITING_IN_PROGRESS,
+        prompt_frame_index=3, prompt_timestamp=1.6,
+    )
+    acknowledged = controller.observe(
+        timestamp=1.8, runtime_state=RuntimeState.CAST_PENDING,
+        prompt_kind=PromptObservationKind.WAITING_IN_PROGRESS,
+        prompt_frame_index=4, prompt_timestamp=1.8,
+    )
+    assert [item.event_type for item in acknowledged] == [
+        "cast_visual_acknowledged"
+    ]
+
+    # Cycle 2 is the real Live shape: HOOK -> GET (no RESULT_PENDING edge).
+    _observe_clearance(
+        tracker, frame=2253, timestamp=102.5296184,
+        previous=RuntimeState.HOOK, current=RuntimeState.GET,
+        get=_get(2253, 102.5296184, True), banner=None,
+        prompt=PromptObservationKind.UNKNOWN,
+        episode_open=True, episode_id="get_episode:1", panel_visible=True,
+        cycle_id="cycle:1",
+    )
+    completed = _observe_clearance(
+        tracker, frame=2278, timestamp=105.7477616,
+        previous=RuntimeState.GET, current=RuntimeState.COLLECT_PENDING,
+        get=_get(2278, 105.7477616, False), banner=None,
+        prompt=PromptObservationKind.UNKNOWN,
+        episode_id="get_episode:1", episode_terminal=True,
+        panel_visible=False, collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+        cycle_id="cycle:1",
+    )
+    assert [item.event_type for item in completed] == [
+        "post_collect_result_banner_confirmation_started"
+    ]
+    assert tracker.post_collect_confirmation_required is True
+    stale_status = tracker.status(105.7477616)
+    assert stale_status.clearance_id is None
+    assert stale_status.previous_consumed_clearance_id == "no_get_clearance:1"
+    assert stale_status.result_banner_presence_state == PresenceState.UNKNOWN
+    assert (
+        stale_status.previous_result_banner_presence_state
+        == PresenceState.ABSENT
+    )
+    assert stale_status.previous_result_banner_evidence_age_ms > 90_000
+
+    first_absent = _observe_clearance(
+        tracker, frame=2286, timestamp=106.4218387,
+        previous=RuntimeState.COLLECT_PENDING,
+        current=RuntimeState.COLLECT_PENDING,
+        get=None, banner=_banner(2286, 106.4218387, False),
+        mode=DetectorActivationMode.OFF,
+        prompt=PromptObservationKind.IDLE_CAST,
+        episode_id="get_episode:1", episode_terminal=True,
+        panel_visible=False, collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+        cycle_id="cycle:1",
+    )
+    assert not any(
+        event.event_type == "post_cycle_clearance_created"
+        for event in first_absent
+    )
+    created = _observe_clearance(
+        tracker, frame=2288, timestamp=106.6260602,
+        previous=RuntimeState.COLLECT_PENDING, current=RuntimeState.IDLE,
+        get=None, banner=_banner(2288, 106.6260602, False),
+        mode=DetectorActivationMode.OFF,
+        prompt=PromptObservationKind.IDLE_CAST,
+        episode_id="get_episode:1", episode_terminal=True,
+        panel_visible=False, collect_acknowledged=True,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+        cycle_id="cycle:1",
+    )
+    assert any(
+        event.event_type == "result_banner_absence_certificate_created"
+        for event in created
+    )
+    assert any(
+        event.event_type == "post_cycle_clearance_created"
+        for event in created
+    )
+    second_clearance = tracker.current(106.6260602)
+    assert second_clearance is not None
+    assert second_clearance.clearance_id == "post_collect_clearance:2"
+    assert second_clearance.get_episode_id == "get_episode:1"
+    second_attempt, _ = controller.schedule(
+        timestamp=106.7,
+        clearance_id=second_clearance.clearance_id,
+        runtime_state=RuntimeState.IDLE,
+        prompt_kind=PromptObservationKind.IDLE_CAST,
+        physical_get_episode_open=False,
+    )
+    assert second_attempt is not None
+    assert second_attempt.opportunity_id == "cast_opportunity:2"
+    assert deduplicator.observe(
+        cast_request,
+        safety_reason="action_emission_disabled",
+        frame_index=2288,
+        timestamp=106.7,
+        runtime_state=RuntimeState.IDLE.value,
+        prompt_evidence={"predicted_label": "IDLE_CAST"},
+        specialized_evidence={"get": {"certified_absence": True}},
+        identity_suffix=second_attempt.opportunity_id,
+    )["event_type"] == "WOULD_CAST"
+    assert tracker.consume(second_clearance.clearance_id) is True
+
+    # Cycle 3: final no-GET clearance remains diagnostic-only.
+    _observe_clearance(
+        tracker, frame=4642, timestamp=207.5583577,
+        previous=RuntimeState.HOOK, current=RuntimeState.RESULT_PENDING,
+        get=_get(4642, 207.5583577, False),
+        banner=_banner(4642, 207.5583577, False),
+        prompt=PromptObservationKind.IDLE_CAST, cycle_id="cycle:2",
+    )
+    _observe_clearance(
+        tracker, frame=4653, timestamp=209.2678587,
+        previous=RuntimeState.RESULT_PENDING, current=RuntimeState.IDLE,
+        get=_get(4653, 209.2678587, False),
+        banner=_banner(4653, 209.2678587, False),
+        prompt=PromptObservationKind.IDLE_CAST, cycle_id="cycle:2",
+    )
+    final_clearance = tracker.current(209.2678587)
+    assert final_clearance is not None
+    assert final_clearance.clearance_id == "no_get_clearance:3"
+    assert tracker.summary()["post_cycle_clearance_count"] == 3
+    assert tracker.summary()["post_cycle_clearance_counts_by_source"] == {
+        "no_get_result": 2,
+        "collected_get_visual_ack": 1,
+    }
+    assert controller.summary()["cast_opportunity_count"] == 2
+    assert deduplicator.unique_events == {"WOULD_CAST": 2}
+
+
+def test_terminal_cast_opportunity_only_blocks_its_source_clearance() -> None:
+    controller = CastOpportunityController(CastOpportunityConfig(
+        visual_ack_timeout_seconds=1.0,
+        stable_idle_frames_required=1,
+    ))
+    first, _ = controller.schedule(
+        timestamp=0.0, clearance_id="no_get_clearance:1",
+        runtime_state=RuntimeState.IDLE,
+        prompt_kind=PromptObservationKind.IDLE_CAST,
+        physical_get_episode_open=False,
+    )
+    assert first is not None
+    controller.record_execution(first, _execution(first.action_id, 0.0), timestamp=0.0)
+    controller.observe(
+        timestamp=1.0, runtime_state=RuntimeState.CAST_PENDING,
+        prompt_kind=PromptObservationKind.IDLE_CAST,
+        prompt_frame_index=1, prompt_timestamp=1.0,
+    )
+    assert controller.schedule(
+        timestamp=1.1, clearance_id="no_get_clearance:1",
+        runtime_state=RuntimeState.IDLE,
+        prompt_kind=PromptObservationKind.IDLE_CAST,
+        physical_get_episode_open=False,
+    )[0] is None
+    second, _ = controller.schedule(
+        timestamp=1.1, clearance_id="post_collect_clearance:2",
+        runtime_state=RuntimeState.IDLE,
+        prompt_kind=PromptObservationKind.IDLE_CAST,
+        physical_get_episode_open=False,
+    )
+    assert second is not None
+    assert second.opportunity_id == "cast_opportunity:2"
 
 
 def test_rejected_or_partial_cast_is_never_retried() -> None:

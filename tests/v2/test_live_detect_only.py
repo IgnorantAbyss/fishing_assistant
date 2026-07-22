@@ -562,6 +562,93 @@ def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
     assert all("result_banner_presence_state" in item for item in blocked)
 
 
+def test_post_collect_window_runs_fresh_result_banner_confirmation_burst(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class CountingAbsentBanner:
+        def __init__(self):
+            self.calls = []
+
+        def observe(self, _frame, context):
+            self.calls.append((context.frame_index, context.timestamp))
+            return ResultBannerObservation(
+                False, 0.99, context.frame_index, context.timestamp,
+                evidence={"reason": "fresh_post_collect_absent"},
+            )
+
+    class NoInputSink:
+        def poll_panic(self):
+            return False
+
+        def apply(self, _request, _context):
+            raise AssertionError("confirmation burst must not emit input")
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["CAST", "COLLECT"],
+                "panic_triggered": False,
+            }
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path, capture, FakeClock(), duration_seconds=1.0,
+        emit_actions=True, action_sink_name="sendinput",
+        action_allowlist="CAST,COLLECT",
+        action_sink_factory=lambda **_kwargs: NoInputSink(),
+    )
+    banner = CountingAbsentBanner()
+    runtime.result_banner_observer = banner
+    runtime.fsm.force_state(RuntimeState.IDLE, 0.0, "test_post_collect_idle")
+    runtime.cast_clearance.observe(
+        timestamp=-1.0,
+        previous_state=RuntimeState.HOOK,
+        current_state=RuntimeState.GET,
+        prompt_kind=PromptObservationKind.UNKNOWN,
+        prompt_frame_index=1,
+        get_observation=GetObservation(True, 0.99, 1, -1.0),
+        get_activation_mode=DetectorActivationMode.ACTIVE,
+        result_banner=None,
+        physical_get_episode_open=True,
+        physical_get_episode_id="get_episode:1",
+        physical_get_panel_visible=True,
+    )
+    runtime.cast_clearance.observe(
+        timestamp=-0.5,
+        previous_state=RuntimeState.GET,
+        current_state=RuntimeState.COLLECT_PENDING,
+        prompt_kind=PromptObservationKind.UNKNOWN,
+        prompt_frame_index=2,
+        get_observation=GetObservation(False, 0.99, 2, -0.5),
+        get_activation_mode=DetectorActivationMode.ACTIVE,
+        result_banner=None,
+        physical_get_episode_open=False,
+        physical_get_episode_id="get_episode:1",
+        physical_get_episode_terminal=True,
+        physical_get_panel_visible=False,
+        collect_visual_acknowledged=True,
+        collect_complete_emission_count=1,
+        collect_terminal_reason="qualified_get_panel_stably_disappeared",
+    )
+    assert runtime.cast_clearance.post_collect_confirmation_required is True
+
+    summary = runtime.run(max_frames=5)
+    assert len(banner.calls) >= 2
+    certificate = runtime.cast_clearance.status(
+        banner.calls[-1][1]
+    ).result_banner_absence_certificate
+    assert certificate is not None
+    assert certificate.source == "post_collect_confirmation"
+    assert certificate.originating_get_episode_id == "get_episode:1"
+    assert summary["actions_applied"] == 0
+
+
 def test_diagnostic_mode_records_video_and_roi_without_would_fire(
     tmp_path: Path, supported_frame: np.ndarray
 ) -> None:

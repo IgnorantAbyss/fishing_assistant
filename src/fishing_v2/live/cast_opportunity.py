@@ -82,6 +82,15 @@ class PostCycleClearance:
 
 
 @dataclass(frozen=True)
+class ResultBannerAbsenceCertificate:
+    source: str
+    observed_at: float
+    expires_at: float
+    confirmation_frames: int
+    originating_get_episode_id: str
+
+
+@dataclass(frozen=True)
 class PostCycleClearanceStatus:
     tracking: bool
     stable_idle_frames: int
@@ -90,10 +99,15 @@ class PostCycleClearanceStatus:
     get_absence_source: str | None
     result_banner_presence_state: PresenceState
     result_banner_evidence_age_ms: float | None
+    previous_result_banner_presence_state: PresenceState
+    previous_result_banner_evidence_age_ms: float | None
+    result_banner_absence_certificate: ResultBannerAbsenceCertificate | None
     clearance_id: str | None
+    clearance_source: str | None
     clearance_available: bool
     clearance_consumed: bool
     clearance_expired: bool
+    previous_consumed_clearance_id: str | None
 
 
 class PostCycleClearanceTracker:
@@ -111,16 +125,30 @@ class PostCycleClearanceTracker:
         self._qualified_get_seen = False
         self._get_episode_id: str | None = None
         self._collect_visual_acknowledged = False
+        self._collect_acknowledged_at: float | None = None
         self._collect_terminal_reason: str | None = None
+        self._get_disappearance_at: float | None = None
         self._runtime_cycle_id: str | None = None
         self._banner_presence = PresenceState.UNKNOWN
         self._banner_evidence_at: float | None = None
+        self._previous_banner_presence = PresenceState.UNKNOWN
+        self._previous_banner_evidence_at: float | None = None
+        self._banner_absent_frames = 0
+        self._last_banner_frame_index: int | None = None
+        self._banner_absence_certificate: (
+            ResultBannerAbsenceCertificate | None
+        ) = None
         self._clearance: PostCycleClearance | None = None
         self._clearance_expired = False
         self._clearance_count = 0
         self._clearance_counts_by_source: dict[str, int] = {}
+        self._consumed_clearance_ids: set[str] = set()
+        self._last_consumed_clearance_id: str | None = None
 
     def _start_result_window(self) -> None:
+        if self._banner_presence != PresenceState.UNKNOWN:
+            self._previous_banner_presence = self._banner_presence
+            self._previous_banner_evidence_at = self._banner_evidence_at
         self._tracking = True
         self._stable_idle_frames = 0
         self._last_prompt_frame_index = None
@@ -130,12 +158,28 @@ class PostCycleClearanceTracker:
         self._qualified_get_seen = False
         self._get_episode_id = None
         self._collect_visual_acknowledged = False
+        self._collect_acknowledged_at = None
         self._collect_terminal_reason = None
+        self._get_disappearance_at = None
         self._runtime_cycle_id = None
         self._banner_presence = PresenceState.UNKNOWN
         self._banner_evidence_at = None
+        self._banner_absent_frames = 0
+        self._last_banner_frame_index = None
+        self._banner_absence_certificate = None
         self._clearance = None
         self._clearance_expired = False
+
+    @property
+    def post_collect_confirmation_required(self) -> bool:
+        return bool(
+            self._tracking
+            and self._qualified_get_seen
+            and self._get_episode_id is not None
+            and self._get_disappearance_at is not None
+            and self._banner_absence_certificate is None
+            and self._clearance is None
+        )
 
     @staticmethod
     def _age_ms(timestamp: float, observed_at: float | None) -> float | None:
@@ -163,8 +207,15 @@ class PostCycleClearanceTracker:
         collect_terminal_reason: str | None = None,
         runtime_cycle_id: str | None = None,
         result_banner_hold_expired: bool = False,
+        foreground_confirmed: bool = True,
+        panic_latched: bool = False,
     ) -> tuple[CastOpportunityEvent, ...]:
         events: list[CastOpportunityEvent] = []
+        new_physical_get_episode = bool(
+            physical_get_episode_id is not None
+            and physical_get_episode_id != self._get_episode_id
+            and (physical_get_episode_open or physical_get_panel_visible)
+        )
         if (
             current_state == RuntimeState.RESULT_PENDING
             and previous_state != RuntimeState.RESULT_PENDING
@@ -175,6 +226,12 @@ class PostCycleClearanceTracker:
             and current_state in {RuntimeState.RESULT_PENDING, RuntimeState.IDLE}
         ):
             self._start_result_window()
+        elif new_physical_get_episode:
+            # GET can legally arrive directly from HOOK. That path has no
+            # RESULT_PENDING edge, so the physical episode itself starts a new
+            # post-cycle identity window and invalidates all prior evidence.
+            self._start_result_window()
+            self._get_episode_id = physical_get_episode_id
 
         if (
             self._clearance is not None
@@ -197,6 +254,28 @@ class PostCycleClearanceTracker:
                     events.append(CastOpportunityEvent(
                         "no_get_clearance_expired", payload
                     ))
+
+        if (
+            self._tracking
+            and self._clearance is None
+            and self._banner_absence_certificate is not None
+            and float(timestamp)
+            > self._banner_absence_certificate.expires_at
+        ):
+            expired_certificate = self._banner_absence_certificate
+            self._banner_absence_certificate = None
+            self._banner_absent_frames = 0
+            events.append(CastOpportunityEvent(
+                "result_banner_absence_certificate_expired",
+                {
+                    "source": expired_certificate.source,
+                    "observed_at": expired_certificate.observed_at,
+                    "expires_at": expired_certificate.expires_at,
+                    "originating_get_episode_id": (
+                        expired_certificate.originating_get_episode_id
+                    ),
+                },
+            ))
 
         if not self._tracking:
             return tuple(events)
@@ -231,6 +310,26 @@ class PostCycleClearanceTracker:
         if physical_get_episode_id is not None:
             self._get_episode_id = physical_get_episode_id
 
+        if (
+            self._qualified_get_seen
+            and self._get_episode_id is not None
+            and not physical_get_panel_visible
+            and (
+                get_observation is not None
+                and not get_observation.detected
+            )
+            and self._get_disappearance_at is None
+        ):
+            self._get_disappearance_at = float(timestamp)
+            events.append(CastOpportunityEvent(
+                "post_collect_result_banner_confirmation_started",
+                {
+                    "get_episode_id": self._get_episode_id,
+                    "started_at": float(timestamp),
+                    "reason": "qualified_get_panel_disappeared",
+                },
+            ))
+
         collected_get_complete = bool(
             self._qualified_get_seen
             and not self._collect_visual_acknowledged
@@ -247,6 +346,7 @@ class PostCycleClearanceTracker:
             # This is a fresh visual certificate produced by the completed
             # physical episode. Detector OFF/None never reaches this branch.
             self._collect_visual_acknowledged = True
+            self._collect_acknowledged_at = float(timestamp)
             self._collect_terminal_reason = collect_terminal_reason
             self._get_presence = PresenceState.ABSENT
             self._get_evidence_at = float(timestamp)
@@ -257,7 +357,64 @@ class PostCycleClearanceTracker:
                 PresenceState.PRESENT
                 if result_banner.detected else PresenceState.ABSENT
             )
-            self._banner_evidence_at = float(timestamp)
+            self._banner_evidence_at = float(result_banner.timestamp)
+            new_banner_frame = (
+                result_banner.frame_index != self._last_banner_frame_index
+            )
+            if new_banner_frame:
+                self._last_banner_frame_index = result_banner.frame_index
+                certificate_eligible = bool(
+                    self._collect_visual_acknowledged
+                    and self._collect_acknowledged_at is not None
+                    and self._get_disappearance_at is not None
+                    and result_banner.timestamp
+                    >= self._collect_acknowledged_at
+                    and result_banner.timestamp >= self._get_disappearance_at
+                    and self._get_episode_id is not None
+                )
+                if result_banner.detected:
+                    self._banner_absent_frames = 0
+                    self._banner_absence_certificate = None
+                elif certificate_eligible:
+                    self._banner_absent_frames += 1
+                    if (
+                        self._banner_absent_frames
+                        >= self.config.stable_idle_frames_required
+                        and self._banner_absence_certificate is None
+                    ):
+                        self._banner_absence_certificate = (
+                            ResultBannerAbsenceCertificate(
+                                source="post_collect_confirmation",
+                                observed_at=float(result_banner.timestamp),
+                                expires_at=(
+                                    float(result_banner.timestamp)
+                                    + self.config.clearance_freshness_seconds
+                                ),
+                                confirmation_frames=self._banner_absent_frames,
+                                originating_get_episode_id=str(
+                                    self._get_episode_id
+                                ),
+                            )
+                        )
+                        certificate = self._banner_absence_certificate
+                        events.append(CastOpportunityEvent(
+                            "result_banner_absence_certificate_created",
+                            {
+                                "source": certificate.source,
+                                "observed_at": certificate.observed_at,
+                                "expires_at": certificate.expires_at,
+                                "confirmation_frames": (
+                                    certificate.confirmation_frames
+                                ),
+                                "originating_get_episode_id": (
+                                    certificate.originating_get_episode_id
+                                ),
+                            },
+                        ))
+                else:
+                    # Explicit negative evidence from before COLLECT visual
+                    # acknowledgement cannot certify this physical episode.
+                    self._banner_absent_frames = 0
 
         if physical_get_episode_open or physical_get_panel_visible:
             self._clearance = None
@@ -266,6 +423,8 @@ class PostCycleClearanceTracker:
         source = self._eligible_source(
             timestamp,
             result_banner_hold_expired=result_banner_hold_expired,
+            foreground_confirmed=foreground_confirmed,
+            panic_latched=panic_latched,
         )
         if current_state == RuntimeState.IDLE and source is not None:
             self._sequence += 1
@@ -329,6 +488,8 @@ class PostCycleClearanceTracker:
         timestamp: float,
         *,
         result_banner_hold_expired: bool,
+        foreground_confirmed: bool,
+        panic_latched: bool,
     ) -> str | None:
         freshness_ms = self.config.clearance_freshness_seconds * 1000.0
         common = bool(
@@ -340,15 +501,19 @@ class PostCycleClearanceTracker:
         )
         if not common:
             return None
+        if not foreground_confirmed or panic_latched:
+            return None
         if self._qualified_get_seen:
+            certificate = self._banner_absence_certificate
             if (
                 self._collect_visual_acknowledged
                 and self._collect_terminal_reason
                 == "qualified_get_panel_stably_disappeared"
-                and (
-                    self._banner_presence == PresenceState.ABSENT
-                    or result_banner_hold_expired
-                )
+                and certificate is not None
+                and certificate.originating_get_episode_id
+                == self._get_episode_id
+                and float(timestamp) <= certificate.expires_at
+                and self._banner_presence == PresenceState.ABSENT
             ):
                 return "collected_get_visual_ack"
             return None
@@ -380,6 +545,8 @@ class PostCycleClearanceTracker:
         self._clearance = replace(
             self._clearance, consumed=True, terminal=True
         )
+        self._consumed_clearance_ids.add(clearance_id)
+        self._last_consumed_clearance_id = clearance_id
         return True
 
     def consume_with_events(
@@ -441,10 +608,23 @@ class PostCycleClearanceTracker:
             result_banner_evidence_age_ms=self._age_ms(
                 timestamp, self._banner_evidence_at
             ),
+            previous_result_banner_presence_state=(
+                self._previous_banner_presence
+            ),
+            previous_result_banner_evidence_age_ms=self._age_ms(
+                timestamp, self._previous_banner_evidence_at
+            ),
+            result_banner_absence_certificate=(
+                self._banner_absence_certificate
+            ),
             clearance_id=clearance.clearance_id if clearance else None,
+            clearance_source=clearance.source if clearance else None,
             clearance_available=available,
             clearance_consumed=bool(clearance and clearance.consumed),
             clearance_expired=expired or self._clearance_expired,
+            previous_consumed_clearance_id=(
+                self._last_consumed_clearance_id
+            ),
         )
 
     def summary(self) -> dict[str, Any]:
@@ -499,6 +679,8 @@ class CastOpportunityController:
         self._emission_failed_count = 0
         self._late_ack_observed_count = 0
         self._terminal_outcome_counts: dict[str, int] = {}
+        self._source_clearance_id: str | None = None
+        self._scheduled_clearance_ids: set[str] = set()
 
     @property
     def opportunity_id(self) -> str | None:
@@ -520,6 +702,16 @@ class CastOpportunityController:
     def visual_ack_deadline(self) -> float | None:
         return self._deadline
 
+    @property
+    def source_clearance_id(self) -> str | None:
+        return self._source_clearance_id
+
+    def has_scheduled_clearance(self, clearance_id: str | None) -> bool:
+        return bool(
+            clearance_id is not None
+            and clearance_id in self._scheduled_clearance_ids
+        )
+
     def schedule(
         self,
         *,
@@ -536,10 +728,12 @@ class CastOpportunityController:
             or physical_get_episode_open
         ):
             return None, ()
-        if self._open:
+        if self._open or clearance_id in self._scheduled_clearance_ids:
             return None, ()
         self._sequence += 1
         self._opportunity_id = f"cast_opportunity:{self._sequence}"
+        self._source_clearance_id = clearance_id
+        self._scheduled_clearance_ids.add(clearance_id)
         self._open = True
         self._attempted = True
         self._input_completed = False
@@ -562,6 +756,7 @@ class CastOpportunityController:
             "opportunity_id": self._opportunity_id,
             "action_id": attempt.action_id,
             "clearance_id": clearance_id,
+            "source_clearance_id": clearance_id,
             "visual_ack_timeout_seconds": self.config.visual_ack_timeout_seconds,
             "os_input_emitted": False,
             "cast_visual_acknowledged": False,
@@ -596,6 +791,7 @@ class CastOpportunityController:
             # A rejected, zero-event, or partial attempt is terminal. CAST never
             # retries automatically because a partial physical input is ambiguous.
             self._terminal = True
+            self._open = False
             self._terminal_outcome = CastTerminalOutcome.EMISSION_FAILED
             self._emission_failed_count += 1
             self._count_terminal(CastTerminalOutcome.EMISSION_FAILED)
@@ -622,7 +818,10 @@ class CastOpportunityController:
         prompt_frame_index: int | None = None,
         prompt_timestamp: float | None = None,
     ) -> tuple[CastOpportunityEvent, ...]:
-        if not self._open or not self._input_completed:
+        if not self._input_completed or (
+            not self._open
+            and self._terminal_outcome != CastTerminalOutcome.TIMEOUT
+        ):
             return ()
 
         evidence_at = (
@@ -701,6 +900,7 @@ class CastOpportunityController:
         ):
             self._terminal = True
             self._terminal_outcome = CastTerminalOutcome.TIMEOUT
+            self._open = False
             self._timeout_count += 1
             self._count_terminal(CastTerminalOutcome.TIMEOUT)
             return (CastOpportunityEvent("cast_visual_timeout", {
@@ -717,6 +917,7 @@ class CastOpportunityController:
         if not self._open or self._terminal:
             return ()
         self._terminal = True
+        self._open = False
         self._terminal_outcome = CastTerminalOutcome.CANCELLED
         self._cancelled_count += 1
         self._count_terminal(CastTerminalOutcome.CANCELLED)
@@ -749,4 +950,6 @@ class CastOpportunityController:
             "cast_pending_count": pending_count,
             "cast_late_ack_observed_count": self._late_ack_observed_count,
             "cast_terminal_outcome_counts": dict(self._terminal_outcome_counts),
+            "last_source_clearance_id": self._source_clearance_id,
+            "scheduled_clearance_ids": sorted(self._scheduled_clearance_ids),
         }
