@@ -192,10 +192,48 @@ def test_waiting_ignores_idle_prompt_instead_of_leaving_state() -> None:
     assert result.next_state == RuntimeState.WAITING
 
 
-def test_persistent_illegal_transition_requires_sync() -> None:
+def test_cast_pending_idle_prompt_is_visual_grace_until_deadline() -> None:
     fsm = FishingFSM(CONFIG, initial_state=RuntimeState.CAST_PENDING)
-    fsm.advance(_evidence(RuntimeState.IDLE), 0.1, _bundle())
-    result = fsm.advance(_evidence(RuntimeState.IDLE, frame=2), 0.7, _bundle(2))
+    first = fsm.advance(
+        _evidence(RuntimeState.IDLE), 0.1,
+        _bundle(prompt=PromptObservationKind.IDLE_CAST),
+    )
+    second = fsm.advance(
+        _evidence(RuntimeState.IDLE, frame=2), 0.7,
+        _bundle(2, prompt=PromptObservationKind.IDLE_CAST),
+    )
+    assert first.next_state == RuntimeState.CAST_PENDING
+    assert second.next_state == RuntimeState.CAST_PENDING
+    assert second.transition_reason == "cast_pending_visual_ack_grace"
+
+
+def test_live_cast_pending_idle_frame_is_tolerated_for_full_three_point_five_seconds() -> None:
+    config = FSMConfig(
+        stable_frames=2,
+        cast_pending_timeout_sec=4.0,
+        sync_lost_timeout_sec=2.0,
+    )
+    fsm = FishingFSM(config, initial_state=RuntimeState.CAST_PENDING)
+    for frame, timestamp in enumerate((0.2, 1.0, 2.2, 3.5), start=1):
+        result = fsm.advance(
+            _evidence(RuntimeState.IDLE, frame=frame),
+            timestamp,
+            _bundle(frame, prompt=PromptObservationKind.IDLE_CAST),
+        )
+        assert result.next_state == RuntimeState.CAST_PENDING
+        assert result.transition_reason == "cast_pending_visual_ack_grace"
+
+
+def test_cast_pending_idle_grace_does_not_hide_high_priority_illegal_evidence() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.CAST_PENDING)
+    fsm.advance(
+        _evidence(RuntimeState.PRESS, conflict=True), 0.1,
+        _bundle(prompt=PromptObservationKind.IDLE_CAST, press=True),
+    )
+    result = fsm.advance(
+        _evidence(RuntimeState.PRESS, conflict=True, frame=2), 0.7,
+        _bundle(2, prompt=PromptObservationKind.IDLE_CAST, press=True),
+    )
     assert result.next_state == RuntimeState.SYNC_REQUIRED
 
 

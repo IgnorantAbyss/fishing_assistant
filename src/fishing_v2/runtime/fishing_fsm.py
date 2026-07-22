@@ -516,6 +516,24 @@ class FishingFSM:
                     "recorded_press_result_prompt_acknowledgement",
                     visual_acknowledgement=prompt.value,
                 )
+
+        # A completed physical CAST has its own bounded visual acknowledgement
+        # window. The old IDLE_CAST frame commonly remains on screen during the
+        # cast animation and is not an illegal transition by itself. Strong
+        # specialized evidence still bypasses this grace and follows the normal
+        # conflict/safety path below.
+        if (
+            self.state == RuntimeState.CAST_PENDING
+            and self._timeout(timestamp) < self.config.cast_pending_timeout_sec
+            and prompt == PromptObservationKind.IDLE_CAST
+            and evidence.recommended_state in {None, RuntimeState.IDLE}
+            and not evidence.has_conflict
+        ):
+            self._candidate = None
+            self._candidate_frames = 0
+            self._conflict_since = None
+            return self._held(previous, "cast_pending_visual_ack_grace")
+
         timeout_limits = {
             RuntimeState.CAST_PENDING: self.config.cast_pending_timeout_sec,
             RuntimeState.HOOK_PENDING: self.config.hook_pending_timeout_sec,

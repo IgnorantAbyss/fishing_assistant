@@ -114,6 +114,14 @@ class CollectRetryController:
     def visual_acknowledged(self) -> bool:
         return self._visual_acknowledged
 
+    @property
+    def terminal_reason(self) -> str | None:
+        return self._terminal_reason
+
+    @property
+    def complete_emission_count(self) -> int:
+        return self._complete_emission_count
+
     def _elapsed(self, timestamp: float) -> float:
         appeared_at = float(timestamp) if self._appeared_at is None else self._appeared_at
         return max(0.0, float(timestamp) - appeared_at)

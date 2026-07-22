@@ -570,6 +570,7 @@ class LiveDetectOnlyRuntime:
             "stable_idle_frames": status.stable_idle_frames,
             "get_presence_state": status.get_presence_state.value,
             "get_evidence_age_ms": status.get_evidence_age_ms,
+            "get_absence_source": status.get_absence_source,
             "result_banner_presence_state": (
                 status.result_banner_presence_state.value
             ),
@@ -1075,6 +1076,62 @@ class LiveDetectOnlyRuntime:
                             "action_applied": False,
                         })
                     self._foreground_unavailable_event_active = foreground_unavailable
+
+                    cast_tracking_enabled = bool(
+                        self.action_sink is not None
+                        and ActionIntent.CAST in self.action_allowlist
+                    )
+                    if cast_tracking_enabled:
+                        cast_visual_events = self.cast_opportunity.observe(
+                            timestamp=elapsed,
+                            runtime_state=self.fsm.state,
+                            prompt_kind=(prompt.kind if prompt is not None else None),
+                            prompt_frame_index=(
+                                prompt.frame_index if prompt is not None else None
+                            ),
+                            prompt_timestamp=(
+                                prompt.timestamp if prompt is not None else None
+                            ),
+                        )
+                        acknowledged = any(
+                            item.event_type == "cast_visual_acknowledged"
+                            for item in cast_visual_events
+                        )
+                        timed_out = any(
+                            item.event_type == "cast_visual_timeout"
+                            for item in cast_visual_events
+                        )
+                        if acknowledged:
+                            if self.fsm.state == RuntimeState.SYNC_REQUIRED:
+                                transition_results.append(
+                                    self.fsm.recover_from_sync_required(
+                                        RuntimeState.WAITING,
+                                        elapsed,
+                                        "cast_visual_acknowledged",
+                                    )
+                                )
+                            elif self.fsm.state == RuntimeState.CAST_PENDING:
+                                transition_results.append(self.fsm.force_state(
+                                    RuntimeState.WAITING,
+                                    elapsed,
+                                    "cast_visual_acknowledged",
+                                ))
+                        elif (
+                            timed_out
+                            and self.fsm.state != RuntimeState.SYNC_REQUIRED
+                        ):
+                            transition_results.append(self.fsm.force_state(
+                                RuntimeState.SYNC_REQUIRED,
+                                elapsed,
+                                "cast_visual_timeout",
+                            ))
+                        self._log_cast_events(
+                            cast_visual_events,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            runtime_state=self.fsm.state.value,
+                        )
+
                     last_result = self.controller.process(
                         raw_bundle,
                         foreground=foreground,
@@ -1092,11 +1149,39 @@ class LiveDetectOnlyRuntime:
                         and ActionIntent.COLLECT in self.action_allowlist
                     )
                     cast_opportunity_enabled = bool(
-                        self.action_sink is not None
-                        and ActionIntent.CAST in self.action_allowlist
+                        cast_tracking_enabled
                     )
                     qualified_get = last_result.qualified.bundle.get
                     qualified_banner = last_result.qualified.bundle.result_banner
+                    if (
+                        cast_opportunity_enabled
+                        and self.cast_opportunity.waiting_for_acknowledgement
+                    ):
+                        qualified_hook_for_cast = last_result.qualified.bundle.hook
+                        qualified_press_for_cast = last_result.qualified.bundle.press
+                        cast_cancel_reason = None
+                        if qualified_get is not None and qualified_get.detected:
+                            cast_cancel_reason = "qualified_get_during_cast_pending"
+                        elif (
+                            qualified_hook_for_cast is not None
+                            and qualified_hook_for_cast.detected
+                        ):
+                            cast_cancel_reason = "qualified_hook_during_cast_pending"
+                        elif (
+                            qualified_press_for_cast is not None
+                            and qualified_press_for_cast.detected
+                        ):
+                            cast_cancel_reason = "qualified_press_during_cast_pending"
+                        if cast_cancel_reason is not None:
+                            self._log_cast_events(
+                                self.cast_opportunity.cancel(
+                                    timestamp=elapsed,
+                                    reason=cast_cancel_reason,
+                                ),
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                runtime_state=self.fsm.state.value,
+                            )
                     if collect_retry_enabled:
                         get_confirmation_frames = int(
                             qualified_get.evidence.get("get_confirmation_frames", 0)
@@ -1167,21 +1252,30 @@ class LiveDetectOnlyRuntime:
                             physical_get_episode_open=(
                                 self.collect_retry.episode_open
                             ),
+                            physical_get_episode_id=(
+                                self.collect_retry.physical_episode_id
+                            ),
+                            physical_get_episode_terminal=(
+                                self.collect_retry.episode_terminal
+                            ),
+                            physical_get_panel_visible=(
+                                self.collect_retry.panel_visible
+                            ),
+                            collect_visual_acknowledged=(
+                                self.collect_retry.visual_acknowledged
+                            ),
+                            collect_complete_emission_count=(
+                                self.collect_retry.complete_emission_count
+                            ),
+                            collect_terminal_reason=(
+                                self.collect_retry.terminal_reason
+                            ),
+                            runtime_cycle_id=(
+                                f"cycle:{self.deduplicator.cycle_id}"
+                            ),
                         )
                         self._log_cast_events(
                             clearance_events,
-                            timestamp=elapsed,
-                            frame_index=captured,
-                            runtime_state=self.fsm.state.value,
-                        )
-                        self._log_cast_events(
-                            self.cast_opportunity.observe(
-                                timestamp=elapsed,
-                                runtime_state=self.fsm.state,
-                                prompt_kind=(
-                                    prompt.kind if prompt is not None else None
-                                ),
-                            ),
                             timestamp=elapsed,
                             frame_index=captured,
                             runtime_state=self.fsm.state.value,
@@ -1224,7 +1318,10 @@ class LiveDetectOnlyRuntime:
                             "duration_seconds": 0.0,
                             "rejection_reason": "fresh_window_after_sync_required",
                         })
-                    elif processing_from_sync_required:
+                    elif (
+                        processing_from_sync_required
+                        and self.fsm.state == RuntimeState.SYNC_REQUIRED
+                    ):
                         recovery = self.recovery_synchronizer.observe_recovery(
                             last_result.qualified,
                             has_conflict=last_result.evidence.has_conflict,
@@ -1545,11 +1642,21 @@ class LiveDetectOnlyRuntime:
                                     ),
                                 )
                             )
-                            if cast_attempt is not None and not self.cast_clearance.consume(
-                                cast_attempt.clearance_id
-                            ):
-                                raise RuntimeError(
-                                    "CAST opportunity consumed an invalid clearance"
+                            if cast_attempt is not None:
+                                consumed, consume_events = (
+                                    self.cast_clearance.consume_with_events(
+                                        cast_attempt.clearance_id
+                                    )
+                                )
+                                if not consumed:
+                                    raise RuntimeError(
+                                        "CAST opportunity consumed an invalid clearance"
+                                    )
+                                self._log_cast_events(
+                                    consume_events,
+                                    timestamp=elapsed,
+                                    frame_index=captured,
+                                    runtime_state=self.fsm.state.value,
                                 )
                             self._log_cast_events(
                                 cast_schedule_events,
