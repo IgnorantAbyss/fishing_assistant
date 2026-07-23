@@ -296,6 +296,8 @@ def test_explicit_sendinput_mode_initializes_only_after_valid_target_preflight(
 
     capture = MockCapture(supported_frame, diagnostics={
         "hwnd": 4242,
+        "window_title_prefix": "黑色沙漠",
+        "window_resolution_mode": "process_name",
         "window_title": "黑色沙漠 - 525411",
         "process": "BlackDesert64",
         "process_id": 99,
@@ -311,6 +313,8 @@ def test_explicit_sendinput_mode_initializes_only_after_valid_target_preflight(
     assert len(created) == 1
     assert created[0].kwargs["target_hwnd"] == 4242
     assert created[0].kwargs["expected_title"] == "黑色沙漠 - 525411"
+    assert created[0].kwargs["expected_title_prefix"] == "黑色沙漠"
+    assert created[0].kwargs["window_resolution_mode"] == "process_name"
     assert created[0].kwargs["expected_process_id"] == 99
     assert created[0].apply_calls == []
     assert summary["action_sink_type"] == "sendinput"

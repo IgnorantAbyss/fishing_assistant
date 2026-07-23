@@ -1,10 +1,12 @@
 # Fishing Assistant
 
-This project is a local, screenshot-only helper for recognising a fishing mini-game UI. It does not read game memory, inspect packets, inject into a process, or bypass anti-cheat measures.
+This project is a local, screenshot-based helper for recognising a fishing mini-game UI. It does not read game memory, inspect packets, inject into a process, or bypass anti-cheat measures.
 
 ## Scope
 
-The project currently performs offline detection on existing image files only. It contains no live screen capture, assist mode, or keyboard input code.
+The project supports offline/replay analysis and an explicitly invoked guarded
+Live runtime. Real input remains opt-in, foreground-only, allowlisted, and
+fail-closed; tests and recorded-observation modes never emit input.
 
 ## Setup
 
@@ -98,6 +100,42 @@ python tools\replay_summary.py --session assets\replay\sessions\session_YYYYMMDD
 ```
 
 Each replay session contains a `manifest.json`, `frames/`, `replay_results.csv`, and `replay_report.md`. Replay sessions and raw captures are ignored by Git; only the implementation and tests are tracked.
+
+## Live window targeting
+
+The Live runtime can resolve the supported borderless game window by executable
+basename and an optional title prefix. Resolution succeeds only when exactly one
+visible, non-minimized top-level window has a non-empty title and non-zero client
+area. The resolved HWND and PID remain fixed for the session; the runtime never
+switches to another window automatically.
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_live_detect_only.py `
+  --process-name BlackDesert64 `
+  --window-title-prefix "黑色沙漠" `
+  --capture-backend mss-region `
+  --duration-seconds 600 `
+  --evidence-mode diagnostic `
+  --max-completed-cycles 3 `
+  --no-overlay `
+  --emit-actions true `
+  --action-sink sendinput `
+  --action-allowlist CAST,COLLECT `
+  --panic-key F12
+```
+
+The existing exact-title mode remains available as an explicit override:
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_live_detect_only.py `
+  --window-title "黑色沙漠 - 525411" `
+  --capture-backend mss-region `
+  --duration-seconds 600 `
+  --evidence-mode diagnostic `
+  --max-completed-cycles 3 `
+  --no-overlay `
+  --emit-actions false
+```
 
 ## Replay labelling and dataset preparation
 

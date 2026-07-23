@@ -80,6 +80,9 @@ class WindowsGraphicsCaptureSession:
         window_title: str,
         expected_process_name: str = EXPECTED_GAME_PROCESS,
         expected_client_size: tuple[int, int] = EXPECTED_CLIENT_SIZE,
+        resolved_window: WindowInfo | None = None,
+        expected_title_prefix: str | None = None,
+        window_resolution_mode: str = "exact_title",
         provider_factory: Callable[[int], HWNDCaptureProvider] = _unavailable_wgc_provider,
         window_lookup: Callable[..., WindowInfo] = resolve_exact_window,
         window_inspector: Callable[..., WindowInfo] = inspect_window_handle,
@@ -87,6 +90,9 @@ class WindowsGraphicsCaptureSession:
         self.window_title = window_title
         self.expected_process_name = expected_process_name
         self.expected_client_size = expected_client_size
+        self._resolved_window = resolved_window
+        self.expected_title_prefix = expected_title_prefix
+        self.window_resolution_mode = window_resolution_mode
         self._provider_factory = provider_factory
         self._window_lookup = window_lookup
         self._window_inspector = window_inspector
@@ -104,9 +110,26 @@ class WindowsGraphicsCaptureSession:
     def open(self) -> WindowInfo:
         if self._provider is not None:
             raise CaptureBackendError("Capture session is already open")
-        info = self._window_lookup(
-            self.window_title, expected_process_name=self.expected_process_name
-        )
+        if self._resolved_window is not None:
+            info = self._window_inspector(
+                self._resolved_window.window_handle,
+                expected_title=(
+                    None
+                    if self.window_resolution_mode == "process_name"
+                    else self._resolved_window.window_title
+                ),
+                expected_title_prefix=self.expected_title_prefix,
+                require_non_empty_title=(
+                    self.window_resolution_mode == "process_name"
+                ),
+                expected_process_name=self.expected_process_name,
+                expected_process_id=self._resolved_window.process_id,
+            )
+        else:
+            info = self._window_lookup(
+                self.window_title,
+                expected_process_name=self.expected_process_name,
+            )
         client_size = (info.client_region.width, info.client_region.height)
         if client_size != self.expected_client_size:
             raise CaptureBackendError(
@@ -137,6 +160,10 @@ class WindowsGraphicsCaptureSession:
             "process": info.process_name,
             "process_id": info.process_id,
             "window_title": info.window_title,
+            "window_title_prefix": self.expected_title_prefix,
+            "window_resolution_mode": (
+                self.window_resolution_mode
+            ),
             "client_size": list(client_size),
             "capture_region": "hwnd-client-content",
             "channel_order": "BGR",
@@ -148,8 +175,17 @@ class WindowsGraphicsCaptureSession:
             raise CaptureBackendError("Capture session is not open")
         current = self._window_inspector(
             self.window_info.window_handle,
-            expected_title=self.window_info.window_title,
+            expected_title=(
+                None
+                if self.window_resolution_mode == "process_name"
+                else self.window_info.window_title
+            ),
+            expected_title_prefix=self.expected_title_prefix,
+            require_non_empty_title=(
+                self.window_resolution_mode == "process_name"
+            ),
             expected_process_name=self.expected_process_name,
+            expected_process_id=self.window_info.process_id,
         )
         current_size = (current.client_region.width, current.client_region.height)
         if current_size != self.expected_client_size:
@@ -269,6 +305,9 @@ def create_live_capture_session(
     window_title: str,
     allow_mss_fallback: bool = False,
     expected_process_name: str = EXPECTED_GAME_PROCESS,
+    resolved_window: WindowInfo | None = None,
+    expected_title_prefix: str | None = None,
+    window_resolution_mode: str = "exact_title",
     wgc_provider_factory: Callable[[int], HWNDCaptureProvider] = _unavailable_wgc_provider,
     window_lookup: Callable[..., WindowInfo] = resolve_exact_window,
     window_inspector: Callable[..., WindowInfo] = inspect_window_handle,
@@ -279,6 +318,9 @@ def create_live_capture_session(
     common = {
         "window_title": window_title,
         "expected_process_name": expected_process_name,
+        "resolved_window": resolved_window,
+        "expected_title_prefix": expected_title_prefix,
+        "window_resolution_mode": window_resolution_mode,
         "window_lookup": window_lookup,
         "window_inspector": window_inspector,
     }

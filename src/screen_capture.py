@@ -37,6 +37,14 @@ class WindowInfo:
     minimized: bool = False
 
 
+def normalize_process_name(value: str) -> str:
+    """Compare executable basenames with or without a trailing .exe."""
+    basename = value.strip().replace("\\", "/").rsplit("/", 1)[-1]
+    if basename.casefold().endswith(".exe"):
+        basename = basename[:-4]
+    return basename.casefold()
+
+
 def _mss_module() -> Any:
     try:
         import mss
@@ -162,7 +170,10 @@ def inspect_window_handle(
     window_handle: int,
     *,
     expected_title: str | None = None,
+    expected_title_prefix: str | None = None,
+    require_non_empty_title: bool = False,
     expected_process_name: str | None = None,
+    expected_process_id: int | None = None,
 ) -> WindowInfo:
     """Validate one existing HWND and read its client rectangle in screen coordinates."""
     if os.name != "nt":
@@ -194,9 +205,21 @@ def inspect_window_handle(
     title_buffer = ctypes.create_unicode_buffer(title_length + 1)
     user32.GetWindowTextW(hwnd, title_buffer, len(title_buffer))
     title = title_buffer.value
+    if require_non_empty_title and not title:
+        raise RuntimeError(
+            f"Window title became empty for HWND {window_handle}"
+        )
     if expected_title is not None and title != expected_title:
         raise RuntimeError(
             f"Window title changed for HWND {window_handle}: expected {expected_title!r}, got {title!r}"
+        )
+    if (
+        expected_title_prefix is not None
+        and not title.startswith(expected_title_prefix)
+    ):
+        raise RuntimeError(
+            f"Window title prefix changed for HWND {window_handle}: "
+            f"expected prefix {expected_title_prefix!r}, got {title!r}"
         )
     visible = bool(user32.IsWindowVisible(hwnd))
     minimized = bool(user32.IsIconic(hwnd))
@@ -218,8 +241,20 @@ def inspect_window_handle(
 
     process_id = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    if (
+        expected_process_id is not None
+        and int(process_id.value) != int(expected_process_id)
+    ):
+        raise RuntimeError(
+            f"Window PID changed for HWND {window_handle}: "
+            f"expected {expected_process_id}, got {int(process_id.value)}"
+        )
     process_name = _process_name(int(process_id.value))
-    if expected_process_name and process_name.casefold() != expected_process_name.casefold():
+    if (
+        expected_process_name
+        and normalize_process_name(process_name)
+        != normalize_process_name(expected_process_name)
+    ):
         raise RuntimeError(
             f"Unexpected process for {title!r}: expected {expected_process_name}, got {process_name}"
         )
@@ -285,6 +320,9 @@ class MSSCaptureSession:
         window_title: str | None = None,
         monitor_index: int = 1,
         expected_process_name: str | None = None,
+        resolved_window: WindowInfo | None = None,
+        expected_title_prefix: str | None = None,
+        window_resolution_mode: str = "exact_title",
         window_lookup: Callable[..., WindowInfo] = resolve_exact_window,
         window_inspector: Callable[..., WindowInfo] = inspect_window_handle,
     ) -> None:
@@ -293,6 +331,9 @@ class MSSCaptureSession:
         self.window_title = window_title
         self.monitor_index = monitor_index
         self.expected_process_name = expected_process_name
+        self._resolved_window = resolved_window
+        self.expected_title_prefix = expected_title_prefix
+        self.window_resolution_mode = window_resolution_mode
         self._window_lookup = window_lookup
         self._window_inspector = window_inspector
         self.region: CaptureRegion | None = None
@@ -309,9 +350,26 @@ class MSSCaptureSession:
         try:
             capture = mss.mss()
             if self.window_title:
-                info = self._window_lookup(
-                    self.window_title, expected_process_name=self.expected_process_name
-                )
+                if self._resolved_window is not None:
+                    info = self._window_inspector(
+                        self._resolved_window.window_handle,
+                        expected_title=(
+                            None
+                            if self.window_resolution_mode == "process_name"
+                            else self._resolved_window.window_title
+                        ),
+                        expected_title_prefix=self.expected_title_prefix,
+                        require_non_empty_title=(
+                            self.window_resolution_mode == "process_name"
+                        ),
+                        expected_process_name=self.expected_process_name,
+                        expected_process_id=self._resolved_window.process_id,
+                    )
+                else:
+                    info = self._window_lookup(
+                        self.window_title,
+                        expected_process_name=self.expected_process_name,
+                    )
                 region = info.client_region
                 self.window_info = info
             else:
@@ -332,6 +390,11 @@ class MSSCaptureSession:
                 "process": info.process_name if self.window_info else None,
                 "process_id": info.process_id if self.window_info else None,
                 "window_title": info.window_title if self.window_info else None,
+                "window_title_prefix": self.expected_title_prefix,
+                "window_resolution_mode": (
+                    self.window_resolution_mode
+                    if self.window_info is not None else None
+                ),
                 "capture_region": {
                     "left": region.left, "top": region.top,
                     "width": region.width, "height": region.height,
@@ -354,8 +417,17 @@ class MSSCaptureSession:
         if self.window_info is not None:
             current = self._window_inspector(
                 self.window_info.window_handle,
-                expected_title=self.window_info.window_title,
+                expected_title=(
+                    None
+                    if self.window_resolution_mode == "process_name"
+                    else self.window_info.window_title
+                ),
+                expected_title_prefix=self.expected_title_prefix,
+                require_non_empty_title=(
+                    self.window_resolution_mode == "process_name"
+                ),
                 expected_process_name=self.expected_process_name,
+                expected_process_id=self.window_info.process_id,
             )
             original_size = (self.window_info.client_region.width, self.window_info.client_region.height)
             current_size = (current.client_region.width, current.client_region.height)

@@ -234,6 +234,51 @@ def test_wgc_stops_when_original_hwnd_disappears_or_capture_item_is_invalid() ->
         invalid.capture()
 
 
+def test_resolved_auto_target_is_bound_once_and_suffix_changes_remain_valid() -> None:
+    resolved = _window_info(hwnd=777, title="黑色沙漠 - 525411")
+    updated = _window_info(hwnd=777, title="黑色沙漠 - 999999")
+    provider = MockWGCProvider(
+        resolved.window_handle,
+        CapturedSurface(np.zeros((1, 2, 4), dtype=np.uint8)),
+    )
+    inspections: list[tuple[int, dict]] = []
+
+    def inspect(hwnd: int, **kwargs) -> WindowInfo:
+        inspections.append((hwnd, kwargs))
+        return updated
+
+    session = WindowsGraphicsCaptureSession(
+        window_title=resolved.window_title,
+        expected_client_size=(2, 1),
+        resolved_window=resolved,
+        expected_title_prefix="黑色沙漠",
+        window_resolution_mode="process_name",
+        provider_factory=lambda hwnd: provider,
+        window_lookup=lambda *_args, **_kwargs: pytest.fail(
+            "auto target must not be resolved again by title"
+        ),
+        window_inspector=inspect,
+    )
+    opened = session.open()
+    session.capture()
+
+    assert opened.window_handle == resolved.window_handle
+    assert provider.capture_item_hwnd == resolved.window_handle
+    assert len(inspections) == 2
+    assert all(hwnd == resolved.window_handle for hwnd, _ in inspections)
+    assert all(
+        kwargs["expected_process_id"] == resolved.process_id
+        and kwargs["expected_title"] is None
+        and kwargs["expected_title_prefix"] == "黑色沙漠"
+        for _, kwargs in inspections
+    )
+    diagnostics = session.diagnostics()
+    assert diagnostics["hwnd"] == 777
+    assert diagnostics["process_id"] == resolved.process_id
+    assert diagnostics["window_title"] == updated.window_title
+    assert diagnostics["window_title_prefix"] == "黑色沙漠"
+
+
 class StubSession:
     def __init__(self, backend_name: str, *, failure: Exception | None = None) -> None:
         self.backend_name = backend_name

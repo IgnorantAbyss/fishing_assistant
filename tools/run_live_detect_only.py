@@ -28,8 +28,14 @@ from src.fishing_v2.live.windows_action_sink import (  # noqa: E402
     ACTION_SINKS,
     ACTION_SINK_NONE,
 )
+from src.fishing_v2.live.window_resolver import (  # noqa: E402
+    WindowResolutionError,
+    format_window_candidates,
+    resolve_window_target,
+)
 from src.fishing_v2.live.session_logger import LiveSessionLogger  # noqa: E402
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle  # noqa: E402
+from src.screen_capture import normalize_process_name  # noqa: E402
 
 
 def _strict_bool(value: str) -> bool:
@@ -43,7 +49,19 @@ def _strict_bool(value: str) -> bool:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--window-title", required=True, help="Exact visible borderless game-window title")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument(
+        "--window-title",
+        help="Exact visible borderless game-window title",
+    )
+    target.add_argument(
+        "--process-name",
+        help="Auto-resolve one visible top-level window by executable basename",
+    )
+    parser.add_argument(
+        "--window-title-prefix",
+        help="Optional title prefix used only with --process-name",
+    )
     parser.add_argument(
         "--capture-backend",
         choices=CAPTURE_BACKENDS,
@@ -96,17 +114,46 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Polling-only permanent session stop key for the action sink (default: F12)",
     )
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "fishing_v2.yaml")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.window_title_prefix and not args.process_name:
+        parser.error("--window-title-prefix requires --process-name")
+    return args
 
 
 def main() -> int:
     args = parse_args()
+    if (
+        args.process_name
+        and normalize_process_name(args.process_name)
+        != normalize_process_name("BlackDesert64.exe")
+    ):
+        print(
+            "REFUSED: --process-name must identify BlackDesert64.exe",
+            file=sys.stderr,
+        )
+        return 2
     try:
         validate_emit_actions(
             args.emit_actions, args.action_sink, args.action_allowlist
         )
     except LivePreflightError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
+    try:
+        target = resolve_window_target(
+            exact_title=args.window_title,
+            process_name=args.process_name,
+            title_prefix=args.window_title_prefix,
+            expected_process_name="BlackDesert64",
+        )
+    except (WindowResolutionError, RuntimeError, ValueError) as exc:
+        print(f"WINDOW RESOLUTION FAILED: {exc}", file=sys.stderr)
+        if isinstance(exc, WindowResolutionError):
+            print(
+                "Candidates:\n"
+                + format_window_candidates(exc.candidates),
+                file=sys.stderr,
+            )
         return 2
     try:
         bundle = load_prompt_bundle(args.prompt_bundle)
@@ -116,7 +163,10 @@ def main() -> int:
     logger = LiveSessionLogger(args.output_dir, bundle_version=bundle.bundle_version)
     capture = create_live_capture_session(
         backend=args.capture_backend,
-        window_title=args.window_title,
+        window_title=target.window_title,
+        resolved_window=target.window_info,
+        expected_title_prefix=target.title_prefix,
+        window_resolution_mode=target.resolution_mode,
         allow_mss_fallback=args.allow_mss_fallback,
     )
     if args.capture_backend == MSS_REGION_BACKEND and args.show_overlay:

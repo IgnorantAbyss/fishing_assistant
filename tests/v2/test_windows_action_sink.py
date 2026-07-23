@@ -115,12 +115,18 @@ def _sink(
     allowlist: str = "COLLECT",
     config: WindowsActionConfig | None = None,
     events: list[tuple[str, dict]] | None = None,
+    expected_title_prefix: str | None = None,
 ) -> WindowsSendInputActionSink:
     clock = clock or FakeClock()
     event_rows = events if events is not None else []
     return WindowsSendInputActionSink(
         target_hwnd=4242,
         expected_title="test-window",
+        expected_title_prefix=expected_title_prefix,
+        window_resolution_mode=(
+            "process_name"
+            if expected_title_prefix is not None else "exact_title"
+        ),
         expected_process_id=99,
         allowlist=parse_action_allowlist(allowlist),
         config=config or WindowsActionConfig(),
@@ -396,6 +402,28 @@ def test_window_safety_rejections_emit_no_input(change: dict, reason: str) -> No
     result = _sink(api).apply(ActionRequest(ActionIntent.COLLECT, 0.99, "test"), _context())
     assert result.rejection_reason == reason
     assert result.applied is False
+    assert api.send_calls == []
+
+
+def test_auto_title_prefix_allows_suffix_change_but_fails_closed_on_prefix_loss() -> None:
+    api = FakeWindowsApi()
+    api.snapshot = replace(api.snapshot, title="黑色沙漠 - 999999")
+    sink = _sink(api, expected_title_prefix="黑色沙漠")
+    accepted = sink.apply(
+        ActionRequest(ActionIntent.COLLECT, 0.99, "test"),
+        _context("get:auto:accepted"),
+    )
+    assert accepted.applied is True
+    assert len(api.send_calls) == 2
+
+    api.send_calls.clear()
+    api.snapshot = replace(api.snapshot, title="其他視窗 - 999999")
+    rejected = sink.apply(
+        ActionRequest(ActionIntent.COLLECT, 0.99, "test"),
+        _context("get:auto:rejected"),
+    )
+    assert rejected.rejection_reason == "window_title_prefix_mismatch"
+    assert rejected.applied is False
     assert api.send_calls == []
 
 

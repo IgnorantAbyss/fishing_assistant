@@ -23,6 +23,7 @@ from src.fishing_v2.ports.action_sink import (
     ActionExecutionContext,
     ActionExecutionResult,
 )
+from src.screen_capture import normalize_process_name
 
 
 ACTION_SINK_NONE = "none"
@@ -488,6 +489,8 @@ class WindowsSendInputActionSink:
         *,
         target_hwnd: int,
         expected_title: str,
+        expected_title_prefix: str | None = None,
+        window_resolution_mode: str = "exact_title",
         expected_process_id: int,
         expected_process_name: str = EXPECTED_GAME_PROCESS,
         expected_client_size: tuple[int, int] = EXPECTED_CLIENT_SIZE,
@@ -505,8 +508,12 @@ class WindowsSendInputActionSink:
             raise ValueError("expected_title must be non-empty")
         if expected_process_id <= 0:
             raise ValueError("expected_process_id must be positive")
+        if window_resolution_mode not in {"exact_title", "process_name"}:
+            raise ValueError("unsupported window_resolution_mode")
         self.target_hwnd = int(target_hwnd)
         self.expected_title = expected_title
+        self.expected_title_prefix = expected_title_prefix
+        self.window_resolution_mode = window_resolution_mode
         self.expected_process_id = int(expected_process_id)
         self.expected_process_name = expected_process_name
         self.expected_client_size = expected_client_size
@@ -563,6 +570,8 @@ class WindowsSendInputActionSink:
             "action_sink_type": self.sink_type,
             "target_hwnd": self.target_hwnd,
             "expected_title": self.expected_title,
+            "expected_title_prefix": self.expected_title_prefix,
+            "window_resolution_mode": self.window_resolution_mode,
             "expected_process_id": self.expected_process_id,
             "expected_process": self.expected_process_name,
             "expected_client_size": list(self.expected_client_size),
@@ -757,11 +766,22 @@ class WindowsSendInputActionSink:
             return "target_window_not_visible"
         if snapshot.minimized:
             return "target_window_minimized"
-        if snapshot.title != self.expected_title:
+        if self.window_resolution_mode == "process_name":
+            if not snapshot.title:
+                return "window_title_empty"
+            if (
+                self.expected_title_prefix is not None
+                and not snapshot.title.startswith(self.expected_title_prefix)
+            ):
+                return "window_title_prefix_mismatch"
+        elif snapshot.title != self.expected_title:
             return "window_title_mismatch"
         if snapshot.process_id != self.expected_process_id:
             return "target_process_id_mismatch"
-        if snapshot.process_name.casefold() != self.expected_process_name.casefold():
+        if (
+            normalize_process_name(snapshot.process_name)
+            != normalize_process_name(self.expected_process_name)
+        ):
             return "process_name_mismatch"
         if snapshot.client_size != self.expected_client_size:
             return "client_size_mismatch"

@@ -630,6 +630,10 @@ class LiveDetectOnlyRuntime:
         process = self._capture_diagnostics.get("process")
         process_id = self._capture_diagnostics.get("process_id")
         client_size = self._capture_diagnostics.get("client_size")
+        title_prefix = self._capture_diagnostics.get("window_title_prefix")
+        resolution_mode = self._capture_diagnostics.get(
+            "window_resolution_mode", "exact_title"
+        )
         if not isinstance(hwnd, int) or hwnd <= 0:
             raise LivePreflightError("Action sink requires the exact startup-resolved target HWND")
         if not isinstance(title, str) or not title:
@@ -651,6 +655,14 @@ class LiveDetectOnlyRuntime:
             self.action_sink = self.action_sink_factory(
                 target_hwnd=hwnd,
                 expected_title=title,
+                expected_title_prefix=(
+                    title_prefix if isinstance(title_prefix, str) else None
+                ),
+                window_resolution_mode=(
+                    resolution_mode
+                    if resolution_mode in {"exact_title", "process_name"}
+                    else "exact_title"
+                ),
                 expected_process_id=process_id,
                 expected_process_name=EXPECTED_GAME_PROCESS,
                 expected_client_size=EXPECTED_RESOLUTION,
