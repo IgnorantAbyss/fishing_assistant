@@ -11,7 +11,11 @@ LEGAL_TRANSITIONS: dict[RuntimeState, frozenset[RuntimeState]] = {
     }),
     RuntimeState.IDLE: frozenset({RuntimeState.CAST_PENDING, RuntimeState.WAITING, RuntimeState.GET}),
     RuntimeState.CAST_PENDING: frozenset({RuntimeState.WAITING, RuntimeState.READY, RuntimeState.GET, RuntimeState.SYNC_REQUIRED}),
-    RuntimeState.WAITING: frozenset({RuntimeState.READY, RuntimeState.SYNC_REQUIRED}),
+    RuntimeState.WAITING: frozenset({
+        RuntimeState.READY,
+        RuntimeState.HOOK_PENDING,
+        RuntimeState.SYNC_REQUIRED,
+    }),
     RuntimeState.READY: frozenset({RuntimeState.HOOK_PENDING, RuntimeState.HOOK, RuntimeState.GET, RuntimeState.SYNC_REQUIRED}),
     RuntimeState.HOOK_PENDING: frozenset({RuntimeState.HOOK, RuntimeState.GET, RuntimeState.SYNC_REQUIRED}),
     RuntimeState.HOOK: frozenset({RuntimeState.RESULT_PENDING, RuntimeState.PRESS, RuntimeState.GET, RuntimeState.SYNC_REQUIRED}),

@@ -75,7 +75,11 @@ from src.fishing_v2.runtime.detector_evidence import DetectorEvidenceQualifier
 from src.fishing_v2.runtime.fishing_fsm import FishingFSM
 from src.fishing_v2.runtime.runtime_controller import ActionExecutionMode, RuntimeController
 from src.fishing_v2.runtime.safety_policy import SafetyPolicy
-from src.fishing_v2.runtime.scheduling import PromptPollingConfig, RuntimeSchedulePolicy
+from src.fishing_v2.runtime.scheduling import (
+    MissedReadyRecoveryTracker,
+    PromptPollingConfig,
+    RuntimeSchedulePolicy,
+)
 from src.fishing_v2.runtime.synchronization import StartupSynchronizer
 from src.fishing_v2.ports.action_sink import ActionExecutionContext, ActionSink
 from src.screen_capture import validate_bgr_frame
@@ -131,18 +135,26 @@ class WouldFireDeduplicator:
         self.raw_proposals: Counter[str] = Counter()
         self.unique_events: Counter[str] = Counter()
         self._seen: set[tuple[int, ActionIntent, str | None]] = set()
+        self._recovered_cycles: set[int] = set()
 
     @property
     def has_cycle_activity(self) -> bool:
         return any(cycle == self.cycle_id for cycle, _, _ in self._seen)
 
     def finish_cycle(self) -> None:
+        if self.has_cycle_activity or self.cycle_id in self._recovered_cycles:
+            self.cycle_id += 1
+
+    def begin_recovered_cycle(self) -> int:
+        """Reserve the current clean identity for a manually-started cycle."""
         if self.has_cycle_activity:
             self.cycle_id += 1
+        self._recovered_cycles.add(self.cycle_id)
+        return self.cycle_id
 
     def reset_for_sync_recovery(self) -> None:
         """Prevent pre-loss proposals from suppressing the recovered cycle."""
-        if self.has_cycle_activity:
+        if self.has_cycle_activity or self.cycle_id in self._recovered_cycles:
             self.cycle_id += 1
         self._seen.clear()
 
@@ -376,6 +388,13 @@ class LiveDetectOnlyRuntime:
         self.synchronizer = StartupSynchronizer(sync_config, started_at=0.0)
         self.recovery_synchronizer = StartupSynchronizer(sync_config, started_at=0.0)
         self.schedule = _prompt_polling(self._raw_config)
+        self.missed_ready_recovery = MissedReadyRecoveryTracker(
+            stable_frames=fsm_config.stable_frames,
+            min_confidence=fusion_config.prompt_min_confidence,
+            confirmation_timeout_seconds=(
+                self.schedule.config.ready_confirmation_timeout_seconds
+            ),
+        )
         self._opened = False
         self._capture_diagnostics: dict[str, Any] = {}
         self.evidence_recorder = evidence_recorder
@@ -892,6 +911,11 @@ class LiveDetectOnlyRuntime:
         return payload
 
     def _prompt_interval(self) -> float:
+        if (
+            self.fsm.state == RuntimeState.WAITING
+            and self.missed_ready_recovery.active
+        ):
+            return 1.0 / self.schedule.config.ready_fps
         configured = self.schedule.prompt_interval_seconds(self.fsm.state)
         return configured if configured is not None else 0.2
 
@@ -933,6 +957,7 @@ class LiveDetectOnlyRuntime:
     def run(self, *, max_frames: int | None = None) -> dict[str, Any]:
         captured = processed = actions_applied = 0
         completed_cycles = 0
+        missed_ready_recovery_count = 0
         evidence_episode_id = 1
         stop_after_completed_cycle = False
         stop_after_action_commit_failure = False
@@ -1055,10 +1080,15 @@ class LiveDetectOnlyRuntime:
                     processing_started = self.clock()
                     context = FrameContext(captured, elapsed, metadata={"source": "live_detect_only"})
                     ready_burst_update = None
+                    missed_ready_update = None
                     if prompt_due:
                         last_prompt = self.prompt_bundle.observer.observe(frame, context)
                         ready_burst_update = self.schedule.observe_prompt(
                             self.fsm.state, last_prompt.kind, elapsed
+                        )
+                        missed_ready_update = self.missed_ready_recovery.observe(
+                            self.fsm.state,
+                            last_prompt,
                         )
                         if ready_burst_update.candidate_reset_required:
                             self.fsm.clear_transition_candidate()
@@ -1107,6 +1137,42 @@ class LiveDetectOnlyRuntime:
                     sync_reason = None
                     processing_from_sync_required = self.fsm.state == RuntimeState.SYNC_REQUIRED
                     transition_results: list[Any] = []
+                    if (
+                        missed_ready_update is not None
+                        and missed_ready_update.recovered
+                    ):
+                        recovered_cycle_id = (
+                            self.deduplicator.begin_recovered_cycle()
+                        )
+                        recovered = self.fsm.recover_missed_ready(
+                            elapsed,
+                            reason=missed_ready_update.reason,
+                        )
+                        transition_results.append(recovered)
+                        missed_ready_recovery_count += 1
+                        next_prompt_due = min(
+                            next_prompt_due,
+                            elapsed + self._prompt_interval(),
+                        )
+                        self.logger.event("missed_ready_recovered", {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "cycle_id": recovered_cycle_id,
+                            "previous_state": recovered.previous_state.value,
+                            "next_state": recovered.next_state.value,
+                            "reason": missed_ready_update.reason,
+                            "support_frames": (
+                                missed_ready_update.support_frames
+                            ),
+                            "duration_seconds": (
+                                missed_ready_update.candidate_age_seconds
+                            ),
+                            "confidence": (
+                                prompt.confidence if prompt is not None else None
+                            ),
+                            "action_intent": ActionIntent.NONE.value,
+                            "action_applied": False,
+                        })
                     if self.fsm.state == RuntimeState.SYNCING:
                         _, startup_qualified = self.controller.qualify_raw_bundle(
                             raw_bundle, action_mode=ActionExecutionMode.RECORDED_OBSERVATION
@@ -2115,6 +2181,9 @@ class LiveDetectOnlyRuntime:
                 "capture_fallback_used": bool(self._capture_diagnostics.get("fallback_used", False)),
                 "capture_diagnostics": self._capture_diagnostics,
                 "completed_cycles": completed_cycles,
+                "missed_ready_recovery_count": (
+                    missed_ready_recovery_count
+                ),
                 "max_completed_cycles": self.live_config.max_completed_cycles,
                 **self.cast_clearance.summary(),
                 **self.cast_opportunity.summary(),

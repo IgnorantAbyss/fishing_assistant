@@ -922,6 +922,58 @@ def test_ready_holdout_startup_would_start_hook_once_and_never_cast(tmp_path: Pa
     )
 
 
+def test_live_waiting_recovers_missed_ready_without_start_hook_action(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class StableHookInstructionObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.HOOK_INSTRUCTION,
+                0.97,
+                {PromptObservationKind.HOOK_INSTRUCTION.value: 0.97},
+                "session_20260723_150137",
+                context.frame_index,
+                context.timestamp,
+                {},
+            )
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        duration_seconds=0.8,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=StableHookInstructionObserver(),
+    )
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+    summary = runtime.run(max_frames=30)
+
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    recovery = next(
+        item
+        for item in events
+        if item["event_type"] == "missed_ready_recovered"
+    )
+    assert recovery["reason"] == "stable_hook_instruction_while_waiting"
+    assert recovery["previous_state"] == "WAITING"
+    assert recovery["next_state"] == "HOOK_PENDING"
+    assert recovery["action_intent"] == ActionIntent.NONE.value
+    assert recovery["action_applied"] is False
+    assert summary["missed_ready_recovery_count"] == 1
+    assert summary["unique_would_fire"].get("WOULD_START_HOOK", 0) == 0
+    assert summary["raw_action_proposals"].get("START_HOOK", 0) == 0
+    assert summary["detector_runs"]["hook"] > 0
+    assert summary["actions_applied"] == 0
+
+
 def test_live_runtime_logs_startup_and_sync_required_recovery_transitions(
     tmp_path: Path, supported_frame: np.ndarray
 ) -> None:

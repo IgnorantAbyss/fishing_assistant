@@ -184,6 +184,24 @@ class FishingFSM:
             raise ValueError("Recovery target must be a concrete runtime state")
         return self.force_state(state, timestamp, reason)
 
+    def recover_missed_ready(
+        self,
+        timestamp: float,
+        *,
+        reason: str,
+    ) -> FSMResult:
+        """Acknowledge a user START_HOOK that occurred between prompt samples."""
+        if self.state != RuntimeState.WAITING:
+            raise RuntimeError(
+                "Missed READY recovery is only valid from WAITING"
+            )
+        return self._transition(
+            RuntimeState.HOOK_PENDING,
+            timestamp,
+            reason,
+            visual_acknowledgement="HOOK_INSTRUCTION",
+        )
+
     def _transition(
         self,
         target: RuntimeState,

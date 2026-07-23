@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.fishing_v2.domain.observations import PromptObservationKind
+from src.fishing_v2.domain.observations import (
+    PromptObservation,
+    PromptObservationKind,
+)
 from src.fishing_v2.domain.runtime_state import RuntimeState
 
 
@@ -37,6 +40,117 @@ class ReadyPromptBurstUpdate:
     ready_support_frames: int = 0
     candidate_age_seconds: float = 0.0
     reason: str = "no_ready_candidate"
+
+
+@dataclass(frozen=True)
+class MissedReadyRecoveryUpdate:
+    candidate_started: bool = False
+    candidate_cancelled: bool = False
+    recovered: bool = False
+    support_frames: int = 0
+    candidate_age_seconds: float = 0.0
+    reason: str = "no_hook_instruction_candidate"
+
+
+class MissedReadyRecoveryTracker:
+    """Confirm a threshold-qualified HOOK hint inside a short WAITING burst."""
+
+    def __init__(
+        self,
+        *,
+        stable_frames: int,
+        min_confidence: float,
+        confirmation_timeout_seconds: float,
+    ) -> None:
+        if stable_frames < 1:
+            raise ValueError("stable_frames must be positive")
+        if not 0.0 <= min_confidence <= 1.0:
+            raise ValueError("min_confidence must be within 0..1")
+        if confirmation_timeout_seconds <= 0:
+            raise ValueError("confirmation_timeout_seconds must be positive")
+        self.stable_frames = int(stable_frames)
+        self.min_confidence = float(min_confidence)
+        self.confirmation_timeout_seconds = float(
+            confirmation_timeout_seconds
+        )
+        self._started_at: float | None = None
+        self._support_frames = 0
+        self._last_frame_index: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._started_at is not None
+
+    def reset(self) -> None:
+        self._started_at = None
+        self._support_frames = 0
+        self._last_frame_index = None
+
+    def observe(
+        self,
+        state: RuntimeState,
+        prompt: PromptObservation | None,
+    ) -> MissedReadyRecoveryUpdate:
+        eligible = bool(
+            state == RuntimeState.WAITING
+            and prompt is not None
+            and prompt.kind == PromptObservationKind.HOOK_INSTRUCTION
+            and prompt.confidence >= self.min_confidence
+        )
+        if not eligible:
+            cancelled = self.active
+            self.reset()
+            return MissedReadyRecoveryUpdate(
+                candidate_cancelled=cancelled,
+                reason=(
+                    "runtime_not_waiting"
+                    if state != RuntimeState.WAITING
+                    else "hook_instruction_below_existing_confidence_gate"
+                    if (
+                        prompt is not None
+                        and prompt.kind
+                        == PromptObservationKind.HOOK_INSTRUCTION
+                    )
+                    else "hook_instruction_candidate_absent"
+                ),
+            )
+
+        assert prompt is not None
+        now = float(prompt.timestamp)
+        timed_out = bool(
+            self._started_at is not None
+            and now - self._started_at
+            > self.confirmation_timeout_seconds
+        )
+        if timed_out:
+            self.reset()
+        started = self._started_at is None
+        if started:
+            self._started_at = now
+        if prompt.frame_index != self._last_frame_index:
+            self._support_frames += 1
+            self._last_frame_index = prompt.frame_index
+        age = now - self._started_at
+        if self._support_frames < self.stable_frames:
+            return MissedReadyRecoveryUpdate(
+                candidate_started=started,
+                candidate_cancelled=timed_out,
+                support_frames=self._support_frames,
+                candidate_age_seconds=age,
+                reason=(
+                    "hook_instruction_candidate_restarted_after_timeout"
+                    if timed_out
+                    else "hook_instruction_candidate_pending"
+                ),
+            )
+        support_frames = self._support_frames
+        self.reset()
+        return MissedReadyRecoveryUpdate(
+            recovered=True,
+            support_frames=support_frames,
+            candidate_age_seconds=age,
+            reason="stable_hook_instruction_while_waiting",
+        )
 
 
 class RuntimeSchedulePolicy:
