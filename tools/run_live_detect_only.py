@@ -109,7 +109,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--action-allowlist", default="",
         help=(
             "Comma-separated staged Live actions: "
-            "CAST,START_HOOK,COLLECT"
+            "CAST,START_HOOK,HOOK_ACTION,COLLECT"
         ),
     )
     parser.add_argument(

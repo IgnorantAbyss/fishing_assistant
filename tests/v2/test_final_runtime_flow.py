@@ -17,7 +17,10 @@ from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
 from src.fishing_v2.runtime.fishing_fsm import FSMConfig, FishingFSM
-from src.fishing_v2.runtime.runtime_controller import RuntimeController
+from src.fishing_v2.runtime.runtime_controller import (
+    ActionExecutionMode,
+    RuntimeController,
+)
 from src.fishing_v2.runtime.safety_policy import SafetyConfig, SafetyDecision, SafetyPolicy
 from src.fishing_v2.runtime.scheduling import PromptPollingConfig, RuntimeSchedulePolicy
 
@@ -163,6 +166,75 @@ def test_hook_action_arms_press_and_get_detectors() -> None:
     assert result.next_activation.press == DetectorActivationMode.ARMED
     assert result.next_activation.get == DetectorActivationMode.BURST
     assert result.next_activation.get_fps == 20.0
+
+
+def test_hook_action_result_flow_accepts_press_get_or_direct_idle() -> None:
+    class Sink:
+        def apply(self, request, context):
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+            )
+
+    def after_hook_action() -> RuntimeController:
+        controller = _controller(
+            RuntimeState.HOOK,
+            emit_actions=True,
+            sink=Sink(),
+        )
+        applied = controller.process(
+            _bundle(0.1, hook=True, fill_ratio=0.70),
+            foreground=True,
+            runtime_environment_supported=True,
+        )
+        assert applied.action_applied is True
+        assert controller.fsm.state == RuntimeState.RESULT_PENDING
+        return controller
+
+    press = after_hook_action().process(
+        _bundle(
+            0.2,
+            prompt=PromptObservationKind.PRESS_INSTRUCTION,
+            press=True,
+            sequence=("W", "A", "S", "D"),
+        ),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+    )
+    assert press.fsm.next_state == RuntimeState.PRESS
+
+    get_controller = after_hook_action()
+    get_controller.process(
+        _bundle(0.2, get=True),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+    )
+    get_result = get_controller.process(
+        _bundle(0.3, get=True),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+    )
+    assert get_result.fsm.next_state == RuntimeState.GET
+
+    idle = after_hook_action().process(
+        _bundle(2.0, prompt=PromptObservationKind.IDLE_CAST),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+    )
+    assert idle.fsm.next_state == RuntimeState.IDLE
 
 
 def test_press_instruction_uses_burst_without_confirming_press() -> None:

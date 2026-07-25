@@ -146,6 +146,42 @@ def test_start_hook_is_denied_outside_ready() -> None:
         assert result.reason == "action_not_allowed_in_runtime_state"
 
 
+def test_hook_action_is_denied_outside_hook_and_on_focus_loss() -> None:
+    policy = SafetyPolicy(SafetyConfig(emit_actions=True))
+    request = ActionRequest(
+        ActionIntent.HOOK_ACTION,
+        0.95,
+        "hook_fill_safely_crossed_threshold",
+    )
+    for state in (
+        RuntimeState.WAITING,
+        RuntimeState.READY,
+        RuntimeState.IDLE,
+        RuntimeState.GET,
+    ):
+        result = policy.evaluate(
+            request,
+            state,
+            _evidence(),
+            foreground=True,
+            already_sent=False,
+            elapsed_since_action=1.0,
+        )
+        assert result.decision == SafetyDecision.DENY
+        assert result.reason == "action_not_allowed_in_runtime_state"
+
+    focus_loss = policy.evaluate(
+        request,
+        RuntimeState.HOOK,
+        _evidence(),
+        foreground=False,
+        already_sent=False,
+        elapsed_since_action=1.0,
+    )
+    assert focus_loss.decision == SafetyDecision.DENY
+    assert focus_loss.reason == "foreground_window_not_confirmed"
+
+
 def test_foreground_window_is_required() -> None:
     result = SafetyPolicy(SafetyConfig(emit_actions=True)).evaluate(
         ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.IDLE,

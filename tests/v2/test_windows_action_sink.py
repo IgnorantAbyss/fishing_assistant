@@ -176,14 +176,17 @@ def test_user32_is_loaded_with_last_error_enabled() -> None:
     assert "GetForegroundWindow.argtypes = ()" in source
 
 
-def test_integrity_mismatch_fails_before_sink_becomes_sendable() -> None:
+@pytest.mark.parametrize("allowlist", ["START_HOOK", "HOOK_ACTION"])
+def test_integrity_mismatch_fails_before_sink_becomes_sendable(
+    allowlist: str,
+) -> None:
     api = FakeWindowsApi()
     api.integrity_diagnostics["target_process"].update({
         "integrity_level": "high", "integrity_rid": 12288, "elevated": True,
     })
     events: list[tuple[str, dict]] = []
     with pytest.raises(ActionIntegrityPreflightError, match="elevated PowerShell") as exc:
-        _sink(api, allowlist="START_HOOK", events=events)
+        _sink(api, allowlist=allowlist, events=events)
     assert exc.value.reason == "integrity_mismatch"
     assert api.send_calls == []
     assert all(name != "action_sink_initialized" for name, _ in events)
@@ -454,20 +457,30 @@ def test_context_target_hwnd_must_match_startup_target() -> None:
     assert api.send_calls == []
 
 
-def test_panic_key_permanently_disables_sink_for_session() -> None:
+@pytest.mark.parametrize(
+    ("intent", "state"),
+    [
+        (ActionIntent.START_HOOK, "READY"),
+        (ActionIntent.HOOK_ACTION, "HOOK"),
+    ],
+)
+def test_panic_key_permanently_disables_sink_for_session(
+    intent: ActionIntent,
+    state: str,
+) -> None:
     api = FakeWindowsApi()
     api.panic_values = [True]
     events: list[tuple[str, dict]] = []
-    sink = _sink(api, allowlist="START_HOOK", events=events)
-    request = ActionRequest(ActionIntent.START_HOOK, 0.99, "ready")
+    sink = _sink(api, allowlist=intent.value, events=events)
+    request = ActionRequest(intent, 0.99, "qualified")
     first = sink.apply(
         request,
-        _context("cycle:1:START_HOOK", intent="READY"),
+        _context(f"cycle:1:{intent.value}", intent=state),
     )
     api.panic_values = [False]
     second = sink.apply(
         request,
-        _context("cycle:2:START_HOOK", intent="READY"),
+        _context(f"cycle:2:{intent.value}", intent=state),
     )
     assert first.rejection_reason == second.rejection_reason == "panic_triggered"
     assert sum(name == "panic_stop" for name, _ in events) == 1

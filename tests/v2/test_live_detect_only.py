@@ -200,21 +200,24 @@ def test_emit_actions_true_requires_explicit_sink_before_capture_initialization(
     assert "REFUSED" in result.stderr
 
 
-def test_live_action_mode_accepts_staged_start_hook() -> None:
+def test_live_action_mode_accepts_staged_hook_action() -> None:
     validate_emit_actions(
         True,
         "sendinput",
-        "CAST,START_HOOK,COLLECT",
+        "CAST,START_HOOK,HOOK_ACTION,COLLECT",
     )
 
 
-@pytest.mark.parametrize("intent", ["HOOK_ACTION", "PRESS_SEQUENCE"])
-def test_live_action_mode_refuses_unstaged_intents(intent: str) -> None:
+def test_live_action_mode_refuses_press_sequence() -> None:
     with pytest.raises(
         LivePreflightError,
-        match="limited to CAST,START_HOOK,COLLECT",
+        match="limited to CAST,START_HOOK,HOOK_ACTION,COLLECT",
     ):
-        validate_emit_actions(True, "sendinput", f"CAST,COLLECT,{intent}")
+        validate_emit_actions(
+            True,
+            "sendinput",
+            "CAST,START_HOOK,HOOK_ACTION,COLLECT,PRESS_SEQUENCE",
+        )
 
 
 def test_wrong_resolution_fails_preflight_and_closes_capture(tmp_path: Path) -> None:
@@ -752,6 +755,108 @@ def test_would_fire_deduplicates_repeated_proposals_per_cycle() -> None:
     tracker.finish_cycle()
     assert tracker.observe(request, frame_index=20, **kwargs) is not None
     assert tracker.unique_events == {"WOULD_HOOK_ACTION": 2}
+
+
+def test_live_qualified_hook_emits_exactly_once_and_arms_result_flow(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class PersistentCrossedHookDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                True,
+                0.99,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.70,
+                evidence={
+                    "matched_features": [
+                        "hook_bar_rect",
+                        "bar_fill",
+                    ],
+                    "fallback_ratio_trustworthy": True,
+                },
+            )
+
+    class CompleteHookSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": [
+                    "CAST",
+                    "COLLECT",
+                    "HOOK_ACTION",
+                    "START_HOOK",
+                ],
+                "attempted_action_counts": {
+                    "HOOK_ACTION": len(self.calls),
+                },
+                "applied_action_counts": {
+                    "HOOK_ACTION": len(self.calls),
+                },
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteHookSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=0.8,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="CAST,START_HOOK,HOOK_ACTION,COLLECT",
+        action_sink_factory=factory,
+    )
+    runtime.hook_detector = PersistentCrossedHookDetector()
+    runtime.fsm.force_state(RuntimeState.HOOK, 0.0, "test_hook")
+    summary = runtime.run(max_frames=20)
+
+    assert len(created) == 1
+    assert len(created[0].calls) == 1
+    request, context = created[0].calls[0]
+    assert request.intent == ActionIntent.HOOK_ACTION
+    assert context.runtime_state == RuntimeState.HOOK.value
+    assert runtime.fsm.state == RuntimeState.RESULT_PENDING
+    assert summary["unique_would_fire"] == {"WOULD_HOOK_ACTION": 1}
+    assert summary["actions_applied"] == 1
+    assert summary["detector_runs"]["press"] > 0
+    assert summary["detector_runs"]["get"] > 0
 
 
 def test_live_ready_burst_transitions_and_proposes_without_four_second_poll(
