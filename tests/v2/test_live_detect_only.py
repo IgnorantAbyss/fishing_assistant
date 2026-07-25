@@ -844,7 +844,11 @@ def test_live_qualified_hook_emits_exactly_once_and_arms_result_flow(
         action_sink_factory=factory,
     )
     runtime.hook_detector = PersistentCrossedHookDetector()
-    runtime.fsm.force_state(RuntimeState.HOOK, 0.0, "test_hook")
+    runtime.fsm.force_state(
+        RuntimeState.HOOK_PENDING,
+        0.0,
+        "test_hook_pending",
+    )
     summary = runtime.run(max_frames=20)
 
     assert len(created) == 1
@@ -857,6 +861,114 @@ def test_live_qualified_hook_emits_exactly_once_and_arms_result_flow(
     assert summary["actions_applied"] == 1
     assert summary["detector_runs"]["press"] > 0
     assert summary["detector_runs"]["get"] > 0
+    with runtime.logger.transitions_path.open(
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        transitions = list(csv.DictReader(handle))
+    hook_transition = next(
+        row
+        for row in transitions
+        if row["previous_state"] == RuntimeState.HOOK_PENDING.value
+        and row["next_state"] == RuntimeState.HOOK.value
+    )
+    assert context.capture_frame_index == int(hook_transition["frame_index"])
+
+
+def test_live_logs_hook_action_blocker_without_reaching_sink(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class CrossedHookDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                True,
+                0.99,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.70,
+                evidence={
+                    "matched_features": [
+                        "hook_bar_rect",
+                        "bar_fill",
+                    ],
+                    "fallback_ratio_trustworthy": True,
+                },
+            )
+
+    class NoInputSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            raise AssertionError("blocked HOOK_ACTION must not reach sink")
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["HOOK_ACTION"],
+                "panic_triggered": False,
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = NoInputSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    capture.is_foreground = lambda: False
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=0.5,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="HOOK_ACTION",
+        action_sink_factory=factory,
+    )
+    runtime.hook_detector = CrossedHookDetector()
+    runtime.fsm.force_state(RuntimeState.HOOK, 0.0, "test_hook")
+    summary = runtime.run(max_frames=10)
+
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    blocked = next(
+        row
+        for row in events
+        if row["event_type"] == "hook_action_blocked"
+    )
+    assert blocked["runtime_state_before"] == RuntimeState.HOOK.value
+    assert blocked["committed_runtime_state"] == RuntimeState.HOOK.value
+    assert blocked["transition_from"] == RuntimeState.HOOK.value
+    assert blocked["transition_to"] == RuntimeState.HOOK.value
+    assert blocked["raw_intent"] == ActionIntent.HOOK_ACTION.value
+    assert blocked["hook_evidence"]["detected"] is True
+    assert blocked["eligibility_blockers"] == [
+        "foreground_window_not_confirmed"
+    ]
+    assert blocked["hook_opportunity_id"] == "cycle:1:HOOK_ACTION"
+    assert blocked["already_consumed"] is False
+    assert created[0].calls == []
+    assert summary["raw_action_proposals"] == {"HOOK_ACTION": 1}
+    assert summary["unique_would_fire"].get("WOULD_HOOK_ACTION", 0) == 0
+    assert summary["actions_applied"] == 0
 
 
 def test_live_ready_burst_transitions_and_proposes_without_four_second_poll(

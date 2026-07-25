@@ -164,6 +164,21 @@ class WouldFireDeduplicator:
             self.cycle_id += 1
         self._seen.clear()
 
+    def opportunity_id(
+        self,
+        intent: ActionIntent,
+        identity_suffix: str | None = None,
+    ) -> str:
+        value = f"cycle:{self.cycle_id}:{intent.value}"
+        return f"{value}:{identity_suffix}" if identity_suffix else value
+
+    def already_consumed(
+        self,
+        intent: ActionIntent,
+        identity_suffix: str | None = None,
+    ) -> bool:
+        return (self.cycle_id, intent, identity_suffix) in self._seen
+
     def observe(
         self,
         request: ActionRequest,
@@ -191,9 +206,10 @@ class WouldFireDeduplicator:
         self._seen.add(key)
         event_type = WOULD_FIRE_NAMES[request.intent]
         self.unique_events[event_type] += 1
-        deduplication_key = f"cycle:{self.cycle_id}:{request.intent.value}"
-        if identity_suffix:
-            deduplication_key = f"{deduplication_key}:{identity_suffix}"
+        deduplication_key = self.opportunity_id(
+            request.intent,
+            identity_suffix,
+        )
         return {
             "event_type": event_type,
             "timestamp": timestamp,
@@ -420,6 +436,9 @@ class LiveDetectOnlyRuntime:
         self._action_preflight_diagnostics: dict[str, Any] = {}
         self._foreground_unavailable_event_active = False
         self._last_cast_blockers: tuple[str, ...] | None = None
+        self._logged_hook_action_blockers: set[
+            tuple[str, tuple[str, ...]]
+        ] = set()
         self._post_collect_banner_fps = float(
             self._raw_config["result"].get("get_burst_fps", 20.0)
         )
@@ -1766,7 +1785,110 @@ class LiveDetectOnlyRuntime:
                                 if diagnostic_transition is not None else None
                             ),
                         )
-                    if cast_opportunity_enabled and request.intent == ActionIntent.CAST:
+                    if request.intent == ActionIntent.HOOK_ACTION:
+                        self.deduplicator.record_raw_proposal(request)
+                        hook_opportunity_id = (
+                            self.deduplicator.opportunity_id(
+                                ActionIntent.HOOK_ACTION
+                            )
+                        )
+                        hook_already_consumed = (
+                            self.deduplicator.already_consumed(
+                                ActionIntent.HOOK_ACTION
+                            )
+                        )
+                        hook_blockers: list[str] = []
+                        if (
+                            self.action_sink is not None
+                            and ActionIntent.HOOK_ACTION
+                            not in self.action_allowlist
+                        ):
+                            hook_blockers.append(
+                                "action_not_allowlisted"
+                            )
+                        if (
+                            last_result.safety.reason
+                            != "action_emission_disabled"
+                        ):
+                            hook_blockers.append(
+                                last_result.safety.reason
+                            )
+                        if hook_already_consumed:
+                            hook_blockers.append(
+                                "hook_opportunity_already_consumed"
+                            )
+                        would_fire = None
+                        if not hook_blockers:
+                            would_fire = self.deduplicator.observe(
+                                request,
+                                safety_reason=(
+                                    last_result.safety.reason
+                                ),
+                                frame_index=captured,
+                                timestamp=elapsed,
+                                runtime_state=self.fsm.state.value,
+                                prompt_evidence=(
+                                    prompt.evidence if prompt else None
+                                ),
+                                specialized_evidence=specialized,
+                                count_raw=False,
+                            )
+                            if would_fire is None:
+                                hook_already_consumed = True
+                                hook_blockers.append(
+                                    "hook_opportunity_already_consumed"
+                                )
+                        if hook_blockers:
+                            blocker_key = (
+                                hook_opportunity_id,
+                                tuple(hook_blockers),
+                            )
+                            if (
+                                blocker_key
+                                not in self._logged_hook_action_blockers
+                            ):
+                                self._logged_hook_action_blockers.add(
+                                    blocker_key
+                                )
+                                self.logger.event(
+                                    "hook_action_blocked",
+                                    {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "runtime_state_before": (
+                                            last_result.fsm
+                                            .previous_state.value
+                                        ),
+                                        "committed_runtime_state": (
+                                            self.fsm.state.value
+                                        ),
+                                        "transition_from": (
+                                            last_result.fsm
+                                            .previous_state.value
+                                        ),
+                                        "transition_to": (
+                                            last_result.fsm
+                                            .next_state.value
+                                        ),
+                                        "raw_intent": (
+                                            request.intent.value
+                                        ),
+                                        "hook_evidence": (
+                                            specialized.get("hook")
+                                        ),
+                                        "eligibility_blockers": (
+                                            hook_blockers
+                                        ),
+                                        "hook_opportunity_id": (
+                                            hook_opportunity_id
+                                        ),
+                                        "already_consumed": (
+                                            hook_already_consumed
+                                        ),
+                                        "action_applied": False,
+                                    },
+                                )
+                    elif cast_opportunity_enabled and request.intent == ActionIntent.CAST:
                         self.deduplicator.record_raw_proposal(request)
                         if (
                             last_result.safety.reason == "action_emission_disabled"

@@ -298,6 +298,32 @@ class FishingFSM:
             self._hook_episode_active = False
             self._hook_episode_started_at = None
 
+    def _hook_action_request(
+        self,
+        evidence: StateEvidence,
+        timestamp: float,
+        bundle: ObservationBundle | None,
+    ) -> tuple[ActionRequest, str]:
+        hook = bundle.hook if bundle else None
+        self._refresh_hook_episode_latch(hook, timestamp)
+        decision = self.hook_action_policy.evaluate(
+            hook,
+            action_already_proposed=self._hook_intent_proposed,
+            hook_episode_active=self._hook_episode_active,
+        )
+        if not decision.action_ready:
+            return self._none(decision.reason), decision.reason
+        assert hook is not None
+        return (
+            self._propose(
+                ActionIntent.HOOK_ACTION,
+                max(evidence.confidence, hook.confidence),
+                "hook_fill_safely_crossed_threshold",
+                payload=decision.payload(),
+            ),
+            "hook_action_proposed",
+        )
+
     def discard_proposal(self) -> None:
         self._pending_request = None
 
@@ -600,6 +626,23 @@ class FishingFSM:
             )
             if moved is None:
                 return self._held(previous, "candidate_not_stable", failed_telemetry)
+            if target == RuntimeState.HOOK:
+                action, _ = self._hook_action_request(
+                    evidence,
+                    timestamp,
+                    bundle,
+                )
+                if action.intent == ActionIntent.HOOK_ACTION:
+                    return FSMResult(
+                        moved.previous_state,
+                        moved.next_state,
+                        action,
+                        moved.transition_reason,
+                        True,
+                        visual_acknowledgement=(
+                            moved.visual_acknowledgement
+                        ),
+                    )
             if target == RuntimeState.PRESS:
                 panel = bundle.press if bundle else None
                 action = self._none("press_panel_has_no_sequence")
@@ -641,22 +684,20 @@ class FishingFSM:
             return self._held(previous, "ready_waiting_for_confirmed_bite", failed_telemetry)
 
         if self.state == RuntimeState.HOOK:
-            hook = bundle.hook if bundle else None
-            self._refresh_hook_episode_latch(hook, timestamp)
-            decision = self.hook_action_policy.evaluate(
-                hook,
-                action_already_proposed=self._hook_intent_proposed,
-                hook_episode_active=self._hook_episode_active,
+            action, reason = self._hook_action_request(
+                evidence,
+                timestamp,
+                bundle,
             )
-            if decision.action_ready:
-                action = self._propose(
-                    ActionIntent.HOOK_ACTION,
-                    max(evidence.confidence, hook.confidence),
-                    "hook_fill_safely_crossed_threshold",
-                    payload=decision.payload(),
+            if action.intent == ActionIntent.HOOK_ACTION:
+                return FSMResult(
+                    previous,
+                    previous,
+                    action,
+                    "hook_action_proposed",
+                    False,
                 )
-                return FSMResult(previous, previous, action, "hook_action_proposed", False)
-            return self._held(previous, decision.reason, failed_telemetry)
+            return self._held(previous, reason, failed_telemetry)
 
         if self.state == RuntimeState.PRESS:
             panel = bundle.press if bundle else None
