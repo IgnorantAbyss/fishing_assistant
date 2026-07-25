@@ -66,6 +66,103 @@ def _controller() -> RuntimeController:
     )
 
 
+def _explicit_geometry_bundle(
+    frame: int = 535,
+    timestamp: float = 26.75,
+    *,
+    endpoint: float | None = 1397.0,
+    divider: float | None = 1330.0,
+    divider_confidence: float = 1.0,
+) -> ObservationBundle:
+    return ObservationBundle(
+        frame,
+        timestamp,
+        PromptObservation(
+            PromptObservationKind.HOOK_INSTRUCTION,
+            0.99,
+            {PromptObservationKind.HOOK_INSTRUCTION.value: 0.99},
+            "session_live_frame_535",
+            frame,
+            timestamp,
+        ),
+        HookObservation(
+            False,
+            0.4301,
+            frame,
+            timestamp,
+            evidence={
+                "matched_features": [],
+                "crossing_geometry_version": 1,
+                "divider_line_detected": divider is not None,
+                "divider_line_x": divider,
+                "divider_confidence": divider_confidence,
+                "fill_endpoint_x": endpoint,
+                "fallback_ratio_trustworthy": False,
+            },
+        ),
+    )
+
+
+def _hook_state_controller() -> RuntimeController:
+    return RuntimeController(
+        ObservationFusion(),
+        FishingFSM(
+            FSMConfig(stable_frames=1),
+            initial_state=RuntimeState.HOOK,
+            initial_timestamp=26.0,
+        ),
+        SafetyPolicy(SafetyConfig(emit_actions=False)),
+    )
+
+
+def test_frame_535_explicit_geometry_satisfies_hook_safety_confidence() -> None:
+    result = _hook_state_controller().process(
+        _explicit_geometry_bundle(),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+
+    assert result.qualified.bundle.hook is not None
+    assert result.qualified.bundle.hook.detected is False
+    assert result.qualified.bundle.hook.confidence == 0.4301
+    assert result.evidence.confidence < 0.8
+    assert result.fsm.action_request.intent == ActionIntent.HOOK_ACTION
+    assert result.fsm.action_request.payload["action_ready"] is True
+    assert (
+        result.fsm.action_request.payload[
+            "current_hook_geometry_is_usable"
+        ]
+        is True
+    )
+    assert result.safety.reason == "action_emission_disabled"
+    assert result.action_applied is False
+
+
+def test_incomplete_or_unsafe_explicit_geometry_never_becomes_sendable() -> None:
+    unsafe_cases = (
+        _explicit_geometry_bundle(endpoint=None),
+        _explicit_geometry_bundle(divider=None),
+        _explicit_geometry_bundle(divider_confidence=0.79),
+        _explicit_geometry_bundle(endpoint=1339.0),
+    )
+
+    for bundle in unsafe_cases:
+        result = _hook_state_controller().process(
+            bundle,
+            foreground=True,
+            runtime_environment_supported=True,
+            action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+            preserve_proposal=True,
+        )
+        if result.fsm.action_request.intent == ActionIntent.HOOK_ACTION:
+            assert result.safety.reason == "evidence_confidence_too_low"
+        else:
+            assert result.fsm.action_request.intent == ActionIntent.NONE
+        assert result.action_applied is False
+
+
 def test_session_033103_dispatches_hook_on_committed_transition_frame() -> None:
     controller = _controller()
     first = controller.process(

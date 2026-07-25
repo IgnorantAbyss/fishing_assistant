@@ -875,6 +875,102 @@ def test_live_qualified_hook_emits_exactly_once_and_arms_result_flow(
     assert context.capture_frame_index == int(hook_transition["frame_index"])
 
 
+def test_live_explicit_hook_geometry_gap_emits_and_commits_once(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class Frame535GeometryDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                False,
+                0.4301,
+                context.frame_index,
+                context.timestamp,
+                evidence={
+                    "matched_features": [],
+                    "crossing_geometry_version": 1,
+                    "divider_line_detected": True,
+                    "divider_line_x": 1330.0,
+                    "divider_confidence": 1.0,
+                    "fill_endpoint_x": 1397.0,
+                    "fallback_ratio_trustworthy": False,
+                },
+            )
+
+    class CompleteMockSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            count = len(self.calls)
+            return {
+                "action_sink_type": "mock",
+                "action_allowlist": ["HOOK_ACTION"],
+                "attempted_action_counts": {"HOOK_ACTION": count},
+                "applied_action_counts": {"HOOK_ACTION": count},
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteMockSink(kwargs)
+        created.append(sink)
+        return sink
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(
+            supported_frame,
+            diagnostics={
+                "hwnd": 4242,
+                "window_title": "test-window",
+                "process": "BlackDesert64",
+                "process_id": 99,
+                "client_size": [2560, 1440],
+            },
+        ),
+        FakeClock(),
+        duration_seconds=0.5,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="HOOK_ACTION",
+        action_sink_factory=factory,
+    )
+    runtime.hook_detector = Frame535GeometryDetector()
+    runtime.fsm.force_state(RuntimeState.HOOK, 0.0, "frame_535")
+
+    summary = runtime.run(max_frames=10)
+
+    assert len(created) == 1
+    assert len(created[0].calls) == 1
+    request, _ = created[0].calls[0]
+    assert request.intent == ActionIntent.HOOK_ACTION
+    assert runtime.fsm.state == RuntimeState.RESULT_PENDING
+    assert summary["raw_action_proposals"] == {"HOOK_ACTION": 1}
+    assert summary["unique_would_fire"] == {"WOULD_HOOK_ACTION": 1}
+    assert summary["actions_applied"] == 1
+
+
 def test_live_logs_hook_action_blocker_without_reaching_sink(
     tmp_path: Path,
     supported_frame: np.ndarray,

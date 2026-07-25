@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -41,6 +42,42 @@ class SafetyPolicy:
     def __init__(self, config: SafetyConfig | None = None) -> None:
         self.config = config or SafetyConfig()
 
+    def _hook_explicit_geometry_meets_confidence(
+        self,
+        request: ActionRequest,
+    ) -> bool:
+        if request.intent != ActionIntent.HOOK_ACTION:
+            return False
+        payload = request.payload
+        required_flags = (
+            "action_ready",
+            "current_hook_geometry_is_usable",
+            "divider_line_detected",
+            "divider_margin_passed",
+        )
+        if not all(payload.get(name) is True for name in required_flags):
+            return False
+        numeric_values = (
+            payload.get("divider_line_x"),
+            payload.get("fill_endpoint_x"),
+            payload.get("divider_confidence"),
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in numeric_values
+        ):
+            return False
+        divider_x, fill_endpoint_x, divider_confidence = (
+            float(value) for value in numeric_values
+        )
+        return bool(
+            fill_endpoint_x >= divider_x
+            and divider_confidence
+            >= self.config.minimum_evidence_confidence
+        )
+
     def evaluate(
         self,
         request: ActionRequest,
@@ -71,7 +108,10 @@ class SafetyPolicy:
             return SafetyResult(SafetyDecision.WAIT, "foreground_window_status_unknown")
         if evidence.has_conflict:
             return SafetyResult(SafetyDecision.WAIT, "conflicting_evidence")
-        if evidence.confidence < self.config.minimum_evidence_confidence:
+        if (
+            evidence.confidence < self.config.minimum_evidence_confidence
+            and not self._hook_explicit_geometry_meets_confidence(request)
+        ):
             return SafetyResult(SafetyDecision.WAIT, "evidence_confidence_too_low")
         if request.intent == ActionIntent.CAST:
             if get_panel_present is True:
