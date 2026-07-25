@@ -200,9 +200,20 @@ def test_emit_actions_true_requires_explicit_sink_before_capture_initialization(
     assert "REFUSED" in result.stderr
 
 
-@pytest.mark.parametrize("intent", ["START_HOOK", "HOOK_ACTION", "PRESS_SEQUENCE"])
-def test_live_action_mode_refuses_non_cast_collect_intents(intent: str) -> None:
-    with pytest.raises(LivePreflightError, match="limited to CAST,COLLECT"):
+def test_live_action_mode_accepts_staged_start_hook() -> None:
+    validate_emit_actions(
+        True,
+        "sendinput",
+        "CAST,START_HOOK,COLLECT",
+    )
+
+
+@pytest.mark.parametrize("intent", ["HOOK_ACTION", "PRESS_SEQUENCE"])
+def test_live_action_mode_refuses_unstaged_intents(intent: str) -> None:
+    with pytest.raises(
+        LivePreflightError,
+        match="limited to CAST,START_HOOK,COLLECT",
+    ):
         validate_emit_actions(True, "sendinput", f"CAST,COLLECT,{intent}")
 
 
@@ -355,7 +366,8 @@ def test_integrity_mismatch_fails_live_preflight_before_capture_loop_or_input(
     })
     runtime = _runtime(
         tmp_path, capture, FakeClock(), emit_actions=True,
-        action_sink_name="sendinput", action_allowlist="CAST,COLLECT",
+        action_sink_name="sendinput",
+        action_allowlist="CAST,START_HOOK,COLLECT",
         action_sink_factory=factory,
     )
     summary = runtime.run(max_frames=10)
@@ -793,6 +805,268 @@ def test_live_ready_burst_transitions_and_proposes_without_four_second_poll(
     assert summary["unique_would_fire"]["WOULD_START_HOOK"] == 1
     assert summary["actions_applied"] == 0
     assert summary["action_sink"] is None
+
+
+def test_live_stable_ready_emits_exactly_one_start_hook_and_waits_for_ack(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class PersistentReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.99,
+                {PromptObservationKind.READY_BITE.value: 0.99},
+                "stable_ready_test",
+                context.frame_index,
+                context.timestamp,
+                evidence={"rejection_reason": None},
+            )
+
+    class CompleteStartHookSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["CAST", "COLLECT", "START_HOOK"],
+                "attempted_action_counts": {"START_HOOK": len(self.calls)},
+                "applied_action_counts": {"START_HOOK": len(self.calls)},
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteStartHookSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=0.8,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="CAST,START_HOOK,COLLECT",
+        action_sink_factory=factory,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=PersistentReadyObserver(),
+    )
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+    summary = runtime.run(max_frames=20)
+
+    assert len(created) == 1
+    assert len(created[0].calls) == 1
+    request, context = created[0].calls[0]
+    assert request.intent == ActionIntent.START_HOOK
+    assert context.runtime_state == RuntimeState.READY.value
+    assert runtime.fsm.state == RuntimeState.HOOK_PENDING
+    assert summary["unique_would_fire"] == {"WOULD_START_HOOK": 1}
+    assert summary["actions_applied"] == 1
+    with runtime.logger.transitions_path.open(
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        transitions = list(csv.DictReader(handle))
+    assert any(
+        row["previous_state"] == RuntimeState.READY.value
+        and row["next_state"] == RuntimeState.HOOK_PENDING.value
+        and row["reason"] == "start_hook_action_applied"
+        for row in transitions
+    )
+
+
+def test_live_failed_start_hook_emission_is_not_retried(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class PersistentReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.99,
+                {PromptObservationKind.READY_BITE.value: 0.99},
+                "stable_ready_test",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    class FailedStartHookSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                False,
+                False,
+                0,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                rejection_reason="sendinput_incomplete",
+                os_input_emitted=False,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["START_HOOK"],
+                "attempted_action_counts": {
+                    "START_HOOK": len(self.calls),
+                },
+                "applied_action_counts": {},
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = FailedStartHookSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=0.8,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="START_HOOK",
+        action_sink_factory=factory,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=PersistentReadyObserver(),
+    )
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+    summary = runtime.run(max_frames=20)
+
+    assert len(created) == 1
+    assert len(created[0].calls) == 1
+    assert runtime.fsm.state == RuntimeState.READY
+    assert summary["unique_would_fire"] == {"WOULD_START_HOOK": 1}
+    assert summary["actions_applied"] == 0
+
+
+def test_live_start_hook_focus_loss_never_reaches_sink(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class BackgroundCapture(MockCapture):
+        def is_foreground(self) -> bool:
+            return False
+
+    class PersistentReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.99,
+                {PromptObservationKind.READY_BITE.value: 0.99},
+                "stable_ready_test",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    class NoInputSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            raise AssertionError("focus loss must block START_HOOK")
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["START_HOOK"],
+                "panic_triggered": False,
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = NoInputSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = BackgroundCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=0.8,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="START_HOOK",
+        action_sink_factory=factory,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=PersistentReadyObserver(),
+    )
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+    summary = runtime.run(max_frames=20)
+
+    assert len(created) == 1
+    assert created[0].calls == []
+    assert summary["actions_applied"] == 0
+    assert summary["unique_would_fire"].get("WOULD_START_HOOK", 0) == 0
 
 
 def test_live_session_directory_never_overwrites(tmp_path: Path) -> None:

@@ -120,7 +120,7 @@ switches to another window automatically.
   --no-overlay `
   --emit-actions true `
   --action-sink sendinput `
-  --action-allowlist CAST,COLLECT `
+  --action-allowlist CAST,START_HOOK,COLLECT `
   --panic-key F12
 ```
 

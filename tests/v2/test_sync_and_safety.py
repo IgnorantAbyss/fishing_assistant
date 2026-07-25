@@ -122,6 +122,30 @@ def test_duplicate_action_is_denied() -> None:
     assert result.decision == SafetyDecision.DENY
 
 
+def test_start_hook_is_denied_outside_ready() -> None:
+    policy = SafetyPolicy(SafetyConfig(emit_actions=True))
+    request = ActionRequest(
+        ActionIntent.START_HOOK,
+        0.95,
+        "ready_bite_confirmed",
+    )
+    for state in (
+        RuntimeState.WAITING,
+        RuntimeState.IDLE,
+        RuntimeState.GET,
+    ):
+        result = policy.evaluate(
+            request,
+            state,
+            _evidence(),
+            foreground=True,
+            already_sent=False,
+            elapsed_since_action=1.0,
+        )
+        assert result.decision == SafetyDecision.DENY
+        assert result.reason == "action_not_allowed_in_runtime_state"
+
+
 def test_foreground_window_is_required() -> None:
     result = SafetyPolicy(SafetyConfig(emit_actions=True)).evaluate(
         ActionRequest(ActionIntent.CAST, 0.9, "cast"), RuntimeState.IDLE,

@@ -94,7 +94,12 @@ WOULD_FIRE_NAMES = {
     ActionIntent.PRESS_SEQUENCE: "WOULD_PRESS_SEQUENCE",
     ActionIntent.COLLECT: "WOULD_COLLECT",
 }
-LIVE_ACTION_ALLOWLIST = frozenset({ActionIntent.CAST, ActionIntent.COLLECT})
+LIVE_ACTION_ALLOWLIST = frozenset({
+    ActionIntent.CAST,
+    ActionIntent.START_HOOK,
+    ActionIntent.COLLECT,
+})
+LIVE_ACTION_ALLOWLIST_DISPLAY = "CAST,START_HOOK,COLLECT"
 
 
 class LivePreflightError(RuntimeError):
@@ -292,7 +297,8 @@ def validate_emit_actions(
     if emit_actions and unsupported:
         names = ", ".join(sorted(item.value for item in unsupported))
         raise LivePreflightError(
-            f"Live actions are limited to CAST,COLLECT; refused: {names}"
+            "Live actions are limited to "
+            f"{LIVE_ACTION_ALLOWLIST_DISPLAY}; refused: {names}"
         )
 
 

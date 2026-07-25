@@ -107,7 +107,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--action-allowlist", default="",
-        help="Comma-separated ActionIntent names; first Live acceptance should use COLLECT",
+        help=(
+            "Comma-separated staged Live actions: "
+            "CAST,START_HOOK,COLLECT"
+        ),
     )
     parser.add_argument(
         "--panic-key", choices=("F12",), default="F12",

@@ -183,7 +183,7 @@ def test_integrity_mismatch_fails_before_sink_becomes_sendable() -> None:
     })
     events: list[tuple[str, dict]] = []
     with pytest.raises(ActionIntegrityPreflightError, match="elevated PowerShell") as exc:
-        _sink(api, events=events)
+        _sink(api, allowlist="START_HOOK", events=events)
     assert exc.value.reason == "integrity_mismatch"
     assert api.send_calls == []
     assert all(name != "action_sink_initialized" for name, _ in events)
@@ -458,11 +458,16 @@ def test_panic_key_permanently_disables_sink_for_session() -> None:
     api = FakeWindowsApi()
     api.panic_values = [True]
     events: list[tuple[str, dict]] = []
-    sink = _sink(api, events=events)
-    first = sink.apply(ActionRequest(ActionIntent.COLLECT, 0.99, "test"), _context())
+    sink = _sink(api, allowlist="START_HOOK", events=events)
+    request = ActionRequest(ActionIntent.START_HOOK, 0.99, "ready")
+    first = sink.apply(
+        request,
+        _context("cycle:1:START_HOOK", intent="READY"),
+    )
     api.panic_values = [False]
     second = sink.apply(
-        ActionRequest(ActionIntent.COLLECT, 0.99, "test"), _context("cycle:2:COLLECT")
+        request,
+        _context("cycle:2:START_HOOK", intent="READY"),
     )
     assert first.rejection_reason == second.rejection_reason == "panic_triggered"
     assert sum(name == "panic_stop" for name, _ in events) == 1
