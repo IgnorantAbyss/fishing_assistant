@@ -971,6 +971,162 @@ def test_live_explicit_hook_geometry_gap_emits_and_commits_once(
     assert summary["actions_applied"] == 1
 
 
+def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    order: list[str] = []
+    clock = FakeClock()
+
+    class ReadyGeometryDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                False,
+                0.4301,
+                context.frame_index,
+                context.timestamp,
+                evidence={
+                    "matched_features": [],
+                    "crossing_geometry_version": 1,
+                    "divider_line_detected": True,
+                    "divider_line_x": 1330.0,
+                    "divider_confidence": 1.0,
+                    "fill_endpoint_x": 1397.0,
+                    "fallback_ratio_trustworthy": False,
+                },
+            )
+
+    class OrderedEvidenceRecorder(StubEvidenceRecorder):
+        def record_frame(self, frame, *, capture_frame_index, timestamp):
+            order.append("video")
+            clock.value += 0.050
+            return super().record_frame(
+                frame,
+                capture_frame_index=capture_frame_index,
+                timestamp=timestamp,
+            )
+
+        def record_detector_evidence(self, frame, **kwargs):
+            order.append("evidence")
+            clock.value += 0.050
+            return super().record_detector_evidence(frame, **kwargs)
+
+    class OrderedSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            order.append("apply")
+            started_at = clock.value
+            clock.value += 0.002
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                started_at,
+                clock.value,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            count = len(self.calls)
+            return {
+                "action_sink_type": "mock",
+                "action_allowlist": ["HOOK_ACTION"],
+                "attempted_action_counts": {"HOOK_ACTION": count},
+                "applied_action_counts": {"HOOK_ACTION": count},
+            }
+
+    recorder = OrderedEvidenceRecorder()
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(
+            supported_frame,
+            diagnostics={
+                "hwnd": 4242,
+                "window_title": "test-window",
+                "process": "BlackDesert64",
+                "process_id": 99,
+                "client_size": [2560, 1440],
+            },
+        ),
+        clock,
+        duration_seconds=0.5,
+        evidence_mode="diagnostic",
+        evidence_recorder=recorder,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="HOOK_ACTION",
+        action_sink_factory=lambda **kwargs: OrderedSink(kwargs),
+    )
+    runtime.hook_detector = ReadyGeometryDetector()
+    runtime.fsm.force_state(RuntimeState.HOOK, 0.0, "fast_path")
+
+    original_safety = runtime.controller.safety.evaluate
+
+    def ordered_safety(*args, **kwargs):
+        result = original_safety(*args, **kwargs)
+        order.append("safety")
+        clock.value += 0.001
+        return result
+
+    runtime.controller.safety.evaluate = ordered_safety
+    original_screenshot = runtime.logger.save_screenshot
+
+    def ordered_screenshot(*args, **kwargs):
+        order.append("screenshot")
+        clock.value += 0.050
+        return original_screenshot(*args, **kwargs)
+
+    runtime.logger.save_screenshot = ordered_screenshot
+    original_event = runtime.logger.event
+
+    def ordered_event(event_type, payload):
+        if event_type == "WOULD_HOOK_ACTION":
+            order.append("would_event")
+            clock.value += 0.050
+        return original_event(event_type, payload)
+
+    runtime.logger.event = ordered_event
+
+    summary = runtime.run(max_frames=1)
+
+    assert summary["actions_applied"] == 1
+    apply_index = order.index("apply")
+    assert order.index("safety") < apply_index
+    for deferred in ("video", "evidence", "screenshot", "would_event"):
+        assert apply_index < order.index(deferred)
+
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    would = next(
+        item
+        for item in events
+        if item["event_type"] == "WOULD_HOOK_ACTION"
+    )
+    assert would["frame_captured_at"] is not None
+    assert would["hook_geometry_ready_at"] is not None
+    assert would["safety_completed_at"] is not None
+    assert would["sendinput_started_at"] is not None
+    assert would["sendinput_completed_at"] is not None
+    assert would["capture_to_sendinput_start_ms"] >= 0.0
+    assert would["action_ready_to_sendinput_start_ms"] <= 1.0
+
+
 def test_live_logs_hook_action_blocker_without_reaching_sink(
     tmp_path: Path,
     supported_frame: np.ndarray,

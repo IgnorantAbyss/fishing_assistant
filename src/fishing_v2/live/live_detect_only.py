@@ -81,7 +81,11 @@ from src.fishing_v2.runtime.scheduling import (
     RuntimeSchedulePolicy,
 )
 from src.fishing_v2.runtime.synchronization import StartupSynchronizer
-from src.fishing_v2.ports.action_sink import ActionExecutionContext, ActionSink
+from src.fishing_v2.ports.action_sink import (
+    ActionExecutionContext,
+    ActionExecutionResult,
+    ActionSink,
+)
 from src.screen_capture import validate_bgr_frame
 from src.config_loader import load_roi_config
 
@@ -1062,6 +1066,7 @@ class LiveDetectOnlyRuntime:
                     })
                     break
                 captured += 1
+                frame_captured_at = self.clock() - started
                 if self.action_sink is not None:
                     poll_panic = getattr(self.action_sink, "poll_panic", None)
                     if callable(poll_panic):
@@ -1075,7 +1080,19 @@ class LiveDetectOnlyRuntime:
                         "reason": f"resolution_changed_to_{width}x{height}",
                     })
                     break
-                if self.evidence_recorder is not None:
+                defer_video_for_hook_fast_path = bool(
+                    self.evidence_recorder is not None
+                    and self.action_sink is not None
+                    and ActionIntent.HOOK_ACTION in self.action_allowlist
+                    and self.fsm.state in {
+                        RuntimeState.HOOK_PENDING,
+                        RuntimeState.HOOK,
+                    }
+                )
+                if (
+                    self.evidence_recorder is not None
+                    and not defer_video_for_hook_fast_path
+                ):
                     try:
                         self.evidence_recorder.record_frame(
                             frame, capture_frame_index=captured, timestamp=elapsed
@@ -1102,6 +1119,7 @@ class LiveDetectOnlyRuntime:
                 should_process = (
                     prompt_due or detector_due or post_collect_banner_due
                 )
+                deferred_video_recorded = False
                 if should_process:
                     processing_started = self.clock()
                     context = FrameContext(captured, elapsed, metadata={"source": "live_detect_only"})
@@ -1303,6 +1321,140 @@ class LiveDetectOnlyRuntime:
                             "Recorded-observation controller invariant violated: action_applied=true"
                         )
                     processed += 1
+                    request = last_result.fsm.action_request
+                    hook_fast_would_fire: dict[str, Any] | None = None
+                    hook_fast_execution: ActionExecutionResult | None = None
+                    hook_fast_commit = None
+                    hook_fast_apply_called = False
+                    hook_fast_blockers: list[str] = []
+                    hook_fast_opportunity_id: str | None = None
+                    hook_fast_already_consumed = False
+                    hook_geometry_ready_at: float | None = None
+                    safety_completed_at: float | None = None
+                    if request.intent == ActionIntent.HOOK_ACTION:
+                        hook_geometry_ready_at = self.clock() - started
+                        safety_completed_at = self.clock() - started
+                        self.deduplicator.record_raw_proposal(request)
+                        hook_fast_opportunity_id = (
+                            self.deduplicator.opportunity_id(
+                                ActionIntent.HOOK_ACTION
+                            )
+                        )
+                        hook_fast_already_consumed = (
+                            self.deduplicator.already_consumed(
+                                ActionIntent.HOOK_ACTION
+                            )
+                        )
+                        if (
+                            self.action_sink is not None
+                            and ActionIntent.HOOK_ACTION
+                            not in self.action_allowlist
+                        ):
+                            hook_fast_blockers.append(
+                                "action_not_allowlisted"
+                            )
+                        if (
+                            last_result.safety.reason
+                            != "action_emission_disabled"
+                        ):
+                            hook_fast_blockers.append(
+                                last_result.safety.reason
+                            )
+                        if hook_fast_already_consumed:
+                            hook_fast_blockers.append(
+                                "hook_opportunity_already_consumed"
+                            )
+                        if not hook_fast_blockers:
+                            hook_fast_would_fire = (
+                                self.deduplicator.observe(
+                                    request,
+                                    safety_reason=(
+                                        last_result.safety.reason
+                                    ),
+                                    frame_index=captured,
+                                    timestamp=elapsed,
+                                    runtime_state=self.fsm.state.value,
+                                    prompt_evidence=None,
+                                    specialized_evidence={},
+                                    count_raw=False,
+                                )
+                            )
+                            if hook_fast_would_fire is None:
+                                hook_fast_already_consumed = True
+                                hook_fast_blockers.append(
+                                    "hook_opportunity_already_consumed"
+                                )
+                        if (
+                            hook_fast_would_fire is not None
+                            and self.action_sink is not None
+                        ):
+                            action_id = str(
+                                hook_fast_would_fire[
+                                    "deduplication_key"
+                                ]
+                            )
+                            hook_fast_would_fire["action_id"] = action_id
+                            hook_fast_would_fire["episode_id"] = str(
+                                hook_fast_would_fire["cycle_id"]
+                            )
+                            hook_fast_apply_called = True
+                            hook_fast_execution = self.action_sink.apply(
+                                request,
+                                ActionExecutionContext(
+                                    action_id=action_id,
+                                    episode_id=str(
+                                        hook_fast_would_fire["episode_id"]
+                                    ),
+                                    requested_at=elapsed,
+                                    capture_frame_index=captured,
+                                    runtime_state=self.fsm.state.value,
+                                    target_hwnd=(
+                                        self._capture_diagnostics.get(
+                                            "hwnd"
+                                        )
+                                    ),
+                                ),
+                            )
+                            if hook_fast_execution.applied:
+                                actions_applied += 1
+                                hook_fast_commit = (
+                                    self.controller.commit_external_action(
+                                        request,
+                                        elapsed,
+                                    )
+                                )
+                                if not hook_fast_commit.action_applied:
+                                    result_name = (
+                                        "safe_stop_action_commit_failure"
+                                    )
+                                    stop_after_action_commit_failure = True
+                            else:
+                                self.controller.discard_external_proposal()
+                    if (
+                        defer_video_for_hook_fast_path
+                        and self.evidence_recorder is not None
+                    ):
+                        try:
+                            self.evidence_recorder.record_frame(
+                                frame,
+                                capture_frame_index=captured,
+                                timestamp=elapsed,
+                            )
+                            deferred_video_recorded = True
+                        except Exception as exc:
+                            result_name = "safe_stop_evidence_failure"
+                            evidence_failure_reason = (
+                                f"video: {type(exc).__name__}: {exc}"
+                            )
+                            self.logger.event(
+                                "diagnostic_evidence_failure",
+                                {
+                                    "timestamp": elapsed,
+                                    "frame_index": captured,
+                                    "reason": evidence_failure_reason,
+                                },
+                            )
+                            break
                     collect_retry_enabled = bool(
                         self.action_sink is not None
                         and ActionIntent.COLLECT in self.action_allowlist
@@ -1786,62 +1938,17 @@ class LiveDetectOnlyRuntime:
                             ),
                         )
                     if request.intent == ActionIntent.HOOK_ACTION:
-                        self.deduplicator.record_raw_proposal(request)
-                        hook_opportunity_id = (
-                            self.deduplicator.opportunity_id(
-                                ActionIntent.HOOK_ACTION
+                        would_fire = hook_fast_would_fire
+                        if would_fire is not None:
+                            would_fire["prompt_evidence"] = (
+                                dict(prompt.evidence)
+                                if prompt is not None else {}
                             )
-                        )
-                        hook_already_consumed = (
-                            self.deduplicator.already_consumed(
-                                ActionIntent.HOOK_ACTION
-                            )
-                        )
-                        hook_blockers: list[str] = []
-                        if (
-                            self.action_sink is not None
-                            and ActionIntent.HOOK_ACTION
-                            not in self.action_allowlist
-                        ):
-                            hook_blockers.append(
-                                "action_not_allowlisted"
-                            )
-                        if (
-                            last_result.safety.reason
-                            != "action_emission_disabled"
-                        ):
-                            hook_blockers.append(
-                                last_result.safety.reason
-                            )
-                        if hook_already_consumed:
-                            hook_blockers.append(
-                                "hook_opportunity_already_consumed"
-                            )
-                        would_fire = None
-                        if not hook_blockers:
-                            would_fire = self.deduplicator.observe(
-                                request,
-                                safety_reason=(
-                                    last_result.safety.reason
-                                ),
-                                frame_index=captured,
-                                timestamp=elapsed,
-                                runtime_state=self.fsm.state.value,
-                                prompt_evidence=(
-                                    prompt.evidence if prompt else None
-                                ),
-                                specialized_evidence=specialized,
-                                count_raw=False,
-                            )
-                            if would_fire is None:
-                                hook_already_consumed = True
-                                hook_blockers.append(
-                                    "hook_opportunity_already_consumed"
-                                )
-                        if hook_blockers:
+                            would_fire["specialized_evidence"] = specialized
+                        if hook_fast_blockers:
                             blocker_key = (
-                                hook_opportunity_id,
-                                tuple(hook_blockers),
+                                str(hook_fast_opportunity_id),
+                                tuple(hook_fast_blockers),
                             )
                             if (
                                 blocker_key
@@ -1877,13 +1984,13 @@ class LiveDetectOnlyRuntime:
                                             specialized.get("hook")
                                         ),
                                         "eligibility_blockers": (
-                                            hook_blockers
+                                            hook_fast_blockers
                                         ),
                                         "hook_opportunity_id": (
-                                            hook_opportunity_id
+                                            hook_fast_opportunity_id
                                         ),
                                         "already_consumed": (
-                                            hook_already_consumed
+                                            hook_fast_already_consumed
                                         ),
                                         "action_applied": False,
                                     },
@@ -2039,6 +2146,53 @@ class LiveDetectOnlyRuntime:
                                 else str(would_fire["cycle_id"])
                             )
                         )
+                        if event_type == "WOULD_HOOK_ACTION":
+                            sendinput_started_at = (
+                                hook_fast_execution.started_at
+                                if hook_fast_execution is not None
+                                else None
+                            )
+                            sendinput_completed_at = (
+                                hook_fast_execution.completed_at
+                                if hook_fast_execution is not None
+                                else None
+                            )
+                            would_fire.update({
+                                "frame_captured_at": frame_captured_at,
+                                "hook_geometry_ready_at": (
+                                    hook_geometry_ready_at
+                                ),
+                                "safety_completed_at": (
+                                    safety_completed_at
+                                ),
+                                "sendinput_started_at": (
+                                    sendinput_started_at
+                                ),
+                                "sendinput_completed_at": (
+                                    sendinput_completed_at
+                                ),
+                                "capture_to_sendinput_start_ms": (
+                                    (
+                                        sendinput_started_at
+                                        - frame_captured_at
+                                    )
+                                    * 1000.0
+                                    if sendinput_started_at is not None
+                                    else None
+                                ),
+                                "action_ready_to_sendinput_start_ms": (
+                                    (
+                                        sendinput_started_at
+                                        - hook_geometry_ready_at
+                                    )
+                                    * 1000.0
+                                    if (
+                                        sendinput_started_at is not None
+                                        and hook_geometry_ready_at is not None
+                                    )
+                                    else None
+                                ),
+                            })
                         screenshot = self.logger.save_screenshot(frame, captured, event_type)
                         would_fire["screenshot_reference"] = screenshot
                         if event_type == "WOULD_HOOK_ACTION" and hook_crossed_at is not None:
@@ -2047,7 +2201,44 @@ class LiveDetectOnlyRuntime:
                             ) * 1000.0
                         self.logger.event(event_type, would_fire)
                         self.logger.update_cycle(self.deduplicator.cycle_id, event_type, would_fire)
-                        if self.action_sink is not None:
+                        if (
+                            self.action_sink is not None
+                            and hook_fast_apply_called
+                        ):
+                            execution = hook_fast_execution
+                            assert execution is not None
+                            if execution.applied:
+                                commit = hook_fast_commit
+                                assert commit is not None
+                                if not commit.action_applied:
+                                    self.logger.event("action_failed", {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "action_id": action_id,
+                                        "intent": request.intent.value,
+                                        "reason": (
+                                            "runtime_commit_failed_after_complete_input"
+                                        ),
+                                        "commit_reason": commit.reason,
+                                        "action_applied": True,
+                                    })
+                                elif (
+                                    commit.previous_state
+                                    != commit.next_state
+                                ):
+                                    self.logger.transition(
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        previous_state=(
+                                            commit.previous_state.value
+                                        ),
+                                        next_state=(
+                                            commit.next_state.value
+                                        ),
+                                        reason=commit.reason,
+                                        screenshot_reference=screenshot,
+                                    )
+                        elif self.action_sink is not None:
                             if collect_attempt is not None:
                                 self._log_collect_events(
                                     (CollectRetryEvent(
@@ -2156,6 +2347,31 @@ class LiveDetectOnlyRuntime:
                     elif self.action_sink is not None:
                         self.controller.discard_external_proposal()
 
+                if (
+                    defer_video_for_hook_fast_path
+                    and not deferred_video_recorded
+                    and self.evidence_recorder is not None
+                ):
+                    try:
+                        self.evidence_recorder.record_frame(
+                            frame,
+                            capture_frame_index=captured,
+                            timestamp=elapsed,
+                        )
+                    except Exception as exc:
+                        result_name = "safe_stop_evidence_failure"
+                        evidence_failure_reason = (
+                            f"video: {type(exc).__name__}: {exc}"
+                        )
+                        self.logger.event(
+                            "diagnostic_evidence_failure",
+                            {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                "reason": evidence_failure_reason,
+                            },
+                        )
+                        break
                 capture_fps = captured / max(1e-9, self.clock() - started)
                 latency_ms = latencies[-1] if latencies else 0.0
                 self.overlay.show(frame, self._overlay_lines(
