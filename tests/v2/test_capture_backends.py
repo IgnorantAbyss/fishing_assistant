@@ -18,6 +18,7 @@ from src.fishing_v2.live.capture_backends import (
 )
 from src.screen_capture import (
     CaptureRegion,
+    MSSCaptureSession,
     WindowInfo,
     query_foreground_window,
     resolve_exact_window,
@@ -43,6 +44,34 @@ def test_foreground_window_query_handles_null_without_int_conversion(
     assert query_foreground_window(4242, lambda: foreground_hwnd) == (
         matches, unavailable, normalized,
     )
+
+
+def test_mss_native_roi_capture_grabs_only_client_relative_region() -> None:
+    class FakeMSS:
+        def __init__(self) -> None:
+            self.monitors = []
+
+        def grab(self, monitor):
+            self.monitors.append(dict(monitor))
+            return np.zeros(
+                (monitor["height"], monitor["width"], 4),
+                dtype=np.uint8,
+            )
+
+    source = FakeMSS()
+    session = MSSCaptureSession(monitor_index=1)
+    session._capture = source
+    session.region = CaptureRegion(100, 200, 2560, 1440)
+
+    roi = session.capture_roi((972, 468, 1588, 526))
+
+    assert roi.shape == (58, 616, 3)
+    assert source.monitors == [{
+        "left": 1072,
+        "top": 668,
+        "width": 616,
+        "height": 58,
+    }]
 
 
 def _window_info(
@@ -108,18 +137,21 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert default.allow_mss_fallback is False
     assert default.evidence_mode == "minimal"
     assert default.evidence_video_fps == 10.0
+    assert default.hook_critical_fps == 40.0
     selected = parse_args([
         "--window-title", "exact-title",
         "--capture-backend", WINDOWS_GRAPHICS_CAPTURE_BACKEND,
         "--allow-mss-fallback",
         "--evidence-mode", "diagnostic",
         "--evidence-video-fps", "12",
+        "--hook-critical-fps", "36",
         "--max-completed-cycles", "3",
     ])
     assert selected.capture_backend == WINDOWS_GRAPHICS_CAPTURE_BACKEND
     assert selected.allow_mss_fallback is True
     assert selected.evidence_mode == "diagnostic"
     assert selected.evidence_video_fps == 12.0
+    assert selected.hook_critical_fps == 36.0
     assert selected.max_completed_cycles == 3
     assert CAPTURE_BACKENDS == ("mss-region", "windows-graphics-capture")
     with pytest.raises(SystemExit):
@@ -280,9 +312,16 @@ def test_resolved_auto_target_is_bound_once_and_suffix_changes_remain_valid() ->
 
 
 class StubSession:
-    def __init__(self, backend_name: str, *, failure: Exception | None = None) -> None:
+    def __init__(
+        self,
+        backend_name: str,
+        *,
+        failure: Exception | None = None,
+        supports_native_roi_capture: bool = False,
+    ) -> None:
         self.backend_name = backend_name
         self.failure = failure
+        self.supports_native_roi_capture = supports_native_roi_capture
         self.opened = False
         self.closed = False
 
@@ -294,6 +333,12 @@ class StubSession:
 
     def capture(self):
         return np.zeros((1, 2, 3), dtype=np.uint8)
+
+    def capture_roi(self, bounds):
+        if not self.supports_native_roi_capture:
+            raise AssertionError("native ROI capture is not supported")
+        x1, y1, x2, y2 = bounds
+        return np.zeros((y2 - y1, x2 - x1, 3), dtype=np.uint8)
 
     def is_foreground(self):
         return True
@@ -321,6 +366,37 @@ def test_wgc_initialization_never_silently_falls_back() -> None:
     assert fallback.opened is True
     assert allowed.diagnostics()["fallback_used"] is True
     assert "binding unavailable" in allowed.diagnostics()["fallback_reason"]
+
+
+def test_explicit_fallback_reports_only_active_native_roi_capability() -> None:
+    primary = StubSession(
+        WINDOWS_GRAPHICS_CAPTURE_BACKEND,
+        supports_native_roi_capture=False,
+    )
+    fallback = StubSession(
+        MSS_REGION_BACKEND,
+        supports_native_roi_capture=True,
+    )
+    primary_active = ExplicitFallbackCaptureSession(
+        primary,
+        fallback,
+        allowed=True,
+    )
+    primary_active.open()
+    assert primary_active.supports_native_roi_capture is False
+
+    failed_primary = StubSession(
+        WINDOWS_GRAPHICS_CAPTURE_BACKEND,
+        failure=WindowsGraphicsCaptureUnavailable("unavailable"),
+    )
+    fallback_active = ExplicitFallbackCaptureSession(
+        failed_primary,
+        fallback,
+        allowed=True,
+    )
+    fallback_active.open()
+    assert fallback_active.supports_native_roi_capture is True
+    assert fallback_active.capture_roi((0, 0, 2, 1)).shape == (1, 2, 3)
 
 
 def test_factory_rejects_unknown_backend_before_capture() -> None:

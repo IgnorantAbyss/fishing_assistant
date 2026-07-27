@@ -181,6 +181,24 @@ class StubEvidenceRecorder:
         }
 
 
+class MockThirtyFpsHookROICapture(MockCapture):
+    supports_native_roi_capture = True
+
+    def __init__(self, frame: np.ndarray, clock: FakeClock) -> None:
+        super().__init__(frame)
+        self.clock = clock
+        self.roi_calls = 0
+
+    def capture_roi(
+        self,
+        bounds: tuple[int, int, int, int],
+    ) -> np.ndarray:
+        self.clock.value += 1.0 / 30.0
+        self.roi_calls += 1
+        x1, y1, x2, y2 = bounds
+        return np.zeros((y2 - y1, x2 - x1, 3), dtype=np.uint8)
+
+
 def test_emit_actions_true_requires_explicit_sink_before_capture_initialization() -> None:
     with pytest.raises(LivePreflightError, match="requires.*sendinput"):
         validate_emit_actions(True)
@@ -1125,6 +1143,78 @@ def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
     assert would["sendinput_completed_at"] is not None
     assert would["capture_to_sendinput_start_ms"] >= 0.0
     assert would["action_ready_to_sendinput_start_ms"] <= 1.0
+
+
+def test_hook_critical_roi_loop_sustains_source_rate_despite_slow_diagnostics(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    clock = FakeClock()
+    capture = MockThirtyFpsHookROICapture(supported_frame, clock)
+
+    class BelowThresholdHookDetector:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def observe(self, _frame, context):
+            self.calls += 1
+            return HookObservation(
+                True,
+                0.99,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.20,
+                evidence={
+                    "matched_features": ["hook_bar_rect", "bar_fill"],
+                    "fallback_ratio_trustworthy": True,
+                },
+            )
+
+    class SlowEvidenceRecorder(StubEvidenceRecorder):
+        def record_frame(self, frame, *, capture_frame_index, timestamp):
+            clock.value += 0.100
+            return super().record_frame(
+                frame,
+                capture_frame_index=capture_frame_index,
+                timestamp=timestamp,
+            )
+
+        def record_detector_evidence(self, frame, **kwargs):
+            clock.value += 0.100
+            return super().record_detector_evidence(frame, **kwargs)
+
+    hook_detector = BelowThresholdHookDetector()
+    recorder = SlowEvidenceRecorder()
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        clock,
+        duration_seconds=2.0,
+        evidence_mode="diagnostic",
+        evidence_recorder=recorder,
+    )
+    runtime.hook_detector = hook_detector
+    runtime.fsm.force_state(RuntimeState.HOOK, 0.0, "critical_roi_test")
+
+    summary = runtime.run(max_frames=31)
+
+    episode = summary["hook_critical_episodes"][0]
+    assert capture.roi_calls == 31
+    assert hook_detector.calls == 31
+    assert episode["hook_detector_frame_count"] == 31
+    assert episode["hook_detector_actual_fps"] == pytest.approx(30.0)
+    assert episode["hook_frame_interval_p95_ms"] == pytest.approx(
+        1000.0 / 30.0
+    )
+    assert episode["hook_frame_interval_max_ms"] == pytest.approx(
+        1000.0 / 30.0
+    )
+    assert episode["max_gap_diagnostic"] is None
+    assert recorder.video_frames == []
+    assert recorder.roi_frames == []
+    assert summary["detector_runs"]["press"] == 0
+    assert summary["detector_runs"]["get"] == 0
+    assert summary["detector_runs"]["result_banner"] == 0
 
 
 def test_live_logs_hook_action_blocker_without_reaching_sink(

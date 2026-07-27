@@ -73,6 +73,7 @@ class WindowsGraphicsCaptureSession:
     """Adapter for an HWND-bound WGC provider; never substitutes desktop pixels."""
 
     backend_name = WINDOWS_GRAPHICS_CAPTURE_BACKEND
+    supports_native_roi_capture = False
 
     def __init__(
         self,
@@ -260,6 +261,11 @@ class ExplicitFallbackCaptureSession:
     def backend_name(self) -> str:
         return self.active.backend_name if self.active is not None else self.primary.backend_name
 
+    @property
+    def supports_native_roi_capture(self) -> bool:
+        target = self.active if self.active is not None else self.primary
+        return bool(getattr(target, "supports_native_roi_capture", False))
+
     def open(self) -> Any:
         try:
             result = self.primary.open()
@@ -278,6 +284,19 @@ class ExplicitFallbackCaptureSession:
         if self.active is None:
             raise CaptureBackendError("Capture session is not open")
         return self.active.capture()
+
+    def capture_roi(
+        self,
+        bounds: tuple[int, int, int, int],
+    ) -> np.ndarray:
+        if self.active is None:
+            raise CaptureBackendError("Capture session is not open")
+        capture_roi = getattr(self.active, "capture_roi", None)
+        if not callable(capture_roi):
+            raise CaptureBackendError(
+                f"{self.active.backend_name} does not support native ROI capture"
+            )
+        return capture_roi(bounds)
 
     def is_foreground(self) -> bool | None:
         if self.active is None:

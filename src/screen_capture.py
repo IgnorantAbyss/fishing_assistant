@@ -313,6 +313,7 @@ class MSSCaptureSession:
     """Persistent desktop-region capture; this is not HWND surface capture."""
 
     backend_name = "mss-region"
+    supports_native_roi_capture = True
 
     def __init__(
         self,
@@ -454,6 +455,75 @@ class MSSCaptureSession:
             "capture_region": {
                 "left": self.region.left, "top": self.region.top,
                 "width": self.region.width, "height": self.region.height,
+            },
+        })
+        return frame
+
+    def capture_roi(
+        self,
+        bounds: tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Capture current client-relative pixels without a full-frame grab."""
+        if self._capture is None or self.region is None:
+            raise RuntimeError("Capture session is not open")
+        if self.window_info is not None:
+            current = self._window_inspector(
+                self.window_info.window_handle,
+                expected_title=(
+                    None
+                    if self.window_resolution_mode == "process_name"
+                    else self.window_info.window_title
+                ),
+                expected_title_prefix=self.expected_title_prefix,
+                require_non_empty_title=(
+                    self.window_resolution_mode == "process_name"
+                ),
+                expected_process_name=self.expected_process_name,
+                expected_process_id=self.window_info.process_id,
+            )
+            original_size = (
+                self.window_info.client_region.width,
+                self.window_info.client_region.height,
+            )
+            current_size = (
+                current.client_region.width,
+                current.client_region.height,
+            )
+            if current_size != original_size:
+                raise RuntimeError(
+                    "Window client size changed from "
+                    f"{original_size[0]}x{original_size[1]} to "
+                    f"{current_size[0]}x{current_size[1]}"
+                )
+            self.window_info = current
+            self.region = current.client_region
+        x1, y1, x2, y2 = (int(value) for value in bounds)
+        if not (
+            0 <= x1 < x2 <= self.region.width
+            and 0 <= y1 < y2 <= self.region.height
+        ):
+            raise ValueError(
+                f"ROI {bounds} is outside client size "
+                f"{self.region.width}x{self.region.height}"
+            )
+        region = CaptureRegion(
+            self.region.left + x1,
+            self.region.top + y1,
+            x2 - x1,
+            y2 - y1,
+            self.region.window_handle,
+            self.region.window_title,
+        )
+        try:
+            bgra = self._capture.grab(region.as_mss_monitor())
+        except Exception as exc:
+            raise RuntimeError(f"Live Hook ROI capture failed: {exc}") from exc
+        frame = mss_bgra_to_bgr(np.asarray(bgra))
+        validate_bgr_frame(frame)
+        self._diagnostics.update({
+            "hook_roi_capture": {
+                "bounds": [x1, y1, x2, y2],
+                "shape": list(frame.shape),
             },
         })
         return frame

@@ -100,6 +100,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=PROJECT_ROOT / "artifacts" / "prompt_observer" / "prototype_v1",
     )
     parser.add_argument("--max-fps", type=float, default=25.0)
+    parser.add_argument(
+        "--hook-critical-fps",
+        type=float,
+        default=40.0,
+        help=(
+            "Native precise-ROI capture target while HOOK_PENDING/HOOK "
+            "(minimum 30, default: 40)"
+        ),
+    )
     parser.add_argument("--emit-actions", type=_strict_bool, default=False)
     parser.add_argument(
         "--action-sink", choices=ACTION_SINKS, default=ACTION_SINK_NONE,
@@ -198,6 +207,7 @@ def main() -> int:
             save_transition_frames=args.save_transition_frames,
             evidence_mode=args.evidence_mode,
             evidence_video_fps=args.evidence_video_fps,
+            hook_critical_target_fps=args.hook_critical_fps,
             max_completed_cycles=args.max_completed_cycles,
         ),
         emit_actions=args.emit_actions,
