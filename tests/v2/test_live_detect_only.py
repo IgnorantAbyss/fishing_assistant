@@ -1116,13 +1116,27 @@ def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
         return original_event(event_type, payload)
 
     runtime.logger.event = ordered_event
+    original_trace_flush = runtime._flush_hook_decision_trace
+
+    def ordered_trace_flush(reason):
+        order.append("trace_flush")
+        clock.value += 0.050
+        return original_trace_flush(reason)
+
+    runtime._flush_hook_decision_trace = ordered_trace_flush
 
     summary = runtime.run(max_frames=1)
 
     assert summary["actions_applied"] == 1
     apply_index = order.index("apply")
     assert order.index("safety") < apply_index
-    for deferred in ("video", "evidence", "screenshot", "would_event"):
+    for deferred in (
+        "video",
+        "evidence",
+        "screenshot",
+        "would_event",
+        "trace_flush",
+    ):
         assert apply_index < order.index(deferred)
 
     events = [
@@ -1215,6 +1229,32 @@ def test_hook_critical_roi_loop_sustains_source_rate_despite_slow_diagnostics(
     assert summary["detector_runs"]["press"] == 0
     assert summary["detector_runs"]["get"] == 0
     assert summary["detector_runs"]["result_banner"] == 0
+    trace_path = Path(summary["hook_decision_trace_path"])
+    trace_rows = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(trace_rows) == 31
+    assert summary["hook_decision_trace_rows"] == 31
+    required = {
+        "timestamp",
+        "capture_frame_index",
+        "raw_detector_detected",
+        "raw_detector_confidence",
+        "divider_line_x",
+        "divider_confidence",
+        "fill_endpoint_x",
+        "current_hook_geometry_is_usable",
+        "hook_episode_active",
+        "qualified_hook_detected",
+        "hook_action_policy_reason",
+        "hook_action_policy_action_ready",
+        "fsm_state_before",
+        "safety_decision",
+        "safety_reason",
+        "proposal_created",
+    }
+    assert required <= trace_rows[0].keys()
 
 
 def test_live_logs_hook_action_blocker_without_reaching_sink(

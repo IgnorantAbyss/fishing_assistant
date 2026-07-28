@@ -5,6 +5,7 @@ import pytest
 
 from src.fishing_v2.live.hook_critical_loop import (
     HookCriticalFrameAssembler,
+    HookDecisionTraceBuffer,
     HookEpisodeTelemetry,
     HookROIFrame,
     LatestHookFrameSlot,
@@ -22,6 +23,22 @@ def test_latest_hook_frame_slot_replaces_unconsumed_stale_frame() -> None:
     assert slot.take_latest() is latest
     assert slot.take_latest() is None
     assert slot.stale_frames_dropped == 1
+
+
+def test_hook_decision_trace_is_bounded_until_drained() -> None:
+    trace = HookDecisionTraceBuffer(max_entries=2)
+    trace.start("episode-5")
+    trace.record({"capture_frame_index": 6208})
+    trace.record({"capture_frame_index": 6210})
+    trace.record({"capture_frame_index": 6212})
+
+    rows = trace.drain("episode_ended")
+
+    assert [row["capture_frame_index"] for row in rows] == [6210, 6212]
+    assert all(row["hook_episode_id"] == "episode-5" for row in rows)
+    assert all(row["trace_dropped_entries"] == 1 for row in rows)
+    assert all(row["trace_flush_reason"] == "episode_ended" for row in rows)
+    assert trace.active is False
 
 
 def test_hook_episode_telemetry_measures_real_thirty_fps_timestamps() -> None:

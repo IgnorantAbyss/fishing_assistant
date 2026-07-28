@@ -11,6 +11,7 @@ from src.fishing_v2.fusion.observation_fusion import StateEvidence
 from src.fishing_v2.fusion.transition_policy import TransitionPolicy
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.runtime.hook_action_policy import (
+    HookActionDecision,
     HookActionPolicy,
     HookActionPolicyConfig,
 )
@@ -97,6 +98,7 @@ class FishingFSM:
         self._hook_episode_active = initial_state == RuntimeState.HOOK
         self._hook_episode_started_at = float(initial_timestamp) if self._hook_episode_active else None
         self._hook_absent_frames = 0
+        self._last_hook_action_decision: HookActionDecision | None = None
         self._get_started_at: float | None = initial_timestamp if initial_state == RuntimeState.GET else None
         self._get_last_applied_at: float | None = None
         self._get_attempts = 0
@@ -109,6 +111,16 @@ class FishingFSM:
     @property
     def actions_applied(self) -> frozenset[tuple[RuntimeState, ActionIntent]]:
         return frozenset(self._actions_applied)
+
+    @property
+    def last_hook_action_decision(
+        self,
+    ) -> HookActionDecision | None:
+        return self._last_hook_action_decision
+
+    @property
+    def hook_episode_active(self) -> bool:
+        return self._hook_episode_active
 
     @staticmethod
     def _none(reason: str = "no_action") -> ActionRequest:
@@ -303,14 +315,20 @@ class FishingFSM:
         evidence: StateEvidence,
         timestamp: float,
         bundle: ObservationBundle | None,
+        hook_action_observation: HookObservation | None = None,
     ) -> tuple[ActionRequest, str]:
-        hook = bundle.hook if bundle else None
+        hook = (
+            hook_action_observation
+            if hook_action_observation is not None
+            else bundle.hook if bundle else None
+        )
         self._refresh_hook_episode_latch(hook, timestamp)
         decision = self.hook_action_policy.evaluate(
             hook,
             action_already_proposed=self._hook_intent_proposed,
             hook_episode_active=self._hook_episode_active,
         )
+        self._last_hook_action_decision = decision
         if not decision.action_ready:
             return self._none(decision.reason), decision.reason
         assert hook is not None
@@ -453,9 +471,11 @@ class FishingFSM:
         bundle: ObservationBundle | None = None,
         *,
         recorded_observation: bool = False,
+        hook_action_observation: HookObservation | None = None,
     ) -> FSMResult:
         previous = self.state
         self._pending_request = None
+        self._last_hook_action_decision = None
         failed_telemetry = ("FAILED",) if "FAILED" in evidence.reason.upper() else ()
         if self.state == RuntimeState.SYNC_REQUIRED:
             return self._held(previous, "sync_required_blocks_actions", failed_telemetry)
@@ -586,6 +606,43 @@ class FishingFSM:
         if self.state in timeout_limits and self._timeout(timestamp) >= timeout_limits[self.state]:
             return self._transition(RuntimeState.SYNC_REQUIRED, timestamp, f"{self.state.value.lower()}_timeout")
 
+        # Explicit same-frame divider/fill geometry is an action-specific
+        # contract. Evaluate it before a stale semantic prompt can turn the
+        # qualified Fusion recommendation into an illegal HOOK transition.
+        # Safety still evaluates the resulting request normally.
+        action_hook = (
+            hook_action_observation
+            if hook_action_observation is not None
+            else bundle.hook if bundle is not None else None
+        )
+        hook_action_evidence = (
+            action_hook.evidence
+            if action_hook is not None else {}
+        )
+        explicit_hook_geometry_present = bool(
+            self.state == RuntimeState.HOOK
+            and action_hook is not None
+            and hook_action_evidence.get("crossing_geometry_version") == 1
+            and hook_action_evidence.get("divider_line_detected") is True
+            and hook_action_evidence.get("divider_line_x") is not None
+            and hook_action_evidence.get("fill_endpoint_x") is not None
+        )
+        if explicit_hook_geometry_present:
+            action, _ = self._hook_action_request(
+                evidence,
+                timestamp,
+                bundle,
+                action_hook,
+            )
+            if action.intent == ActionIntent.HOOK_ACTION:
+                return FSMResult(
+                    previous,
+                    previous,
+                    action,
+                    "hook_action_proposed",
+                    False,
+                )
+
         target = evidence.recommended_state
         if self.state == RuntimeState.WAITING and target == RuntimeState.IDLE:
             target = None
@@ -631,6 +688,7 @@ class FishingFSM:
                     evidence,
                     timestamp,
                     bundle,
+                    action_hook,
                 )
                 if action.intent == ActionIntent.HOOK_ACTION:
                     return FSMResult(
@@ -688,6 +746,7 @@ class FishingFSM:
                 evidence,
                 timestamp,
                 bundle,
+                action_hook,
             )
             if action.intent == ActionIntent.HOOK_ACTION:
                 return FSMResult(

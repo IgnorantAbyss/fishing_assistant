@@ -107,6 +107,7 @@ class RuntimeController:
             bundle.timestamp,
             bundle,
             recorded_observation=recorded,
+            hook_action_observation=raw_bundle.hook,
         )
         attempt = int(fsm_result.action_request.payload.get("attempt", 0))
         key = (fsm_result.previous_state.value, fsm_result.action_request.intent, attempt)

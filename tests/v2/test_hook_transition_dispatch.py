@@ -73,14 +73,17 @@ def _explicit_geometry_bundle(
     endpoint: float | None = 1397.0,
     divider: float | None = 1330.0,
     divider_confidence: float = 1.0,
+    prompt_kind: PromptObservationKind = (
+        PromptObservationKind.HOOK_INSTRUCTION
+    ),
 ) -> ObservationBundle:
     return ObservationBundle(
         frame,
         timestamp,
         PromptObservation(
-            PromptObservationKind.HOOK_INSTRUCTION,
+            prompt_kind,
             0.99,
-            {PromptObservationKind.HOOK_INSTRUCTION.value: 0.99},
+            {prompt_kind.value: 0.99},
             "session_live_frame_535",
             frame,
             timestamp,
@@ -113,6 +116,55 @@ def _hook_state_controller() -> RuntimeController:
         ),
         SafetyPolicy(SafetyConfig(emit_actions=False)),
     )
+
+
+def test_session_132933_episode5_triggers_on_first_explicit_crossing() -> None:
+    controller = _hook_state_controller()
+    controller.fsm.force_state(
+        RuntimeState.HOOK,
+        274.0845991,
+        "session_132933_episode5_hook",
+    )
+    endpoints = (
+        (6210, 274.5883367, 1476.0),
+        (6212, 274.6426050, 1446.0),
+        (6214, 274.6914746, 1424.0),
+        (6216, 274.7400555, 1392.0),
+        (6218, 274.7946130, 1346.0),
+        (6290, 276.5609259, 1364.0),
+    )
+    results: list[tuple[float, object]] = []
+
+    for frame, timestamp, endpoint in endpoints:
+        result = controller.process(
+            _explicit_geometry_bundle(
+                frame,
+                timestamp,
+                endpoint=endpoint,
+                prompt_kind=PromptObservationKind.READY_BITE,
+            ),
+            foreground=True,
+            runtime_environment_supported=True,
+            action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+            preserve_proposal=True,
+        )
+        results.append((timestamp, result))
+
+    emitted = [
+        timestamp
+        for timestamp, result in results
+        if result.fsm.action_request.intent == ActionIntent.HOOK_ACTION
+    ]
+    assert emitted == [274.5883367]
+    first = results[0][1]
+    assert first.qualified.bundle.hook is not None
+    assert first.qualified.bundle.hook.detected is False
+    assert first.evidence.recommended_state == RuntimeState.READY
+    assert first.fsm.next_state == RuntimeState.HOOK
+    assert first.fsm.action_request.payload["reason"] == (
+        "divider_margin_passed"
+    )
+    assert first.safety.reason == "action_emission_disabled"
 
 
 def test_frame_535_explicit_geometry_satisfies_hook_safety_confidence() -> None:

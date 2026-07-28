@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import math
 from typing import Any
@@ -32,6 +33,57 @@ class LatestHookFrameSlot:
         frame = self._latest
         self._latest = None
         return frame
+
+
+class HookDecisionTraceBuffer:
+    """Bounded per-episode trace that performs no serialization on append."""
+
+    def __init__(self, max_entries: int = 512) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be positive")
+        self.max_entries = int(max_entries)
+        self._entries: deque[dict[str, Any]] = deque(maxlen=max_entries)
+        self._episode_id: str | None = None
+        self._dropped_entries = 0
+
+    @property
+    def active(self) -> bool:
+        return self._episode_id is not None
+
+    def start(self, episode_id: str) -> None:
+        normalized = str(episode_id)
+        if self._episode_id is None:
+            self._episode_id = normalized
+            self._dropped_entries = 0
+            return
+        if self._episode_id != normalized:
+            raise RuntimeError(
+                "Hook decision trace must be drained before a new episode"
+            )
+
+    def record(self, payload: dict[str, Any]) -> None:
+        if self._episode_id is None:
+            return
+        if len(self._entries) == self.max_entries:
+            self._dropped_entries += 1
+        self._entries.append(dict(payload))
+
+    def drain(self, reason: str) -> list[dict[str, Any]]:
+        if self._episode_id is None:
+            return []
+        rows = [
+            {
+                "hook_episode_id": self._episode_id,
+                **entry,
+                "trace_flush_reason": reason,
+                "trace_dropped_entries": self._dropped_entries,
+            }
+            for entry in self._entries
+        ]
+        self._entries.clear()
+        self._episode_id = None
+        self._dropped_entries = 0
+        return rows
 
 
 def _percentile(values: list[float], percentile: float) -> float:

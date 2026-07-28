@@ -53,6 +53,7 @@ from src.fishing_v2.live.diagnostic_evidence import (
 )
 from src.fishing_v2.live.hook_critical_loop import (
     HookCriticalFrameAssembler,
+    HookDecisionTraceBuffer,
     HookEpisodeTelemetry,
     HookROIFrame,
     LatestHookFrameSlot,
@@ -449,6 +450,11 @@ class LiveDetectOnlyRuntime:
         self._latest_hook_frame = LatestHookFrameSlot()
         self._hook_episode_telemetry = HookEpisodeTelemetry()
         self._hook_roi_clip_samples: list[HookROIFrame] = []
+        self._hook_decision_trace = HookDecisionTraceBuffer(
+            max_entries=512
+        )
+        self._hook_decision_trace_path: Path | None = None
+        self._hook_decision_trace_rows_written = 0
         self._preflight_passed = False
         self._preflight_failure_reason: str | None = None
         self._preflight_failure_message: str | None = None
@@ -1083,6 +1089,29 @@ class LiveDetectOnlyRuntime:
             "hook_roi_clip_fps": output_fps,
         }
 
+    def _flush_hook_decision_trace(self, reason: str) -> None:
+        rows = self._hook_decision_trace.drain(reason)
+        if not rows or self.evidence_recorder is None:
+            return
+        path = (
+            self.logger.path
+            / "diagnostic_evidence"
+            / "hook_decision_trace.jsonl"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(
+                    json.dumps(
+                        row,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+        self._hook_decision_trace_path = path
+        self._hook_decision_trace_rows_written += len(rows)
+
     def _overlay_lines(
         self,
         *,
@@ -1195,6 +1224,9 @@ class LiveDetectOnlyRuntime:
                     self._hook_episode_telemetry.start(
                         elapsed,
                         self._latest_hook_frame.stale_frames_dropped,
+                    )
+                    self._hook_decision_trace.start(
+                        str(self.deduplicator.cycle_id)
                     )
                 try:
                     if hook_critical_mode:
@@ -1518,6 +1550,7 @@ class LiveDetectOnlyRuntime:
                             runtime_state=self.fsm.state.value,
                         )
 
+                    runtime_state_before_controller = self.fsm.state
                     last_result = self.controller.process(
                         raw_bundle,
                         foreground=foreground,
@@ -1531,6 +1564,100 @@ class LiveDetectOnlyRuntime:
                         )
                     processed += 1
                     request = last_result.fsm.action_request
+                    if hook_critical_mode:
+                        raw_hook_evidence = (
+                            hook.evidence if hook is not None else {}
+                        )
+                        qualified_hook_result = (
+                            last_result.qualified.bundle.hook
+                        )
+                        hook_qualification = (
+                            last_result.qualified.hook
+                        )
+                        hook_decision = (
+                            self.fsm.last_hook_action_decision
+                        )
+                        decision_payload = (
+                            hook_decision.payload()
+                            if hook_decision is not None else {}
+                        )
+                        self._hook_decision_trace.record({
+                            "timestamp": elapsed,
+                            "capture_frame_index": captured,
+                            "raw_detector_detected": bool(
+                                hook and hook.detected
+                            ),
+                            "raw_detector_confidence": (
+                                float(hook.confidence)
+                                if hook is not None else None
+                            ),
+                            "divider_line_x": raw_hook_evidence.get(
+                                "divider_line_x"
+                            ),
+                            "divider_confidence": (
+                                raw_hook_evidence.get(
+                                    "divider_confidence"
+                                )
+                            ),
+                            "fill_endpoint_x": raw_hook_evidence.get(
+                                "fill_endpoint_x"
+                            ),
+                            "current_hook_geometry_is_usable": (
+                                decision_payload.get(
+                                    "current_hook_geometry_is_usable",
+                                    False,
+                                )
+                            ),
+                            "hook_episode_active": (
+                                decision_payload.get(
+                                    "hook_episode_active",
+                                    self.fsm.hook_episode_active,
+                                )
+                            ),
+                            "qualified_hook_observation_retained": (
+                                qualified_hook_result is not None
+                            ),
+                            "qualified_hook_detected": bool(
+                                qualified_hook_result
+                                and qualified_hook_result.detected
+                            ),
+                            "hook_qualification_reason": (
+                                hook_qualification.qualification_reason
+                            ),
+                            "hook_used_by_fusion": (
+                                hook_qualification.used_by_fusion
+                            ),
+                            "hook_action_policy_reason": (
+                                decision_payload.get(
+                                    "reason",
+                                    "not_evaluated_before_"
+                                    + last_result.fsm.transition_reason,
+                                )
+                            ),
+                            "hook_action_policy_action_ready": bool(
+                                decision_payload.get(
+                                    "action_ready",
+                                    False,
+                                )
+                            ),
+                            "fsm_state_before": (
+                                runtime_state_before_controller.value
+                            ),
+                            "fsm_committed_state": (
+                                last_result.fsm.next_state.value
+                            ),
+                            "fsm_transition_reason": (
+                                last_result.fsm.transition_reason
+                            ),
+                            "safety_decision": (
+                                last_result.safety.decision.value
+                            ),
+                            "safety_reason": last_result.safety.reason,
+                            "proposal_created": (
+                                request.intent
+                                == ActionIntent.HOOK_ACTION
+                            ),
+                        })
                     hook_fast_would_fire: dict[str, Any] | None = None
                     hook_fast_execution: ActionExecutionResult | None = None
                     hook_fast_commit = None
@@ -1639,6 +1766,9 @@ class LiveDetectOnlyRuntime:
                                     stop_after_action_commit_failure = True
                             else:
                                 self.controller.discard_external_proposal()
+                            self._flush_hook_decision_trace(
+                                "action_apply_completed"
+                            )
                     if (
                         defer_video_for_hook_fast_path
                         and not hook_critical_mode
@@ -2621,6 +2751,7 @@ class LiveDetectOnlyRuntime:
                         self.clock() - started,
                         self._latest_hook_frame.stale_frames_dropped,
                     )
+                    self._flush_hook_decision_trace("episode_ended")
                 if stop_after_completed_cycle:
                     result_name = "completed_target_cycles"
                     break
@@ -2671,6 +2802,7 @@ class LiveDetectOnlyRuntime:
                     elapsed_total,
                     self._latest_hook_frame.stale_frames_dropped,
                 )
+            self._flush_hook_decision_trace("session_ended")
             hook_roi_clip_summary = self._write_hook_roi_clip()
             evidence_summary: dict[str, Any] = {
                 "evidence_mode": "minimal",
@@ -2781,6 +2913,14 @@ class LiveDetectOnlyRuntime:
                 ),
                 "stale_hook_frames_dropped": (
                     self._latest_hook_frame.stale_frames_dropped
+                ),
+                "hook_decision_trace_path": (
+                    str(self._hook_decision_trace_path)
+                    if self._hook_decision_trace_path is not None
+                    else None
+                ),
+                "hook_decision_trace_rows": (
+                    self._hook_decision_trace_rows_written
                 ),
                 "max_completed_cycles": self.live_config.max_completed_cycles,
                 **self.cast_clearance.summary(),
