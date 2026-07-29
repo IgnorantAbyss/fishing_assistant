@@ -345,6 +345,25 @@ class FishingFSM:
     def discard_proposal(self) -> None:
         self._pending_request = None
 
+    def stage_external_press_sequence(
+        self,
+        request: ActionRequest,
+    ) -> bool:
+        """Stage a verified ACTIVE-frame PRESS proposal for external commit."""
+        if (
+            self.state != RuntimeState.PRESS
+            or request.intent != ActionIntent.PRESS_SEQUENCE
+            or (
+                self._pending_request is not None
+                and self._pending_request.intent
+                != ActionIntent.PRESS_SEQUENCE
+            )
+        ):
+            return False
+        self._pending_request = request
+        self._press_intent_proposed = True
+        return True
+
     def commit_action(self, request: ActionRequest, timestamp: float) -> ActionCommitResult:
         previous = self.state
         if request.intent == ActionIntent.NONE or self._pending_request != request:

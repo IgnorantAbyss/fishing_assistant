@@ -23,6 +23,9 @@ from src.fishing_v2.ports.action_sink import (
     ActionExecutionContext,
     ActionExecutionResult,
 )
+from src.fishing_v2.runtime.press_action_contract import (
+    validate_frozen_press_payload,
+)
 from src.screen_capture import normalize_process_name
 
 
@@ -59,6 +62,7 @@ class WindowsActionConfig:
     input_mode: str = "vk"
     key_hold_ms: int = 40
     sequence_interval_ms: int = 60
+    press_visual_ack_timeout_seconds: float = 3.0
     minimum_action_interval_ms: int = 150
     panic_key: str = "F12"
     max_actions_per_minute: int = 30
@@ -70,6 +74,10 @@ class WindowsActionConfig:
             raise ValueError("key_hold_ms must be positive")
         if self.sequence_interval_ms < 0:
             raise ValueError("sequence_interval_ms must be non-negative")
+        if self.press_visual_ack_timeout_seconds <= 0:
+            raise ValueError(
+                "press_visual_ack_timeout_seconds must be positive"
+            )
         if self.minimum_action_interval_ms < 0:
             raise ValueError("minimum_action_interval_ms must be non-negative")
         if self.max_actions_per_minute < 1:
@@ -501,6 +509,7 @@ class WindowsSendInputActionSink:
         sleep: Callable[[float], None] = time.sleep,
         event_callback: Callable[[str, Mapping[str, Any]], None] | None = None,
         session_started_at: float = 0.0,
+        enable_live_press_sequence: bool = False,
     ) -> None:
         if target_hwnd <= 0:
             raise ValueError("target_hwnd must be a positive exact HWND")
@@ -524,6 +533,16 @@ class WindowsSendInputActionSink:
         self.sleep = sleep
         self.event_callback = event_callback
         self.session_started_at = float(session_started_at)
+        self.enable_live_press_sequence = bool(
+            enable_live_press_sequence
+        )
+        if (
+            ActionIntent.PRESS_SEQUENCE in self.allowlist
+            and not self.enable_live_press_sequence
+        ):
+            raise ValueError(
+                "PRESS_SEQUENCE requires --enable-live-press-sequence"
+            )
         self._panic_triggered = False
         self._focus_suspended = False
         self._applied_action_ids: set[str] = set()
@@ -576,8 +595,15 @@ class WindowsSendInputActionSink:
             "expected_process": self.expected_process_name,
             "expected_client_size": list(self.expected_client_size),
             "action_allowlist": sorted(item.value for item in self.allowlist),
+            "enable_live_press_sequence": self.enable_live_press_sequence,
             "panic_key": self.config.panic_key.upper(),
             "input_mode": self.config.input_mode,
+            "sequence_interval_ms": (
+                self.config.sequence_interval_ms
+            ),
+            "press_visual_ack_timeout_seconds": (
+                self.config.press_visual_ack_timeout_seconds
+            ),
             "action_applied_semantics": "complete_os_input_not_visual_acknowledgement",
             "input_struct_size": ctypes.sizeof(_INPUT),
             "python_pointer_size": ctypes.sizeof(ctypes.c_void_p),
@@ -620,13 +646,9 @@ class WindowsSendInputActionSink:
         if request.intent == ActionIntent.COLLECT:
             return ("R",)
         if request.intent == ActionIntent.PRESS_SEQUENCE:
-            raw = request.payload.get("sequence", ())
-            if isinstance(raw, str):
-                sequence = tuple(raw.upper())
-            else:
-                sequence = tuple(str(item).upper() for item in raw)
-            if not sequence or any(item not in {"W", "A", "S", "D"} for item in sequence):
-                raise ValueError("invalid_press_sequence")
+            sequence, _ = validate_frozen_press_payload(
+                request.payload
+            )
             return sequence
         raise ValueError("unsupported_action_intent")
 
@@ -664,6 +686,10 @@ class WindowsSendInputActionSink:
         partial: bool = False,
         calls: tuple[SendInputCallResult, ...] = (),
         virtual_key: int | None = None,
+        attempted_count: int = 0,
+        completed_key_count: int = 0,
+        total_key_count: int = 0,
+        key_timings: tuple[Mapping[str, Any], ...] = (),
     ) -> ActionExecutionResult:
         last_call = calls[-1] if calls else None
         return ActionExecutionResult(
@@ -709,6 +735,10 @@ class WindowsSendInputActionSink:
             scan_code=(last_call.scan_code if last_call is not None else None),
             input_flags=tuple(call.flags for call in calls),
             integrity_diagnostics=self._integrity_diagnostics,
+            attempted_count=attempted_count,
+            completed_key_count=completed_key_count,
+            total_key_count=total_key_count,
+            key_timings=key_timings,
         )
 
     def _base_payload(
@@ -812,8 +842,26 @@ class WindowsSendInputActionSink:
         request = intent
         if self.poll_panic(context):
             return self._reject(request, context, "panic_triggered")
+        if (
+            request.intent == ActionIntent.PRESS_SEQUENCE
+            and not self.enable_live_press_sequence
+        ):
+            return self._reject(
+                request,
+                context,
+                "press_sequence_live_opt_in_missing",
+            )
         if request.intent not in self.allowlist:
             return self._reject(request, context, "action_not_allowlisted")
+        if (
+            request.intent == ActionIntent.PRESS_SEQUENCE
+            and context.runtime_state != "PRESS"
+        ):
+            return self._reject(
+                request,
+                context,
+                "press_sequence_requires_press_state",
+            )
         if context.action_id in self._applied_action_ids:
             return self._reject(request, context, "duplicate_action")
         if context.action_id in self._nonretryable_action_ids:
@@ -872,11 +920,16 @@ class WindowsSendInputActionSink:
                 request, context, rate_rejection, keys=keys,
                 foreground_hwnd=snapshot.foreground_hwnd,
             )
-        self._event("action_allowed", {
+        action_allowed_payload = {
             **self._base_payload(request, context, keys),
             "foreground_hwnd": snapshot.foreground_hwnd,
             "action_applied": False,
-        })
+        }
+        defer_press_diagnostics = (
+            request.intent == ActionIntent.PRESS_SEQUENCE
+        )
+        if not defer_press_diagnostics:
+            self._event("action_allowed", action_allowed_payload)
         attempt_clock = self.clock()
         started_at = self._timestamp()
         self._last_attempt_at = attempt_clock
@@ -885,18 +938,76 @@ class WindowsSendInputActionSink:
         expected = len(keys) * 2
         emitted = 0
         calls: list[SendInputCallResult] = []
-        self._event("action_started", {
+        action_started_payload = {
             **self._base_payload(request, context, keys),
             "foreground_hwnd": snapshot.foreground_hwnd,
             "expected_event_count": expected,
             "action_applied": False,
-        })
+        }
+        if not defer_press_diagnostics:
+            self._event("action_started", action_started_payload)
         error: str | None = None
+        attempted_count = 0
+        completed_key_count = 0
+        key_timings: list[dict[str, Any]] = []
+        deferred_press_events: list[
+            tuple[str, dict[str, Any]]
+        ] = []
         try:
             for index, key in enumerate(keys):
                 if self.poll_panic(context):
                     error = "panic_triggered_during_sequence"
                     break
+                if request.intent == ActionIntent.PRESS_SEQUENCE:
+                    try:
+                        current_snapshot = self.api.inspect_window(
+                            self.target_hwnd
+                        )
+                    except Exception as exc:
+                        error = (
+                            "window_validation_error_during_sequence: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        break
+                    per_key_rejection = self._safety_rejection(
+                        current_snapshot,
+                        context,
+                    )
+                    if per_key_rejection is not None:
+                        error = (
+                            f"{per_key_rejection}_during_sequence"
+                        )
+                        if per_key_rejection in {
+                            "foreground_window_mismatch",
+                            "foreground_window_unavailable",
+                        }:
+                            self._focus_loss_count += 1
+                            deferred_press_events.append((
+                                "focus_lost",
+                                {
+                                    **self._base_payload(
+                                        request,
+                                        context,
+                                        keys,
+                                    ),
+                                    "foreground_hwnd": (
+                                        current_snapshot
+                                        .foreground_hwnd
+                                    ),
+                                    "reason": per_key_rejection,
+                                    "action_applied": False,
+                                },
+                            ))
+                        break
+                key_started_at = self._timestamp()
+                attempted_count += 1
+                timing: dict[str, Any] = {
+                    "key_index": index,
+                    "key": key,
+                    "started_at": key_started_at,
+                    "completed_at": None,
+                    "outcome": "started",
+                }
                 down = self.api.send_key_event(
                     VIRTUAL_KEYS[key], key_up=False,
                     input_mode=self.config.input_mode,
@@ -904,6 +1015,9 @@ class WindowsSendInputActionSink:
                 calls.append(down)
                 emitted += max(0, down.return_count)
                 if down.return_count != 1:
+                    timing["outcome"] = "key_down_failed"
+                    timing["completed_at"] = self._timestamp()
+                    key_timings.append(timing)
                     error = (
                         f"SendInput key-down returned {down.return_count}, expected 1; "
                         f"Windows error {down.windows_error_code}: "
@@ -918,12 +1032,19 @@ class WindowsSendInputActionSink:
                 calls.append(up)
                 emitted += max(0, up.return_count)
                 if up.return_count != 1:
+                    timing["outcome"] = "key_up_failed"
+                    timing["completed_at"] = self._timestamp()
+                    key_timings.append(timing)
                     error = (
                         f"SendInput key-up returned {up.return_count}, expected 1; "
                         f"Windows error {up.windows_error_code}: "
                         f"{up.windows_error_message}"
                     )
                     break
+                completed_key_count += 1
+                timing["completed_at"] = self._timestamp()
+                timing["outcome"] = "completed"
+                key_timings.append(timing)
                 if index + 1 < len(keys):
                     if self.poll_panic(context):
                         error = "panic_triggered_during_sequence"
@@ -940,6 +1061,10 @@ class WindowsSendInputActionSink:
             rejection_reason=None if applied else "sendinput_incomplete",
             error=error, partial=partial, calls=tuple(calls),
             virtual_key=VIRTUAL_KEYS[keys[0]] if keys else None,
+            attempted_count=attempted_count,
+            completed_key_count=completed_key_count,
+            total_key_count=len(keys),
+            key_timings=tuple(key_timings),
         )
         payload = {
             **self._base_payload(request, context, keys),
@@ -951,6 +1076,20 @@ class WindowsSendInputActionSink:
                 else "failed_not_applied"
             ),
         }
+        if defer_press_diagnostics:
+            self._event("action_allowed", action_allowed_payload)
+            self._event("action_started", action_started_payload)
+            for event_type, event_payload in deferred_press_events:
+                self._event(event_type, event_payload)
+            for timing in key_timings:
+                self._event("press_key_timing", {
+                    **self._base_payload(request, context, keys),
+                    **timing,
+                    "attempted_count": attempted_count,
+                    "completed_key_count": completed_key_count,
+                    "total_key_count": len(keys),
+                    "action_applied": False,
+                })
         if applied:
             self._applied_action_ids.add(context.action_id)
             self._applied[request.intent.value] += 1

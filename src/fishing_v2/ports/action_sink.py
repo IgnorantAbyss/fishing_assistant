@@ -53,6 +53,10 @@ class ActionExecutionResult:
     scan_code: int | None = None
     input_flags: tuple[int, ...] = ()
     integrity_diagnostics: Mapping[str, Any] = field(default_factory=dict)
+    attempted_count: int = 0
+    completed_key_count: int = 0
+    total_key_count: int = 0
+    key_timings: tuple[Mapping[str, Any], ...] = ()
 
 
 class ActionSink(Protocol):

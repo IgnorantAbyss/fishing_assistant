@@ -7,6 +7,9 @@ from enum import Enum
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import StateEvidence
+from src.fishing_v2.runtime.press_action_contract import (
+    validate_frozen_press_payload,
+)
 
 
 class SafetyDecision(str, Enum):
@@ -129,6 +132,11 @@ class SafetyPolicy:
                 return SafetyResult(SafetyDecision.DENY, "collect_attempt_limit_exceeded")
             if elapsed >= max_duration:
                 return SafetyResult(SafetyDecision.DENY, "collect_duration_limit_exceeded")
+        if request.intent == ActionIntent.PRESS_SEQUENCE:
+            try:
+                validate_frozen_press_payload(request.payload)
+            except ValueError as exc:
+                return SafetyResult(SafetyDecision.DENY, str(exc))
         if elapsed_since_action is not None and elapsed_since_action < self.config.cooldown_sec:
             return SafetyResult(SafetyDecision.WAIT, "action_cooldown")
         if not self.config.emit_actions:

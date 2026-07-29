@@ -48,6 +48,7 @@ class FakeWindowsApi:
             4242, True, True, False, "test-window", 99,
             EXPECTED_GAME_PROCESS, EXPECTED_CLIENT_SIZE, 4242,
         )
+        self.snapshots: list[WindowSafetySnapshot] = []
         self.send_results: list[int] = []
         self.send_calls: list[tuple[int, bool]] = []
         self.input_modes: list[str] = []
@@ -67,7 +68,7 @@ class FakeWindowsApi:
 
     def inspect_window(self, _hwnd: int) -> WindowSafetySnapshot:
         self.inspect_calls += 1
-        return self.snapshot
+        return self.snapshots.pop(0) if self.snapshots else self.snapshot
 
     def send_key_event(
         self, virtual_key: int, *, key_up: bool, input_mode: str
@@ -116,6 +117,7 @@ def _sink(
     config: WindowsActionConfig | None = None,
     events: list[tuple[str, dict]] | None = None,
     expected_title_prefix: str | None = None,
+    enable_live_press_sequence: bool | None = None,
 ) -> WindowsSendInputActionSink:
     clock = clock or FakeClock()
     event_rows = events if events is not None else []
@@ -134,7 +136,23 @@ def _sink(
         clock=clock,
         sleep=clock.sleep,
         event_callback=lambda name, payload: event_rows.append((name, dict(payload))),
+        enable_live_press_sequence=(
+            ActionIntent.PRESS_SEQUENCE
+            in parse_action_allowlist(allowlist)
+            if enable_live_press_sequence is None
+            else enable_live_press_sequence
+        ),
     )
+
+
+def _press_payload(sequence: tuple[str, ...], capacity: int) -> dict:
+    return {
+        "sequence": sequence,
+        "slot_capacity": capacity,
+        "active_press_episode": True,
+        "panel_confirmed": True,
+        "frozen_by_consensus": True,
+    }
 
 
 def test_cli_defaults_to_detect_only_with_no_sink() -> None:
@@ -143,6 +161,7 @@ def test_cli_defaults_to_detect_only_with_no_sink() -> None:
     assert args.action_sink == "none"
     assert args.action_allowlist == ""
     assert args.panic_key == "F12"
+    assert args.enable_live_press_sequence is False
 
 
 def test_explicit_collect_only_cli_contract() -> None:
@@ -154,6 +173,21 @@ def test_explicit_collect_only_cli_contract() -> None:
     assert args.emit_actions is True
     assert args.action_sink == "sendinput"
     assert parse_action_allowlist(args.action_allowlist) == {ActionIntent.COLLECT}
+
+
+def test_press_cli_opt_in_is_explicit() -> None:
+    args = parse_args([
+        "--window-title",
+        "exact-title",
+        "--emit-actions",
+        "true",
+        "--action-sink",
+        "sendinput",
+        "--action-allowlist",
+        "PRESS_SEQUENCE",
+        "--enable-live-press-sequence",
+    ])
+    assert args.enable_live_press_sequence is True
 
 
 def test_allowlist_parser_is_comma_separated_and_strict() -> None:
@@ -348,7 +382,10 @@ def test_collect_mapping_emits_exactly_one_r_down_and_up() -> None:
 def test_press_sequence_emits_only_frozen_wasd_in_order() -> None:
     api = FakeWindowsApi()
     request = ActionRequest(
-        ActionIntent.PRESS_SEQUENCE, 0.99, "frozen", {"sequence": ("W", "A", "S", "D")}
+        ActionIntent.PRESS_SEQUENCE,
+        0.99,
+        "frozen",
+        _press_payload(("W", "A", "S", "D"), 8),
     )
     result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
         request, _context("cycle:1:PRESS_SEQUENCE", intent="PRESS")
@@ -359,12 +396,49 @@ def test_press_sequence_emits_only_frozen_wasd_in_order() -> None:
         for key in ("W", "A", "S", "D")
         for key_up in (False, True)
     ]
+    assert result.completed_key_count == result.total_key_count == 4
+    assert result.attempted_count == 4
+
+
+def test_press_sequence_preserves_repeated_letters() -> None:
+    api = FakeWindowsApi()
+    sequence = ("W", "W", "A", "D")
+    result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
+        ActionRequest(
+            ActionIntent.PRESS_SEQUENCE,
+            0.99,
+            "frozen",
+            _press_payload(sequence, 8),
+        ),
+        _context("cycle:1:PRESS_SEQUENCE", intent="PRESS"),
+    )
+    assert result.applied is True
+    assert api.send_calls == [
+        (VIRTUAL_KEYS[key], key_up)
+        for key in sequence
+        for key_up in (False, True)
+    ]
+
+
+def test_press_sink_constructor_requires_explicit_opt_in() -> None:
+    with pytest.raises(
+        ValueError,
+        match="--enable-live-press-sequence",
+    ):
+        _sink(
+            FakeWindowsApi(),
+            allowlist="PRESS_SEQUENCE",
+            enable_live_press_sequence=False,
+        )
 
 
 def test_invalid_press_character_rejects_entire_sequence_before_input() -> None:
     api = FakeWindowsApi()
     request = ActionRequest(
-        ActionIntent.PRESS_SEQUENCE, 0.99, "bad", {"sequence": ("W", "X", "D")}
+        ActionIntent.PRESS_SEQUENCE,
+        0.99,
+        "bad",
+        _press_payload(("W", "X", "D"), 8),
     )
     result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
         request, _context("cycle:1:PRESS_SEQUENCE", intent="PRESS")
@@ -372,6 +446,34 @@ def test_invalid_press_character_rejects_entire_sequence_before_input() -> None:
     assert result.applied is False
     assert result.rejection_reason == "invalid_press_sequence"
     assert api.inspect_calls == 0
+    assert api.send_calls == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        (_press_payload((), 8), "invalid_press_sequence"),
+        (
+            _press_payload(("W", "A", "S", "D"), 3),
+            "press_sequence_exceeds_slot_capacity",
+        ),
+    ],
+)
+def test_invalid_press_shape_is_rejected_before_any_sendinput(
+    payload: dict,
+    reason: str,
+) -> None:
+    api = FakeWindowsApi()
+    result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
+        ActionRequest(
+            ActionIntent.PRESS_SEQUENCE,
+            0.99,
+            "invalid",
+            payload,
+        ),
+        _context("cycle:invalid:PRESS_SEQUENCE", intent="PRESS"),
+    )
+    assert result.rejection_reason == reason
     assert api.send_calls == []
 
 
@@ -491,7 +593,10 @@ def test_panic_during_sequence_cancels_remaining_keys_as_partial() -> None:
     api = FakeWindowsApi()
     api.panic_values = [False, False, True]
     request = ActionRequest(
-        ActionIntent.PRESS_SEQUENCE, 0.99, "frozen", {"sequence": "WA"}
+        ActionIntent.PRESS_SEQUENCE,
+        0.99,
+        "frozen",
+        _press_payload(("W", "A"), 8),
     )
     result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
         request, _context("cycle:1:PRESS_SEQUENCE", intent="PRESS")
@@ -500,7 +605,107 @@ def test_panic_during_sequence_cancels_remaining_keys_as_partial() -> None:
     assert result.partial_execution is True
     assert result.os_input_emitted is False
     assert result.emitted_event_count == 2
+    assert result.completed_key_count == 1
+    assert result.total_key_count == 2
     assert len(api.send_calls) == 2
+
+
+def test_third_press_key_failure_stops_after_completed_prefix() -> None:
+    api = FakeWindowsApi()
+    api.send_results = [1, 1, 1, 1, 0]
+    sink = _sink(api, allowlist="PRESS_SEQUENCE")
+    request = ActionRequest(
+        ActionIntent.PRESS_SEQUENCE,
+        0.99,
+        "frozen",
+        _press_payload(("W", "A", "S", "D"), 8),
+    )
+    first = sink.apply(
+        request,
+        _context("cycle:third-fails", intent="PRESS"),
+    )
+    second = sink.apply(
+        request,
+        _context("cycle:third-fails", intent="PRESS"),
+    )
+    assert first.partial_execution is True
+    assert first.attempted_count == 3
+    assert first.completed_key_count == 2
+    assert first.total_key_count == 4
+    assert api.send_calls == [
+        (VIRTUAL_KEYS["W"], False),
+        (VIRTUAL_KEYS["W"], True),
+        (VIRTUAL_KEYS["A"], False),
+        (VIRTUAL_KEYS["A"], True),
+        (VIRTUAL_KEYS["S"], False),
+    ]
+    assert second.rejection_reason == "partial_action_not_retried"
+
+
+def test_press_focus_loss_before_third_key_stops_sequence() -> None:
+    api = FakeWindowsApi()
+    valid = api.snapshot
+    api.snapshots = [
+        valid,
+        valid,
+        valid,
+        replace(valid, foreground_hwnd=9999),
+    ]
+    result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
+        ActionRequest(
+            ActionIntent.PRESS_SEQUENCE,
+            0.99,
+            "frozen",
+            _press_payload(("W", "A", "S", "D"), 8),
+        ),
+        _context("cycle:focus-loss", intent="PRESS"),
+    )
+    assert result.partial_execution is True
+    assert result.completed_key_count == 2
+    assert len(api.send_calls) == 4
+    assert "foreground_window_mismatch" in str(result.error)
+
+
+def test_press_diagnostics_are_flushed_after_all_key_events() -> None:
+    order: list[str] = []
+
+    class OrderedApi(FakeWindowsApi):
+        def send_key_event(self, virtual_key, *, key_up, input_mode):
+            order.append("send")
+            return super().send_key_event(
+                virtual_key,
+                key_up=key_up,
+                input_mode=input_mode,
+            )
+
+    api = OrderedApi()
+    sink = _sink(
+        api,
+        allowlist="PRESS_SEQUENCE",
+        events=[],
+    )
+    sink.event_callback = lambda name, _payload: order.append(
+        f"event:{name}"
+    )
+    result = sink.apply(
+        ActionRequest(
+            ActionIntent.PRESS_SEQUENCE,
+            0.99,
+            "frozen",
+            _press_payload(("W", "A"), 8),
+        ),
+        _context("cycle:deferred-diagnostics", intent="PRESS"),
+    )
+    assert result.applied is True
+    last_send = max(
+        index for index, item in enumerate(order) if item == "send"
+    )
+    first_action_event = min(
+        index
+        for index, item in enumerate(order)
+        if item.startswith("event:action_")
+    )
+    assert first_action_event > last_send
 
 
 def test_duplicate_applied_action_id_never_sends_twice() -> None:

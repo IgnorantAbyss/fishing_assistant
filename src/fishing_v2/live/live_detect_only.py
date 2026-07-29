@@ -59,6 +59,10 @@ from src.fishing_v2.live.hook_critical_loop import (
     LatestHookFrameSlot,
 )
 from src.fishing_v2.live.press_shadow_verification import PressShadowVerifier
+from src.fishing_v2.live.press_live_emission import (
+    PressLiveEmissionConfig,
+    PressLiveEmissionTracker,
+)
 from src.fishing_v2.live.windows_action_sink import (
     ACTION_SINK_NONE,
     ACTION_SINK_SENDINPUT,
@@ -112,8 +116,11 @@ LIVE_ACTION_ALLOWLIST = frozenset({
     ActionIntent.START_HOOK,
     ActionIntent.HOOK_ACTION,
     ActionIntent.COLLECT,
+    ActionIntent.PRESS_SEQUENCE,
 })
-LIVE_ACTION_ALLOWLIST_DISPLAY = "CAST,START_HOOK,HOOK_ACTION,COLLECT"
+LIVE_ACTION_ALLOWLIST_DISPLAY = (
+    "CAST,START_HOOK,HOOK_ACTION,COLLECT"
+)
 
 
 class LivePreflightError(RuntimeError):
@@ -308,6 +315,8 @@ def validate_emit_actions(
     emit_actions: bool,
     action_sink: str = ACTION_SINK_NONE,
     action_allowlist: str | tuple[str, ...] | list[str] = (),
+    *,
+    enable_live_press_sequence: bool = False,
 ) -> None:
     """Require two independent CLI opt-ins before constructing an input sink."""
     if emit_actions and action_sink != ACTION_SINK_SENDINPUT:
@@ -325,6 +334,21 @@ def validate_emit_actions(
     if emit_actions and not allowlist:
         raise LivePreflightError(
             "An explicit non-empty --action-allowlist is required when actions are enabled"
+        )
+    press_allowlisted = ActionIntent.PRESS_SEQUENCE in allowlist
+    if press_allowlisted and not enable_live_press_sequence:
+        raise LivePreflightError(
+            "PRESS_SEQUENCE requires the explicit "
+            "--enable-live-press-sequence opt-in"
+        )
+    if enable_live_press_sequence and not emit_actions:
+        raise LivePreflightError(
+            "--enable-live-press-sequence requires --emit-actions=true"
+        )
+    if enable_live_press_sequence and not press_allowlisted:
+        raise LivePreflightError(
+            "--enable-live-press-sequence requires PRESS_SEQUENCE in "
+            "--action-allowlist"
         )
     unsupported = allowlist - LIVE_ACTION_ALLOWLIST
     if emit_actions and unsupported:
@@ -365,12 +389,18 @@ class LiveDetectOnlyRuntime:
         evidence_recorder: DiagnosticEvidenceRecorder | None = None,
         action_sink_name: str = ACTION_SINK_NONE,
         action_allowlist: str | tuple[str, ...] | list[str] = (),
+        enable_live_press_sequence: bool = False,
         panic_key: str = "F12",
         action_sink_factory: Callable[..., ActionSink] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        validate_emit_actions(emit_actions, action_sink_name, action_allowlist)
+        validate_emit_actions(
+            emit_actions,
+            action_sink_name,
+            action_allowlist,
+            enable_live_press_sequence=enable_live_press_sequence,
+        )
         self.config_path = Path(config_path)
         self.prompt_bundle = prompt_bundle
         self.capture = capture
@@ -382,6 +412,9 @@ class LiveDetectOnlyRuntime:
         self.emit_actions = bool(emit_actions)
         self.action_sink_name = action_sink_name
         self.action_allowlist = parse_action_allowlist(action_allowlist)
+        self.enable_live_press_sequence = bool(
+            enable_live_press_sequence
+        )
         self.panic_key = panic_key
         self.action_sink_factory = action_sink_factory or WindowsSendInputActionSink
         self.action_sink: ActionSink | None = None
@@ -457,6 +490,16 @@ class LiveDetectOnlyRuntime:
         self._hook_decision_trace_path: Path | None = None
         self._hook_decision_trace_rows_written = 0
         self._press_shadow = PressShadowVerifier()
+        self._press_live_emission = PressLiveEmissionTracker(
+            PressLiveEmissionConfig(
+                visual_ack_timeout_seconds=float(
+                    self._raw_config["action"].get(
+                        "press_visual_ack_timeout_seconds",
+                        3.0,
+                    )
+                )
+            )
+        )
         self._preflight_passed = False
         self._preflight_failure_reason: str | None = None
         self._preflight_failure_message: str | None = None
@@ -744,6 +787,9 @@ class LiveDetectOnlyRuntime:
                 sleep=self.sleep,
                 event_callback=self.logger.event,
                 session_started_at=session_started_at,
+                enable_live_press_sequence=(
+                    self.enable_live_press_sequence
+                ),
             )
         except ActionIntegrityPreflightError as exc:
             self._preflight_failure_reason = exc.reason
@@ -1183,6 +1229,9 @@ class LiveDetectOnlyRuntime:
                 "approved_roi": list(self.prompt_bundle.roi.pixel),
                 "bundle_sha256": self.prompt_bundle.bundle_sha256,
                 "emit_actions": self.emit_actions,
+                "enable_live_press_sequence": (
+                    self.enable_live_press_sequence
+                ),
                 "action_sink": self.action_sink_name,
                 "action_allowlist": sorted(item.value for item in self.action_allowlist),
                 "capture": self._capture_diagnostics,
@@ -1596,6 +1645,9 @@ class LiveDetectOnlyRuntime:
                         ),
                         safety_reason=last_result.safety.reason,
                         roi_pixels=press_roi_pixels,
+                        live_emission_enabled=(
+                            self.enable_live_press_sequence
+                        ),
                     )
                     press_shadow_request = (
                         ActionRequest(
@@ -1607,6 +1659,13 @@ class LiveDetectOnlyRuntime:
                                     press_shadow_proposal.sequence
                                 ),
                                 "shadow_only": True,
+                                "slot_capacity": (
+                                    press_shadow_proposal
+                                    .slot_capacity
+                                ),
+                                "active_press_episode": True,
+                                "panel_confirmed": True,
+                                "frozen_by_consensus": True,
                                 "episode_index": (
                                     press_shadow_proposal
                                     .episode_index
@@ -1623,6 +1682,280 @@ class LiveDetectOnlyRuntime:
                         )
                         else None
                     )
+                    press_fast_would_fire: dict[str, Any] | None = None
+                    press_fast_execution: ActionExecutionResult | None = None
+                    press_fast_commit = None
+                    press_fast_apply_called = False
+                    press_fast_safety_reason: str | None = None
+                    press_fast_events = ()
+                    if (
+                        press_shadow_request is not None
+                        and self.enable_live_press_sequence
+                    ):
+                        press_shadow_request = ActionRequest(
+                            press_shadow_request.intent,
+                            press_shadow_request.confidence,
+                            press_shadow_request.reason,
+                            {
+                                **dict(press_shadow_request.payload),
+                                "shadow_only": False,
+                            },
+                        )
+                        press_safety = (
+                            self.controller
+                            .evaluate_external_action_safety(
+                                press_shadow_request,
+                                last_result.evidence,
+                                timestamp=elapsed,
+                                state=self.fsm.state,
+                                foreground=foreground,
+                                runtime_environment_supported=True,
+                            )
+                        )
+                        press_fast_safety_reason = press_safety.reason
+                        if (
+                            press_safety.reason
+                            == "action_emission_disabled"
+                            and self.action_sink is not None
+                            and ActionIntent.PRESS_SEQUENCE
+                            in self.action_allowlist
+                            and self.controller
+                            .stage_external_press_sequence(
+                                press_shadow_request
+                            )
+                        ):
+                            press_fast_would_fire = (
+                                self.deduplicator.observe(
+                                    press_shadow_request,
+                                    safety_reason=(
+                                        "action_emission_disabled"
+                                    ),
+                                    frame_index=captured,
+                                    timestamp=elapsed,
+                                    runtime_state=(
+                                        self.fsm.state.value
+                                    ),
+                                    prompt_evidence=None,
+                                    specialized_evidence={},
+                                )
+                            )
+                            attempt_started, start_events = (
+                                self._press_live_emission
+                                .begin_attempt(
+                                    episode_index=(
+                                        press_shadow_proposal
+                                        .episode_index
+                                    ),
+                                    timestamp=elapsed,
+                                    sequence=(
+                                        press_shadow_proposal.sequence
+                                    ),
+                                )
+                            )
+                            press_fast_events = start_events
+                            if (
+                                attempt_started
+                                and press_fast_would_fire is not None
+                            ):
+                                action_id = str(
+                                    press_fast_would_fire[
+                                        "deduplication_key"
+                                    ]
+                                )
+                                press_fast_would_fire.update({
+                                    "action_id": action_id,
+                                    "episode_id": str(
+                                        press_shadow_proposal
+                                        .episode_index
+                                    ),
+                                })
+                                press_fast_apply_called = True
+                                press_fast_execution = (
+                                    self.action_sink.apply(
+                                        press_shadow_request,
+                                        ActionExecutionContext(
+                                            action_id=action_id,
+                                            episode_id=str(
+                                                press_shadow_proposal
+                                                .episode_index
+                                            ),
+                                            requested_at=elapsed,
+                                            capture_frame_index=(
+                                                captured
+                                            ),
+                                            runtime_state=(
+                                                RuntimeState.PRESS
+                                                .value
+                                            ),
+                                            target_hwnd=(
+                                                self
+                                                ._capture_diagnostics
+                                                .get("hwnd")
+                                            ),
+                                        ),
+                                    )
+                                )
+                                execution_events = (
+                                    self._press_live_emission
+                                    .record_execution(
+                                        episode_index=(
+                                            press_shadow_proposal
+                                            .episode_index
+                                        ),
+                                        timestamp=(
+                                            press_fast_execution
+                                            .completed_at
+                                        ),
+                                        execution=(
+                                            press_fast_execution
+                                        ),
+                                    )
+                                )
+                                press_fast_events = (
+                                    *press_fast_events,
+                                    *execution_events,
+                                )
+                                outcome = (
+                                    "completed"
+                                    if press_fast_execution.applied
+                                    else (
+                                        "partial"
+                                        if press_fast_execution
+                                        .partial_execution
+                                        else "failed"
+                                    )
+                                )
+                                self._press_shadow.record_emission_result(
+                                    safety_reason=(
+                                        press_safety.reason
+                                    ),
+                                    action_sink_called=True,
+                                    terminal_outcome=outcome,
+                                    attempted_count=(
+                                        press_fast_execution
+                                        .attempted_count
+                                    ),
+                                    completed_key_count=(
+                                        press_fast_execution
+                                        .completed_key_count
+                                    ),
+                                    total_key_count=(
+                                        press_fast_execution
+                                        .total_key_count
+                                    ),
+                                )
+                                if press_fast_execution.applied:
+                                    actions_applied += 1
+                                    press_fast_commit = (
+                                        self.controller
+                                        .commit_external_action(
+                                            press_shadow_request,
+                                            elapsed,
+                                        )
+                                    )
+                                    if not (
+                                        press_fast_commit
+                                        .action_applied
+                                    ):
+                                        result_name = (
+                                            "safe_stop_"
+                                            "action_commit_failure"
+                                        )
+                                        stop_after_action_commit_failure = (
+                                            True
+                                        )
+                                else:
+                                    (
+                                        self.controller
+                                        .discard_external_proposal()
+                                    )
+                                sequence_text = " ".join(
+                                    press_shadow_proposal.sequence
+                                )
+                                self.logger.event(
+                                    "press_sequence_frozen",
+                                    {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "selected_clean_frame": (
+                                            qualified_press_for_shadow
+                                            .evidence.get(
+                                                "selected_clean_frame"
+                                            )
+                                        ),
+                                        "sequence": list(
+                                            press_shadow_proposal
+                                            .sequence
+                                        ),
+                                        "slot_capacity": (
+                                            press_shadow_proposal
+                                            .slot_capacity
+                                        ),
+                                        "stability_frame_count": (
+                                            press_shadow_proposal
+                                            .stability_frame_count
+                                        ),
+                                        "action_applied": False,
+                                    },
+                                )
+                                print(
+                                    f"PRESS frozen: {sequence_text}"
+                                )
+                                print(
+                                    f"PRESS emitting: {sequence_text}"
+                                )
+                                print(f"PRESS {outcome}")
+                                for press_event in press_fast_events:
+                                    self.logger.event(
+                                        press_event.event_type,
+                                        {
+                                            **dict(
+                                                press_event.payload
+                                            ),
+                                            "frame_index": captured,
+                                            "runtime_state": (
+                                                self.fsm.state.value
+                                            ),
+                                        },
+                                    )
+                        else:
+                            self.controller.discard_external_proposal()
+                            self.deduplicator.record_raw_proposal(
+                                press_shadow_request
+                            )
+                            self._press_shadow.record_emission_result(
+                                safety_reason=press_safety.reason,
+                                action_sink_called=False,
+                                terminal_outcome="safety_blocked",
+                                total_key_count=len(
+                                    press_shadow_proposal.sequence
+                                ),
+                            )
+                    press_visual_events = (
+                        self._press_live_emission.observe_panel(
+                            timestamp=elapsed,
+                            panel_observed=(
+                                qualified_press_for_shadow is not None
+                            ),
+                            panel_disappeared=bool(
+                                qualified_press_for_shadow
+                                and qualified_press_for_shadow
+                                .evidence.get(
+                                    "panel_disappeared"
+                                )
+                                is True
+                            ),
+                        )
+                    )
+                    for press_event in press_visual_events:
+                        self.logger.event(
+                            press_event.event_type,
+                            {
+                                **dict(press_event.payload),
+                                "frame_index": captured,
+                                "runtime_state": self.fsm.state.value,
+                            },
+                        )
                     if hook_critical_mode:
                         raw_hook_evidence = (
                             hook.evidence if hook is not None else {}
@@ -2175,12 +2508,13 @@ class LiveDetectOnlyRuntime:
                     )
                     if isinstance(selected_clean, int) and selected_clean != press_frozen_frame:
                         press_frozen_frame = selected_clean
-                        self.logger.event("press_sequence_frozen", {
-                            "timestamp": elapsed,
-                            "frame_index": captured,
-                            "selected_clean_frame": selected_clean,
-                            "sequence": list(qualified_press.sequence_candidate),
-                        })
+                        if not self.enable_live_press_sequence:
+                            self.logger.event("press_sequence_frozen", {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                "selected_clean_frame": selected_clean,
+                                "sequence": list(qualified_press.sequence_candidate),
+                            })
 
                     get_now = bool(qualified_get and qualified_get.detected)
                     if get_now != get_visible:
@@ -2398,9 +2732,8 @@ class LiveDetectOnlyRuntime:
                                     },
                                 )
                     elif request.intent == ActionIntent.PRESS_SEQUENCE:
-                        # PRESS_SEQUENCE remains shadow-only. In Live action
-                        # mode, discard the preserved FSM proposal without
-                        # ever handing it to the operating-system ActionSink.
+                        # The verified shadow proposal owns guarded Live
+                        # dispatch. Never send the earlier raw FSM proposal.
                         if self.action_sink is not None:
                             self.controller.discard_external_proposal()
                         would_fire = None
@@ -2544,22 +2877,39 @@ class LiveDetectOnlyRuntime:
                         )
                     if press_shadow_request is not None:
                         request = press_shadow_request
-                        would_fire = self.deduplicator.observe(
-                            press_shadow_request,
-                            safety_reason="action_emission_disabled",
-                            frame_index=captured,
-                            timestamp=elapsed,
-                            runtime_state=self.fsm.state.value,
-                            prompt_evidence=(
-                                prompt.evidence if prompt else None
-                            ),
-                            specialized_evidence=specialized,
-                        )
-                        if would_fire is not None:
-                            would_fire["safety_decision"] = "DENY"
-                            would_fire["safety_reason"] = (
-                                "press_sequence_shadow_only_not_live_allowlisted"
+                        if self.enable_live_press_sequence:
+                            would_fire = press_fast_would_fire
+                            if would_fire is not None:
+                                would_fire["prompt_evidence"] = (
+                                    dict(prompt.evidence)
+                                    if prompt is not None else {}
+                                )
+                                would_fire[
+                                    "specialized_evidence"
+                                ] = specialized
+                                would_fire["safety_decision"] = (
+                                    "ALLOW_LIVE_SINK"
+                                )
+                                would_fire["safety_reason"] = (
+                                    press_fast_safety_reason
+                                )
+                        else:
+                            would_fire = self.deduplicator.observe(
+                                press_shadow_request,
+                                safety_reason="action_emission_disabled",
+                                frame_index=captured,
+                                timestamp=elapsed,
+                                runtime_state=self.fsm.state.value,
+                                prompt_evidence=(
+                                    prompt.evidence if prompt else None
+                                ),
+                                specialized_evidence=specialized,
                             )
+                            if would_fire is not None:
+                                would_fire["safety_decision"] = "DENY"
+                                would_fire["safety_reason"] = (
+                                    "press_sequence_shadow_only_not_live_allowlisted"
+                                )
                     if would_fire:
                         event_type = would_fire.pop("event_type")
                         action_id = str(would_fire["deduplication_key"])
@@ -2570,7 +2920,19 @@ class LiveDetectOnlyRuntime:
                             else (
                                 str(cast_attempt.opportunity_id)
                                 if cast_attempt is not None
-                                else str(would_fire["cycle_id"])
+                                else (
+                                    str(
+                                        press_shadow_proposal
+                                        .episode_index
+                                    )
+                                    if (
+                                        event_type
+                                        == "WOULD_PRESS_SEQUENCE"
+                                        and press_shadow_proposal
+                                        is not None
+                                    )
+                                    else str(would_fire["cycle_id"])
+                                )
                             )
                         )
                         if event_type == "WOULD_HOOK_ACTION":
@@ -2666,9 +3028,52 @@ class LiveDetectOnlyRuntime:
                                         screenshot_reference=screenshot,
                                     )
                         elif event_type == "WOULD_PRESS_SEQUENCE":
-                            # Deliberately no ActionSink call. This event is
-                            # evidence for sequence/order/state verification.
-                            pass
+                            # Shadow-only never reaches the sink. With the
+                            # explicit Live opt-in, dispatch and commit already
+                            # completed on the pre-diagnostics fast path.
+                            if (
+                                press_fast_apply_called
+                                and press_fast_execution is not None
+                                and press_fast_execution.applied
+                            ):
+                                assert press_fast_commit is not None
+                                if not press_fast_commit.action_applied:
+                                    self.logger.event("action_failed", {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "action_id": action_id,
+                                        "intent": request.intent.value,
+                                        "reason": (
+                                            "runtime_commit_failed_"
+                                            "after_complete_input"
+                                        ),
+                                        "commit_reason": (
+                                            press_fast_commit.reason
+                                        ),
+                                        "action_applied": True,
+                                    })
+                                elif (
+                                    press_fast_commit.previous_state
+                                    != press_fast_commit.next_state
+                                ):
+                                    self.logger.transition(
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        previous_state=(
+                                            press_fast_commit
+                                            .previous_state.value
+                                        ),
+                                        next_state=(
+                                            press_fast_commit
+                                            .next_state.value
+                                        ),
+                                        reason=(
+                                            press_fast_commit.reason
+                                        ),
+                                        screenshot_reference=(
+                                            screenshot
+                                        ),
+                                    )
                         elif self.action_sink is not None:
                             if collect_attempt is not None:
                                 self._log_collect_events(
@@ -3031,6 +3436,7 @@ class LiveDetectOnlyRuntime:
                 **self.cast_clearance.summary(),
                 **self.cast_opportunity.summary(),
                 **self.collect_retry.summary(),
+                **self._press_live_emission.summary(),
                 **action_summary,
                 **evidence_summary,
                 **hook_roi_clip_summary,

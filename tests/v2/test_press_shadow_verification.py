@@ -23,6 +23,7 @@ def _press(
     *,
     ready: bool,
     x_positions: tuple[int, ...] | None = None,
+    slot_capacity: int | None = None,
 ) -> PressObservation:
     positions = x_positions or tuple(range(len(sequence)))
     boxes = [
@@ -53,6 +54,10 @@ def _press(
         evidence={
             "press_evidence_version": 2,
             "key_boxes": boxes,
+            "total_slot_count": (
+                slot_capacity
+                if slot_capacity is not None else len(sequence)
+            ),
             "panel_disappeared": False,
         },
     )
@@ -82,7 +87,13 @@ def test_shadow_sorts_left_to_right_preserves_repeats_and_proposes_once(
     tmp_path: Path,
 ) -> None:
     verifier = PressShadowVerifier()
-    raw = _press(1, "WASD", ready=True, x_positions=(3, 1, 0, 2))
+    raw = _press(
+        1,
+        "WASD",
+        ready=True,
+        x_positions=(3, 1, 0, 2),
+        slot_capacity=8,
+    )
     qualified = _press(1, "SSWAD", ready=True)
     proposal = verifier.observe(
         timestamp=0.05,
@@ -194,7 +205,7 @@ def test_trace_and_video_are_deferred_until_finalize(
 def test_press_sequence_remains_rejected_by_live_allowlist() -> None:
     with pytest.raises(
         LivePreflightError,
-        match="refused: PRESS_SEQUENCE",
+        match="--enable-live-press-sequence",
     ):
         validate_emit_actions(
             True,

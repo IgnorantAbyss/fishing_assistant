@@ -118,7 +118,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--action-allowlist", default="",
         help=(
             "Comma-separated staged Live actions: "
-            "CAST,START_HOOK,HOOK_ACTION,COLLECT"
+            "CAST,START_HOOK,HOOK_ACTION,COLLECT; PRESS_SEQUENCE "
+            "also requires --enable-live-press-sequence"
+        ),
+    )
+    parser.add_argument(
+        "--enable-live-press-sequence",
+        action="store_true",
+        help=(
+            "Explicitly enable guarded PRESS_SEQUENCE emission; also "
+            "requires emit-actions, sendinput, and PRESS_SEQUENCE in "
+            "the action allowlist"
         ),
     )
     parser.add_argument(
@@ -146,7 +156,12 @@ def main() -> int:
         return 2
     try:
         validate_emit_actions(
-            args.emit_actions, args.action_sink, args.action_allowlist
+            args.emit_actions,
+            args.action_sink,
+            args.action_allowlist,
+            enable_live_press_sequence=(
+                args.enable_live_press_sequence
+            ),
         )
     except LivePreflightError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
@@ -213,6 +228,7 @@ def main() -> int:
         emit_actions=args.emit_actions,
         action_sink_name=args.action_sink,
         action_allowlist=args.action_allowlist,
+        enable_live_press_sequence=args.enable_live_press_sequence,
         panic_key=args.panic_key,
     )
     summary = runtime.run()

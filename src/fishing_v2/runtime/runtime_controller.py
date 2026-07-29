@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
+from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import ObservationFusion, StateEvidence
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.ports.action_sink import (
@@ -197,3 +198,36 @@ class RuntimeController:
 
     def discard_external_proposal(self) -> None:
         self.fsm.discard_proposal()
+
+    def stage_external_press_sequence(
+        self,
+        request: ActionRequest,
+    ) -> bool:
+        return self.fsm.stage_external_press_sequence(request)
+
+    def evaluate_external_action_safety(
+        self,
+        request: ActionRequest,
+        evidence: StateEvidence,
+        *,
+        timestamp: float,
+        state: RuntimeState,
+        foreground: bool | None,
+        runtime_environment_supported: bool,
+    ) -> SafetyResult:
+        return self.safety.evaluate(
+            request,
+            state,
+            evidence,
+            foreground=foreground,
+            already_sent=False,
+            elapsed_since_action=(
+                None
+                if self._last_action_at is None
+                else float(timestamp) - self._last_action_at
+            ),
+            runtime_environment_supported=(
+                runtime_environment_supported
+            ),
+            get_panel_present=None,
+        )

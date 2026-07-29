@@ -16,6 +16,9 @@ import numpy as np
 from src.fishing_v2.domain.observations import PressObservation
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
+from src.fishing_v2.runtime.press_action_contract import (
+    validate_frozen_press_payload,
+)
 
 
 TRACE_NAME = "press_decision_trace.jsonl"
@@ -44,6 +47,7 @@ class PressShadowProposal:
     timestamp: float
     frame_index: int
     stability_frame_count: int
+    slot_capacity: int
 
 
 @dataclass(frozen=True)
@@ -182,6 +186,18 @@ class PressShadowVerifier:
         )
         return entries
 
+    @staticmethod
+    def _slot_capacity(
+        observation: PressObservation | None,
+    ) -> int:
+        if observation is None:
+            return 0
+        value = observation.evidence.get("total_slot_count")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        slots = observation.evidence.get("slots")
+        return len(slots) if isinstance(slots, (list, tuple)) else 0
+
     def _start_episode(self) -> None:
         self._episode_index += 1
         self._active = True
@@ -251,6 +267,7 @@ class PressShadowVerifier:
         qualification_reason: str,
         safety_reason: str,
         roi_pixels: np.ndarray | None = None,
+        live_emission_enabled: bool = False,
     ) -> PressShadowProposal | None:
         if fsm_state != RuntimeState.PRESS:
             self._finish_episode("runtime_left_press")
@@ -277,11 +294,12 @@ class PressShadowVerifier:
                 roi_pixels.copy(),
             ))
 
-        frozen = self._normalize(
+        frozen = tuple(
             qualified.sequence if qualified is not None else ()
         )
         if not frozen and qualified is not None and qualified.sequence_ready:
-            frozen = self._normalize(qualified.sequence_candidate)
+            frozen = tuple(qualified.sequence_candidate)
+        slot_capacity = self._slot_capacity(raw)
         if frozen and not self._frozen_sequence:
             self._frozen_sequence = frozen
             self._frozen_timestamp = float(timestamp)
@@ -297,7 +315,18 @@ class PressShadowVerifier:
             rejection = "qualified_press_panel_absent"
         elif not qualified.sequence_ready or not frozen:
             rejection = qualification_reason or "stable_sequence_not_ready"
-        elif self._proposal_created:
+        else:
+            try:
+                validate_frozen_press_payload({
+                    "sequence": frozen,
+                    "slot_capacity": slot_capacity,
+                    "active_press_episode": True,
+                    "panel_confirmed": True,
+                    "frozen_by_consensus": True,
+                })
+            except ValueError as exc:
+                rejection = str(exc)
+        if rejection is None and self._proposal_created:
             rejection = "press_sequence_opportunity_already_consumed"
 
         proposal: PressShadowProposal | None = None
@@ -318,6 +347,7 @@ class PressShadowVerifier:
                 float(timestamp),
                 int(frame_index),
                 self._stability_frame_count,
+                slot_capacity,
             )
         else:
             self._rejections[rejection] += 1
@@ -342,7 +372,9 @@ class PressShadowVerifier:
             "one_shot_blocked": one_shot_blocked,
             "safety_reason": safety_reason,
             "allowlist_rejection_reason": (
-                "press_sequence_shadow_only_not_live_allowlisted"
+                None
+                if live_emission_enabled
+                else "press_sequence_shadow_only_not_live_allowlisted"
             ),
             "action_sink_called": False,
         })
@@ -353,6 +385,29 @@ class PressShadowVerifier:
         ):
             self._finish_episode("press_panel_disappeared")
         return proposal
+
+    def record_emission_result(
+        self,
+        *,
+        safety_reason: str,
+        action_sink_called: bool,
+        terminal_outcome: str,
+        attempted_count: int = 0,
+        completed_key_count: int = 0,
+        total_key_count: int = 0,
+    ) -> None:
+        """Attach Live outcome in memory without writing diagnostic files."""
+        if not self._trace:
+            return
+        self._trace[-1].update({
+            "safety_reason": safety_reason,
+            "allowlist_rejection_reason": None,
+            "action_sink_called": action_sink_called,
+            "emission_terminal_outcome": terminal_outcome,
+            "attempted_count": attempted_count,
+            "completed_key_count": completed_key_count,
+            "total_key_count": total_key_count,
+        })
 
     def finish_session(self) -> None:
         self._finish_episode("session_ended")

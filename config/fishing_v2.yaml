@@ -167,6 +167,7 @@ action:
   input_mode: scancode
   key_hold_ms: 40
   sequence_interval_ms: 60
+  press_visual_ack_timeout_seconds: 3.0
   minimum_action_interval_ms: 150
   panic_key: F12
   max_actions_per_minute: 30
