@@ -64,6 +64,8 @@ class EvidenceQualificationConfig:
     press_panel_geometry_tolerance: float = 0.12
     press_sequence_window_frames: int = 5
     press_sequence_consensus_frames: int = 3
+    press_clean_sequence_window_frames: int = 3
+    press_clean_sequence_consensus_frames: int = 2
     press_per_key_min_aggregated_confidence: float = 0.68
     press_sequence_min_aggregated_confidence: float = 0.68
 
@@ -78,6 +80,8 @@ class DetectorEvidenceQualifier:
                 panel_geometry_tolerance=self.config.press_panel_geometry_tolerance,
                 sequence_window_frames=self.config.press_sequence_window_frames,
                 sequence_consensus_frames=self.config.press_sequence_consensus_frames,
+                clean_sequence_window_frames=self.config.press_clean_sequence_window_frames,
+                clean_sequence_consensus_frames=self.config.press_clean_sequence_consensus_frames,
                 per_key_min_aggregated_confidence=self.config.press_per_key_min_aggregated_confidence,
                 sequence_min_aggregated_confidence=self.config.press_sequence_min_aggregated_confidence,
             )

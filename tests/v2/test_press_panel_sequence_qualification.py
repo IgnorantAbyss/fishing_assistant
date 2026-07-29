@@ -179,7 +179,7 @@ def test_temporal_sequence_supports_variable_length_without_padding() -> None:
     assert final.stable_key_box_count == 5
 
 
-def test_earliest_clean_arrow_sequence_freezes_before_later_input_effect() -> None:
+def test_single_clean_arrow_frame_is_not_frozen_before_input_effect() -> None:
     qualifier = DetectorEvidenceQualifier(EvidenceQualificationConfig(
         press_panel_confirmation_frames=2,
         press_sequence_consensus_frames=3,
@@ -188,6 +188,35 @@ def test_earliest_clean_arrow_sequence_freezes_before_later_input_effect() -> No
     second = _with_arrow_phase(_press(2, panel=True, sequence="DDDD"), clean=False, input_effect=True)
     qualifier.qualify(_bundle(first), _activation())
     result = qualifier.qualify(_bundle(second), _activation())
+    assert result.bundle.press is not None
+    assert result.bundle.press.sequence_ready is False
+    assert result.bundle.press.sequence == ()
+    assert result.bundle.press.evidence["selected_clean_frame"] is None
+
+
+def test_two_matching_clean_frames_freeze_across_one_missing_glyph_frame() -> None:
+    qualifier = DetectorEvidenceQualifier(EvidenceQualificationConfig(
+        press_panel_confirmation_frames=2,
+        press_sequence_consensus_frames=3,
+    ))
+    first = _with_arrow_phase(
+        _press(1, panel=True, sequence="WASD"),
+        clean=True,
+        input_effect=False,
+    )
+    missing = _with_arrow_phase(
+        _press(2, panel=True, sequence="WAS"),
+        clean=False,
+        input_effect=False,
+    )
+    recovered = _with_arrow_phase(
+        _press(3, panel=True, sequence="WASD"),
+        clean=True,
+        input_effect=False,
+    )
+    qualifier.qualify(_bundle(first), _activation())
+    qualifier.qualify(_bundle(missing), _activation())
+    result = qualifier.qualify(_bundle(recovered), _activation())
     assert result.bundle.press is not None
     assert result.bundle.press.sequence_ready is True
     assert result.bundle.press.sequence == tuple("WASD")

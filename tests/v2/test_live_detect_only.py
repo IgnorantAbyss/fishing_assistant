@@ -989,6 +989,129 @@ def test_live_explicit_hook_geometry_gap_emits_and_commits_once(
     assert summary["actions_applied"] == 1
 
 
+def test_live_press_shadow_proposes_once_without_calling_action_sink(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class StablePressDetector:
+        def observe(self, _frame, context):
+            sequence = "WWAASD"
+            boxes = [
+                {
+                    "key": key,
+                    "bbox": [100 + index * 30, 300, 125 + index * 30, 340],
+                    "confidence": 0.92,
+                    "top_candidates": [
+                        {"key": key, "confidence": 0.92},
+                    ],
+                }
+                for index, key in enumerate(sequence)
+            ]
+            slots = [
+                {
+                    "occupancy": "OCCUPIED",
+                    "arrow_direction": key,
+                    "arrow_confidence": 0.92,
+                    "bbox": box["bbox"],
+                }
+                for key, box in zip(sequence, boxes, strict=True)
+            ]
+            return PressObservation(
+                True,
+                0.99,
+                context.frame_index,
+                context.timestamp,
+                sequence_candidate=tuple(sequence),
+                panel_candidate=True,
+                panel_present=True,
+                panel_qualification_reason="structural_panel_present",
+                key_box_count=len(sequence),
+                sequence_confidence=0.92,
+                evidence={
+                    "press_evidence_version": 2,
+                    "key_boxes": boxes,
+                    "slots": slots,
+                    "panel_bbox": [80, 280, 500, 350],
+                    "clean_frame_eligible": True,
+                    "input_effect_detected": False,
+                    "arrow_sequence_ready": True,
+                },
+            )
+
+    class ForbiddenPressSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            raise AssertionError(
+                "PRESS_SEQUENCE shadow proposal must never reach ActionSink"
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "mock",
+                "action_allowlist": ["CAST"],
+                "attempted_action_counts": {},
+                "applied_action_counts": {},
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = ForbiddenPressSink(kwargs)
+        created.append(sink)
+        return sink
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(
+            supported_frame,
+            diagnostics={
+                "hwnd": 4242,
+                "window_title": "test-window",
+                "process": "BlackDesert64",
+                "process_id": 99,
+                "client_size": [2560, 1440],
+            },
+        ),
+        FakeClock(),
+        duration_seconds=0.6,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="CAST",
+        action_sink_factory=factory,
+    )
+    runtime.press_detector = StablePressDetector()
+    runtime.fsm.force_state(RuntimeState.PRESS, 0.0, "press_shadow_test")
+
+    summary = runtime.run(max_frames=12)
+
+    assert len(created) == 1
+    assert created[0].calls == []
+    assert summary["raw_action_proposals"] == {"PRESS_SEQUENCE": 1}
+    assert summary["unique_would_fire"] == {"WOULD_PRESS_SEQUENCE": 1}
+    assert summary["actions_applied"] == 0
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    would_press = [
+        row for row in events
+        if row["event_type"] == "WOULD_PRESS_SEQUENCE"
+    ]
+    assert len(would_press) == 1
+    assert would_press[0]["action_payload"]["sequence"] == list("WWAASD")
+    assert would_press[0]["safety_reason"] == (
+        "press_sequence_shadow_only_not_live_allowlisted"
+    )
+
+
 def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
     tmp_path: Path,
     supported_frame: np.ndarray,

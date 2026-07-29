@@ -58,6 +58,7 @@ from src.fishing_v2.live.hook_critical_loop import (
     HookROIFrame,
     LatestHookFrameSlot,
 )
+from src.fishing_v2.live.press_shadow_verification import PressShadowVerifier
 from src.fishing_v2.live.windows_action_sink import (
     ACTION_SINK_NONE,
     ACTION_SINK_SENDINPUT,
@@ -455,6 +456,7 @@ class LiveDetectOnlyRuntime:
         )
         self._hook_decision_trace_path: Path | None = None
         self._hook_decision_trace_rows_written = 0
+        self._press_shadow = PressShadowVerifier()
         self._preflight_passed = False
         self._preflight_failure_reason: str | None = None
         self._preflight_failure_message: str | None = None
@@ -1564,6 +1566,63 @@ class LiveDetectOnlyRuntime:
                         )
                     processed += 1
                     request = last_result.fsm.action_request
+                    qualified_press_for_shadow = (
+                        last_result.qualified.bundle.press
+                    )
+                    press_roi_pixels = None
+                    if (
+                        self.evidence_recorder is not None
+                        and press is not None
+                        and self.fsm.state == RuntimeState.PRESS
+                        and activation.press
+                        == DetectorActivationMode.ACTIVE
+                    ):
+                        x1, y1, x2, y2 = (
+                            self._diagnostic_roi_bounds["press"]
+                        )
+                        press_roi_pixels = frame[y1:y2, x1:x2]
+                    press_shadow_proposal = self._press_shadow.observe(
+                        timestamp=elapsed,
+                        frame_index=captured,
+                        fsm_state=self.fsm.state,
+                        activation_mode=activation.press,
+                        raw=press,
+                        qualified=qualified_press_for_shadow,
+                        qualification_reason=(
+                            last_result.qualified.press
+                            .sequence_qualification_reason
+                            or last_result.qualified.press
+                            .qualification_reason
+                        ),
+                        safety_reason=last_result.safety.reason,
+                        roi_pixels=press_roi_pixels,
+                    )
+                    press_shadow_request = (
+                        ActionRequest(
+                            ActionIntent.PRESS_SEQUENCE,
+                            qualified_press_for_shadow.confidence,
+                            "press_sequence_shadow_verified",
+                            payload={
+                                "sequence": (
+                                    press_shadow_proposal.sequence
+                                ),
+                                "shadow_only": True,
+                                "episode_index": (
+                                    press_shadow_proposal
+                                    .episode_index
+                                ),
+                                "stability_frame_count": (
+                                    press_shadow_proposal
+                                    .stability_frame_count
+                                ),
+                            },
+                        )
+                        if (
+                            press_shadow_proposal is not None
+                            and qualified_press_for_shadow is not None
+                        )
+                        else None
+                    )
                     if hook_critical_mode:
                         raw_hook_evidence = (
                             hook.evidence if hook is not None else {}
@@ -2338,6 +2397,13 @@ class LiveDetectOnlyRuntime:
                                         "action_applied": False,
                                     },
                                 )
+                    elif request.intent == ActionIntent.PRESS_SEQUENCE:
+                        # PRESS_SEQUENCE remains shadow-only. In Live action
+                        # mode, discard the preserved FSM proposal without
+                        # ever handing it to the operating-system ActionSink.
+                        if self.action_sink is not None:
+                            self.controller.discard_external_proposal()
+                        would_fire = None
                     elif cast_opportunity_enabled and request.intent == ActionIntent.CAST:
                         self.deduplicator.record_raw_proposal(request)
                         if (
@@ -2476,6 +2542,24 @@ class LiveDetectOnlyRuntime:
                             prompt_evidence=prompt.evidence if prompt else None,
                             specialized_evidence=specialized,
                         )
+                    if press_shadow_request is not None:
+                        request = press_shadow_request
+                        would_fire = self.deduplicator.observe(
+                            press_shadow_request,
+                            safety_reason="action_emission_disabled",
+                            frame_index=captured,
+                            timestamp=elapsed,
+                            runtime_state=self.fsm.state.value,
+                            prompt_evidence=(
+                                prompt.evidence if prompt else None
+                            ),
+                            specialized_evidence=specialized,
+                        )
+                        if would_fire is not None:
+                            would_fire["safety_decision"] = "DENY"
+                            would_fire["safety_reason"] = (
+                                "press_sequence_shadow_only_not_live_allowlisted"
+                            )
                     if would_fire:
                         event_type = would_fire.pop("event_type")
                         action_id = str(would_fire["deduplication_key"])
@@ -2581,6 +2665,10 @@ class LiveDetectOnlyRuntime:
                                         reason=commit.reason,
                                         screenshot_reference=screenshot,
                                     )
+                        elif event_type == "WOULD_PRESS_SEQUENCE":
+                            # Deliberately no ActionSink call. This event is
+                            # evidence for sequence/order/state verification.
+                            pass
                         elif self.action_sink is not None:
                             if collect_attempt is not None:
                                 self._log_collect_events(
@@ -2804,6 +2892,23 @@ class LiveDetectOnlyRuntime:
                 )
             self._flush_hook_decision_trace("session_ended")
             hook_roi_clip_summary = self._write_hook_roi_clip()
+            press_shadow_summary: dict[str, Any] = {
+                "press_decision_trace_path": None,
+                "press_decision_trace_rows": 0,
+                "press_roi_clip_path": None,
+                "press_roi_frames_path": None,
+                "press_roi_frame_count": 0,
+                "press_roi_clip_fps": 0.0,
+                "press_review_items_path": None,
+                "press_episode_review_items": [],
+                "press_shadow_proposal_count": 0,
+            }
+            if self.evidence_recorder is not None:
+                press_shadow_summary = self._press_shadow.write_artifacts(
+                    self.logger.path / "diagnostic_evidence"
+                )
+            else:
+                self._press_shadow.finish_session()
             evidence_summary: dict[str, Any] = {
                 "evidence_mode": "minimal",
                 "video_path": None,
@@ -2929,6 +3034,7 @@ class LiveDetectOnlyRuntime:
                 **action_summary,
                 **evidence_summary,
                 **hook_roi_clip_summary,
+                **press_shadow_summary,
                 "preflight_passed": self._preflight_passed,
                 "preflight_failure_reason": self._preflight_failure_reason,
                 "preflight_failure_message": self._preflight_failure_message,

@@ -16,6 +16,8 @@ class PressSequenceAggregationConfig:
     panel_geometry_tolerance: float = 0.12
     sequence_window_frames: int = 5
     sequence_consensus_frames: int = 3
+    clean_sequence_window_frames: int = 3
+    clean_sequence_consensus_frames: int = 2
     per_key_min_aggregated_confidence: float = 0.68
     sequence_min_aggregated_confidence: float = 0.68
 
@@ -28,6 +30,14 @@ class PressSequenceAggregationConfig:
             raise ValueError("panel_geometry_tolerance must be within 0..0.5")
         if self.sequence_window_frames < self.sequence_consensus_frames or self.sequence_consensus_frames < 1:
             raise ValueError("sequence window must contain the required consensus frames")
+        if (
+            self.clean_sequence_window_frames
+            < self.clean_sequence_consensus_frames
+            or self.clean_sequence_consensus_frames < 2
+        ):
+            raise ValueError(
+                "clean sequence consensus requires at least two frames in its window"
+            )
         if not 0.0 <= self.per_key_min_aggregated_confidence <= 1.0:
             raise ValueError("per-key aggregated confidence must be within 0..1")
         if not 0.0 <= self.sequence_min_aggregated_confidence <= 1.0:
@@ -57,6 +67,9 @@ class PressSequenceTemporalAggregator:
         self._panel_frames = 0
         self._missing_frames = 0
         self._window: deque[PressObservation] = deque(maxlen=self.config.sequence_window_frames)
+        self._clean_window: deque[PressObservation] = deque(
+            maxlen=self.config.clean_sequence_window_frames
+        )
         self._frozen_clean_sequence: tuple[str, ...] | None = None
         self._frozen_clean_confidence: tuple[float, ...] = ()
         self._frozen_clean_frame: int | None = None
@@ -67,6 +80,7 @@ class PressSequenceTemporalAggregator:
     def _clear_panel_episode(self) -> None:
         self._panel_frames = 0
         self._window.clear()
+        self._clean_window.clear()
         self._frozen_clean_sequence = None
         self._frozen_clean_confidence = ()
         self._frozen_clean_frame = None
@@ -172,23 +186,53 @@ class PressSequenceTemporalAggregator:
             self._window.append(observation)
             if observation.evidence.get("input_effect_detected") is True:
                 self._input_effect_seen = True
-            if (
-                self._frozen_clean_sequence is None
-                and not self._input_effect_seen
+            clean_eligible = bool(
+                not self._input_effect_seen
                 and observation.evidence.get("clean_frame_eligible") is True
                 and observation.evidence.get("arrow_sequence_ready") is True
                 and observation.sequence_candidate
-            ):
-                slots = observation.evidence.get("slots", ())
-                occupied = [
-                    item for item in slots
-                    if isinstance(item, dict) and item.get("occupancy") == "OCCUPIED"
-                ]
-                self._frozen_clean_sequence = tuple(observation.sequence_candidate)
-                self._frozen_clean_confidence = tuple(
-                    float(item.get("arrow_confidence", 0.0)) for item in occupied
-                )
-                self._frozen_clean_frame = observation.frame_index
+            )
+            if self._frozen_clean_sequence is None:
+                if clean_eligible:
+                    self._clean_window.append(observation)
+                elif not self._input_effect_seen:
+                    # Keep the short window so one missed-glyph frame between
+                    # two matching clean frames does not destroy consensus.
+                    self._clean_window.append(observation)
+                if not self._input_effect_seen:
+                    clean_candidates = [
+                        item for item in self._clean_window
+                        if (
+                            item.evidence.get("clean_frame_eligible") is True
+                            and item.evidence.get("arrow_sequence_ready") is True
+                            and item.sequence_candidate
+                        )
+                    ]
+                    sequence_counts = Counter(
+                        tuple(item.sequence_candidate)
+                        for item in clean_candidates
+                    )
+                    if sequence_counts:
+                        sequence, support = sequence_counts.most_common(1)[0]
+                        if support >= self.config.clean_sequence_consensus_frames:
+                            selected = next(
+                                item for item in clean_candidates
+                                if tuple(item.sequence_candidate) == sequence
+                            )
+                            slots = selected.evidence.get("slots", ())
+                            occupied = [
+                                item for item in slots
+                                if (
+                                    isinstance(item, dict)
+                                    and item.get("occupancy") == "OCCUPIED"
+                                )
+                            ]
+                            self._frozen_clean_sequence = sequence
+                            self._frozen_clean_confidence = tuple(
+                                float(item.get("arrow_confidence", 0.0))
+                                for item in occupied
+                            )
+                            self._frozen_clean_frame = selected.frame_index
         else:
             self._missing_frames += 1
             absent_frames = self._missing_frames
