@@ -8,6 +8,7 @@ from typing import Any, Mapping, Protocol
 
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.domain.runtime_state import RuntimeState
+from src.fishing_v2.domain.observations import PressObservation
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,22 @@ def pending_press_cancellation_reason(
     if panic_triggered:
         return "panic_triggered"
     return None
+
+
+def press_deadline_observation_decision(
+    pending: ScheduledPressEmission,
+    qualified: PressObservation | None,
+) -> str:
+    """Use only a new stable consensus to contradict a frozen sequence."""
+    if (
+        qualified is None
+        or not qualified.detected
+        or not qualified.sequence_ready
+    ):
+        return "wait_for_stable_press_evidence"
+    if tuple(qualified.sequence) != pending.sequence:
+        return "frozen_sequence_changed"
+    return "ready_to_emit"
 
 
 @dataclass(frozen=True)

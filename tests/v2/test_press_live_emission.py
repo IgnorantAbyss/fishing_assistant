@@ -8,7 +8,9 @@ from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionConfig,
     PressLiveEmissionTracker,
     pending_press_cancellation_reason,
+    press_deadline_observation_decision,
 )
+from src.fishing_v2.domain.observations import PressObservation
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.runtime.press_action_contract import (
@@ -260,6 +262,73 @@ def test_initial_delay_context_loss_cancels_before_any_attempt(
     ) == reason
     tracker.cancel_pending(timestamp=1.1, reason=reason)
     assert tracker.summary()["press_live_emission_attempted_count"] == 0
+
+
+def test_press_deadline_single_frame_dropout_keeps_frozen_schedule() -> None:
+    tracker = PressLiveEmissionTracker(PressLiveEmissionConfig(
+        initial_delay_min_ms=300,
+        initial_delay_max_ms=300,
+    ))
+    pending, _ = tracker.schedule(
+        episode_index=12,
+        timestamp=1.0,
+        sequence=tuple("WAS"),
+        slot_capacity=8,
+    )
+    assert pending is not None
+    dropout = PressObservation(
+        False,
+        0.0,
+        10,
+        1.3,
+        panel_candidate=True,
+        panel_present=True,
+        sequence_ready=False,
+    )
+    recovered = PressObservation(
+        True,
+        0.99,
+        11,
+        1.34,
+        sequence=tuple("WAS"),
+        panel_candidate=True,
+        panel_present=True,
+        sequence_ready=True,
+    )
+
+    assert press_deadline_observation_decision(
+        pending, dropout
+    ) == "wait_for_stable_press_evidence"
+    assert tracker.pending is pending
+    assert press_deadline_observation_decision(
+        pending, recovered
+    ) == "ready_to_emit"
+    assert tracker.pending is pending
+
+
+def test_only_new_stable_different_press_consensus_cancels() -> None:
+    tracker = PressLiveEmissionTracker()
+    pending, _ = tracker.schedule(
+        episode_index=13,
+        timestamp=1.0,
+        sequence=tuple("WAS"),
+        slot_capacity=8,
+    )
+    assert pending is not None
+    different = PressObservation(
+        True,
+        0.99,
+        12,
+        1.4,
+        sequence=tuple("SAD"),
+        panel_candidate=True,
+        panel_present=True,
+        sequence_ready=True,
+    )
+
+    assert press_deadline_observation_decision(
+        pending, different
+    ) == "frozen_sequence_changed"
 
 
 def test_partial_press_emission_is_terminal_and_not_waiting_for_ack() -> None:

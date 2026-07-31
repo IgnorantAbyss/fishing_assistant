@@ -95,6 +95,9 @@ class FishingFSM:
         self._press_waiting_for_clear = False
         self._press_intent_proposed = False
         self._hook_intent_proposed = False
+        self._hook_proposal_reserved = False
+        self._hook_emission_started = False
+        self._hook_consumed = False
         self._hook_episode_active = initial_state == RuntimeState.HOOK
         self._hook_episode_started_at = float(initial_timestamp) if self._hook_episode_active else None
         self._hook_absent_frames = 0
@@ -122,6 +125,18 @@ class FishingFSM:
     def hook_episode_active(self) -> bool:
         return self._hook_episode_active
 
+    @property
+    def hook_opportunity_lifecycle(self) -> str:
+        if self._hook_consumed:
+            return "consumed"
+        if self._hook_emission_started:
+            return "emission_started"
+        if self._hook_proposal_reserved:
+            return "reserved"
+        if self._hook_intent_proposed:
+            return "proposed"
+        return "available" if self._hook_episode_active else "inactive"
+
     @staticmethod
     def _none(reason: str = "no_action") -> ActionRequest:
         return ActionRequest(ActionIntent.NONE, 0.0, reason)
@@ -148,6 +163,9 @@ class FishingFSM:
         self._pending_request = None
         self._press_intent_proposed = False
         self._hook_intent_proposed = False
+        self._hook_proposal_reserved = False
+        self._hook_emission_started = False
+        self._hook_consumed = False
         self._hook_episode_active = state == RuntimeState.HOOK
         self._hook_episode_started_at = float(timestamp) if self._hook_episode_active else None
         self._hook_absent_frames = 0
@@ -168,6 +186,9 @@ class FishingFSM:
         self._press_waiting_for_clear = False
         self._press_intent_proposed = False
         self._hook_intent_proposed = False
+        self._hook_proposal_reserved = False
+        self._hook_emission_started = False
+        self._hook_consumed = False
         self._hook_episode_active = False
         self._hook_episode_started_at = None
         self._hook_absent_frames = 0
@@ -237,6 +258,9 @@ class FishingFSM:
             self._press_intent_proposed = False
         if target == RuntimeState.HOOK and previous != RuntimeState.HOOK:
             self._hook_intent_proposed = False
+            self._hook_proposal_reserved = False
+            self._hook_emission_started = False
+            self._hook_consumed = False
             self._hook_episode_active = True
             self._hook_episode_started_at = float(timestamp)
             self._hook_absent_frames = 0
@@ -248,6 +272,9 @@ class FishingFSM:
             self._actions_applied.clear()
             self._press_waiting_for_clear = False
             self._hook_intent_proposed = False
+            self._hook_proposal_reserved = False
+            self._hook_emission_started = False
+            self._hook_consumed = False
         return FSMResult(
             previous, target, self._none(), reason, previous != target,
             visual_acknowledgement=visual_acknowledgement,
@@ -274,9 +301,7 @@ class FishingFSM:
             self._press_intent_proposed = True
         elif intent == ActionIntent.HOOK_ACTION:
             self._hook_intent_proposed = True
-            self._hook_episode_active = False
-            self._hook_episode_started_at = None
-            self._hook_absent_frames = 0
+            self._hook_proposal_reserved = True
         return request
 
     def _refresh_hook_episode_latch(
@@ -344,6 +369,44 @@ class FishingFSM:
 
     def discard_proposal(self) -> None:
         self._pending_request = None
+
+    def release_hook_proposal_for_retry(
+        self,
+        request: ActionRequest,
+    ) -> bool:
+        """Release a pre-emission reservation without consuming the episode."""
+        if (
+            request.intent != ActionIntent.HOOK_ACTION
+            or self._pending_request != request
+            or not self._hook_proposal_reserved
+            or self._hook_emission_started
+            or self._hook_consumed
+            or request.payload.get(
+                "current_hook_geometry_is_usable"
+            ) is not True
+        ):
+            return False
+        self._pending_request = None
+        self._hook_intent_proposed = False
+        self._hook_proposal_reserved = False
+        return True
+
+    def mark_hook_emission_started(self, request: ActionRequest) -> bool:
+        """Consume one Hook opportunity once the sink actually starts."""
+        if (
+            request.intent != ActionIntent.HOOK_ACTION
+            or self._pending_request != request
+            or not self._hook_proposal_reserved
+            or self._hook_consumed
+        ):
+            return False
+        self._hook_proposal_reserved = False
+        self._hook_emission_started = True
+        self._hook_consumed = True
+        self._hook_episode_active = False
+        self._hook_episode_started_at = None
+        self._hook_absent_frames = 0
+        return True
 
     def stage_external_press_sequence(
         self,
