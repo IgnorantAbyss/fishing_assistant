@@ -162,6 +162,10 @@ def test_cli_defaults_to_detect_only_with_no_sink() -> None:
     assert args.action_allowlist == ""
     assert args.panic_key == "F12"
     assert args.enable_live_press_sequence is False
+    assert args.press_initial_delay_min_ms == 300
+    assert args.press_initial_delay_max_ms == 500
+    assert args.press_inter_key_gap_min_ms == 30
+    assert args.press_inter_key_gap_max_ms == 80
 
 
 def test_explicit_collect_only_cli_contract() -> None:
@@ -417,6 +421,62 @@ def test_press_sequence_preserves_repeated_letters() -> None:
         (VIRTUAL_KEYS[key], key_up)
         for key in sequence
         for key_up in (False, True)
+    ]
+
+
+def test_press_uses_sampled_keyup_to_next_keydown_gaps() -> None:
+    clock = FakeClock()
+
+    class TimestampApi(FakeWindowsApi):
+        def __init__(self) -> None:
+            super().__init__()
+            self.timestamps: list[tuple[int, bool, float]] = []
+
+        def send_key_event(self, virtual_key, *, key_up, input_mode):
+            self.timestamps.append((virtual_key, key_up, clock.value))
+            return super().send_key_event(
+                virtual_key,
+                key_up=key_up,
+                input_mode=input_mode,
+            )
+
+    api = TimestampApi()
+    payload = _press_payload(tuple("WWAD"), 8)
+    payload["press_timing_plan"] = {
+        "sampled_initial_delay_ms": 350,
+        "key_hold_ms": [40, 40, 40, 40],
+        "inter_key_gap_ms": [30, 55, 80],
+        "planned_total_duration_ms": 675,
+    }
+    result = _sink(
+        api,
+        clock,
+        allowlist="PRESS_SEQUENCE",
+    ).apply(
+        ActionRequest(ActionIntent.PRESS_SEQUENCE, 0.99, "paced", payload),
+        _context("cycle:paced", intent="PRESS"),
+    )
+    assert result.applied is True
+    key_down_times = [
+        timestamp
+        for _key, key_up, timestamp in api.timestamps
+        if not key_up
+    ]
+    key_up_times = [
+        timestamp
+        for _key, key_up, timestamp in api.timestamps
+        if key_up
+    ]
+    assert [
+        round((down - up) * 1000)
+        for up, down in zip(key_up_times, key_down_times[1:])
+    ] == [30, 55, 80]
+    assert [
+        round((up - down) * 1000)
+        for down, up in zip(key_down_times, key_up_times)
+    ] == [40, 40, 40, 40]
+    assert [item[0] for item in api.timestamps[::2]] == [
+        VIRTUAL_KEYS[key] for key in "WWAD"
     ]
 
 

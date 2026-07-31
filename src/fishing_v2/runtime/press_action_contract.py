@@ -44,3 +44,52 @@ def validate_frozen_press_payload(
     if len(sequence) > raw_capacity:
         raise ValueError("press_sequence_exceeds_slot_capacity")
     return sequence, raw_capacity
+
+
+def validate_press_timing_plan(
+    payload: Mapping[str, Any],
+    *,
+    sequence_length: int,
+) -> tuple[tuple[int, ...], tuple[int, ...], int | None, int | None]:
+    """Validate a pre-sampled PRESS pacing plan without transforming it."""
+    plan = payload.get("press_timing_plan")
+    if plan is None:
+        return (), (), None, None
+    if not isinstance(plan, Mapping):
+        raise ValueError("invalid_press_timing_plan")
+    holds = plan.get("key_hold_ms")
+    gaps = plan.get("inter_key_gap_ms")
+    if not isinstance(holds, (list, tuple)) or not isinstance(
+        gaps, (list, tuple)
+    ):
+        raise ValueError("invalid_press_timing_plan")
+    if len(holds) != sequence_length or len(gaps) != max(
+        0, sequence_length - 1
+    ):
+        raise ValueError("invalid_press_timing_plan")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 1
+        for value in holds
+    ):
+        raise ValueError("invalid_press_key_hold_plan")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        for value in gaps
+    ):
+        raise ValueError("invalid_press_inter_key_gap_plan")
+    initial = plan.get("sampled_initial_delay_ms")
+    total = plan.get("planned_total_duration_ms")
+    if (
+        isinstance(initial, bool)
+        or not isinstance(initial, int)
+        or initial < 0
+        or isinstance(total, bool)
+        or not isinstance(total, int)
+        or total != initial + sum(holds) + sum(gaps)
+    ):
+        raise ValueError("invalid_press_timing_plan")
+    return tuple(holds), tuple(gaps), initial, total

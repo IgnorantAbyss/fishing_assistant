@@ -202,6 +202,86 @@ def test_trace_and_video_are_deferred_until_finalize(
     assert rows[0]["capture_frame_index"] == "1"
 
 
+def test_press_roi_clip_includes_real_timestamp_preroll_and_postroll(
+    tmp_path: Path,
+) -> None:
+    verifier = PressShadowVerifier(
+        roi_pre_roll_seconds=1.0,
+        roi_post_roll_seconds=0.5,
+    )
+    pixels = np.zeros((20, 80, 3), dtype=np.uint8)
+    for frame, timestamp in ((1, 0.0), (2, 0.5)):
+        verifier.capture_roi_frame(
+            timestamp=timestamp,
+            frame_index=frame,
+            fsm_state=RuntimeState.RESULT_PENDING,
+            activation_mode=DetectorActivationMode.ARMED,
+            roi_pixels=pixels,
+        )
+    ready = _press(3, "WAS", ready=True, slot_capacity=8)
+    verifier.observe(
+        timestamp=1.0,
+        frame_index=3,
+        fsm_state=RuntimeState.PRESS,
+        activation_mode=DetectorActivationMode.ACTIVE,
+        raw=ready,
+        qualified=ready,
+        qualification_reason="earliest_clean_arrow_sequence_frozen",
+        safety_reason="no_action_requested",
+        roi_pixels=pixels,
+    )
+    verifier.capture_roi_frame(
+        timestamp=1.2,
+        frame_index=4,
+        fsm_state=RuntimeState.RESULT_PENDING,
+        activation_mode=DetectorActivationMode.ARMED,
+        roi_pixels=pixels,
+        panel_disappeared=True,
+    )
+    verifier.capture_roi_frame(
+        timestamp=1.6,
+        frame_index=5,
+        fsm_state=RuntimeState.GET,
+        activation_mode=DetectorActivationMode.OFF,
+        roi_pixels=pixels,
+    )
+    verifier.capture_roi_frame(
+        timestamp=1.8,
+        frame_index=6,
+        fsm_state=RuntimeState.GET,
+        activation_mode=DetectorActivationMode.OFF,
+        roi_pixels=pixels,
+    )
+    summary = verifier.write_artifacts(tmp_path)
+    with Path(summary["press_roi_frames_path"]).open(
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert [int(row["capture_frame_index"]) for row in rows] == [
+        1, 2, 3, 4, 5
+    ]
+    assert summary["press_roi_clip_path"] is not None
+    assert summary["press_roi_pre_roll_seconds"] == 1.0
+    assert summary["press_roi_post_roll_seconds"] == 0.5
+
+
+def test_result_pending_preroll_without_press_episode_creates_no_fake_clip(
+    tmp_path: Path,
+) -> None:
+    verifier = PressShadowVerifier()
+    verifier.capture_roi_frame(
+        timestamp=1.0,
+        frame_index=1,
+        fsm_state=RuntimeState.RESULT_PENDING,
+        activation_mode=DetectorActivationMode.ARMED,
+        roi_pixels=np.zeros((20, 80, 3), dtype=np.uint8),
+    )
+    summary = verifier.write_artifacts(tmp_path)
+    assert summary["press_roi_frame_count"] == 0
+    assert summary["press_roi_clip_path"] is None
+
+
 def test_press_sequence_remains_rejected_by_live_allowlist() -> None:
     with pytest.raises(
         LivePreflightError,

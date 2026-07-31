@@ -132,6 +132,30 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--press-initial-delay-min-ms",
+        type=int,
+        default=300,
+        help="Minimum non-blocking delay after PRESS freeze (default: 300)",
+    )
+    parser.add_argument(
+        "--press-initial-delay-max-ms",
+        type=int,
+        default=500,
+        help="Maximum non-blocking delay after PRESS freeze (default: 500)",
+    )
+    parser.add_argument(
+        "--press-inter-key-gap-min-ms",
+        type=int,
+        default=30,
+        help="Minimum key-up to next key-down gap (default: 30)",
+    )
+    parser.add_argument(
+        "--press-inter-key-gap-max-ms",
+        type=int,
+        default=80,
+        help="Maximum key-up to next key-down gap (default: 80)",
+    )
+    parser.add_argument(
         "--panic-key", choices=("F12",), default="F12",
         help="Polling-only permanent session stop key for the action sink (default: F12)",
     )
@@ -139,6 +163,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.window_title_prefix and not args.process_name:
         parser.error("--window-title-prefix requires --process-name")
+    if (
+        args.press_initial_delay_min_ms < 0
+        or args.press_initial_delay_min_ms
+        > args.press_initial_delay_max_ms
+    ):
+        parser.error("invalid PRESS initial delay range")
+    if (
+        args.press_inter_key_gap_min_ms < 0
+        or args.press_inter_key_gap_min_ms
+        > args.press_inter_key_gap_max_ms
+    ):
+        parser.error("invalid PRESS inter-key gap range")
     return args
 
 
@@ -224,6 +260,18 @@ def main() -> int:
             evidence_video_fps=args.evidence_video_fps,
             hook_critical_target_fps=args.hook_critical_fps,
             max_completed_cycles=args.max_completed_cycles,
+            press_initial_delay_min_ms=(
+                args.press_initial_delay_min_ms
+            ),
+            press_initial_delay_max_ms=(
+                args.press_initial_delay_max_ms
+            ),
+            press_inter_key_gap_min_ms=(
+                args.press_inter_key_gap_min_ms
+            ),
+            press_inter_key_gap_max_ms=(
+                args.press_inter_key_gap_max_ms
+            ),
         ),
         emit_actions=args.emit_actions,
         action_sink_name=args.action_sink,

@@ -123,6 +123,10 @@ def _runtime(
     action_allowlist=(),
     action_sink_factory=None,
     enable_live_press_sequence: bool = False,
+    press_initial_delay_min_ms: int = 300,
+    press_initial_delay_max_ms: int = 500,
+    press_inter_key_gap_min_ms: int = 30,
+    press_inter_key_gap_max_ms: int = 80,
 ) -> LiveDetectOnlyRuntime:
     return LiveDetectOnlyRuntime(
         config_path=CONFIG,
@@ -135,6 +139,10 @@ def _runtime(
             show_overlay=False,
             save_transition_frames=False,
             evidence_mode=evidence_mode,
+            press_initial_delay_min_ms=press_initial_delay_min_ms,
+            press_initial_delay_max_ms=press_initial_delay_max_ms,
+            press_inter_key_gap_min_ms=press_inter_key_gap_min_ms,
+            press_inter_key_gap_max_ms=press_inter_key_gap_max_ms,
         ),
         emit_actions=emit_actions,
         action_sink_name=action_sink_name,
@@ -1141,6 +1149,8 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
     supported_frame: np.ndarray,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    call_order: list[str] = []
+
     class StablePressDetector:
         def observe(self, _frame, context):
             sequence = "WWAD"
@@ -1205,6 +1215,9 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
             return False
 
         def apply(self, request, context):
+            call_order.append(
+                f"sink:{context.capture_frame_index}"
+            )
             self.calls.append((request, context))
             total = len(request.payload["sequence"])
             return ActionExecutionResult(
@@ -1244,6 +1257,23 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
         created.append(sink)
         return sink
 
+    class OrderedEvidenceRecorder(StubEvidenceRecorder):
+        def record_frame(self, frame, *, capture_frame_index, timestamp):
+            call_order.append(f"video:{capture_frame_index}")
+            return super().record_frame(
+                frame,
+                capture_frame_index=capture_frame_index,
+                timestamp=timestamp,
+            )
+
+        def record_detector_evidence(self, frame, **kwargs):
+            call_order.append(
+                f"evidence:{kwargs['capture_frame_index']}"
+            )
+            return super().record_detector_evidence(frame, **kwargs)
+
+    evidence = OrderedEvidenceRecorder()
+
     runtime = _runtime(
         tmp_path,
         MockCapture(
@@ -1258,11 +1288,15 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
         ),
         FakeClock(),
         duration_seconds=0.6,
+        evidence_mode="diagnostic",
+        evidence_recorder=evidence,
         emit_actions=True,
         action_sink_name="sendinput",
         action_allowlist="PRESS_SEQUENCE",
         action_sink_factory=factory,
         enable_live_press_sequence=True,
+        press_initial_delay_min_ms=40,
+        press_initial_delay_max_ms=40,
     )
     runtime.press_detector = StablePressDetector()
     runtime.fsm.force_state(
@@ -1281,6 +1315,13 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
     assert request.payload["sequence"] == tuple("WWAD")
     assert request.payload["slot_capacity"] == 8
     assert context.runtime_state == RuntimeState.PRESS.value
+    sink_marker = f"sink:{context.capture_frame_index}"
+    assert call_order.index(sink_marker) < call_order.index(
+        f"video:{context.capture_frame_index}"
+    )
+    assert call_order.index(sink_marker) < call_order.index(
+        f"evidence:{context.capture_frame_index}"
+    )
     assert runtime.fsm.state == RuntimeState.RESULT_PENDING
     assert summary["actions_applied"] == 1
     assert summary["press_live_emission_attempted_count"] == 1
@@ -1533,6 +1574,12 @@ def test_hook_critical_roi_loop_sustains_source_rate_despite_slow_diagnostics(
     assert recorder.roi_frames == []
     assert summary["detector_runs"]["press"] == 0
     assert summary["detector_runs"]["get"] == 0
+    assert summary["full_video_suspended_during_hook_critical"] is True
+    assert summary["full_video_suspension_episode_count"] == 1
+    suspension = summary["full_video_suspensions"][0]
+    assert suspension["duration_seconds"] > 0.0
+    assert suspension["hook_roi_clip_covers_interval"] is True
+    assert suspension["hook_roi_clip_frame_count"] == 31
     assert summary["detector_runs"]["result_banner"] == 0
     trace_path = Path(summary["hook_decision_trace_path"])
     trace_rows = [

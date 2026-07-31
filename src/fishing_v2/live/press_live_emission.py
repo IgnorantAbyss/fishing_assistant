@@ -3,20 +3,98 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+import random
+from typing import Any, Mapping, Protocol
 
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
+from src.fishing_v2.domain.runtime_state import RuntimeState
 
 
 @dataclass(frozen=True)
 class PressLiveEmissionConfig:
     visual_ack_timeout_seconds: float = 3.0
+    initial_delay_min_ms: int = 300
+    initial_delay_max_ms: int = 500
+    inter_key_gap_min_ms: int = 30
+    inter_key_gap_max_ms: int = 80
+    key_hold_ms: int = 40
 
     def __post_init__(self) -> None:
         if self.visual_ack_timeout_seconds <= 0:
             raise ValueError(
                 "PRESS visual acknowledgement timeout must be positive"
             )
+        for name in (
+            "initial_delay_min_ms",
+            "initial_delay_max_ms",
+            "inter_key_gap_min_ms",
+            "inter_key_gap_max_ms",
+        ):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be non-negative")
+        if self.initial_delay_min_ms > self.initial_delay_max_ms:
+            raise ValueError("PRESS initial delay range is inverted")
+        if self.inter_key_gap_min_ms > self.inter_key_gap_max_ms:
+            raise ValueError("PRESS inter-key gap range is inverted")
+        if self.key_hold_ms < 1:
+            raise ValueError("PRESS key hold must be positive")
+
+
+class PressTimingRng(Protocol):
+    def randint(self, lower: int, upper: int) -> int: ...
+
+
+@dataclass(frozen=True)
+class PressTimingPlan:
+    sampled_initial_delay_ms: int
+    key_hold_ms: tuple[int, ...]
+    inter_key_gap_ms: tuple[int, ...]
+    planned_total_duration_ms: int
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "sampled_initial_delay_ms": self.sampled_initial_delay_ms,
+            "key_hold_ms": list(self.key_hold_ms),
+            "inter_key_gap_ms": list(self.inter_key_gap_ms),
+            "planned_total_duration_ms": self.planned_total_duration_ms,
+        }
+
+
+@dataclass(frozen=True)
+class ScheduledPressEmission:
+    episode_index: int
+    sequence: tuple[str, ...]
+    slot_capacity: int
+    scheduled_at: float
+    deadline: float
+    timing: PressTimingPlan
+
+
+def pending_press_cancellation_reason(
+    pending: ScheduledPressEmission,
+    *,
+    runtime_state: RuntimeState,
+    active_episode: bool,
+    episode_index: int,
+    frozen_sequence: tuple[str, ...],
+    panel_disappeared: bool,
+    foreground: bool | None,
+    panic_triggered: bool,
+) -> str | None:
+    """Fail closed when a scheduled PRESS opportunity loses eligibility."""
+    if runtime_state != RuntimeState.PRESS:
+        return "runtime_left_press"
+    if not active_episode or episode_index != pending.episode_index:
+        return "press_episode_changed"
+    if frozen_sequence != pending.sequence:
+        return "frozen_sequence_changed"
+    if panel_disappeared:
+        return "press_panel_disappeared"
+    if foreground is not True:
+        return "foreground_not_confirmed"
+    if panic_triggered:
+        return "panic_triggered"
+    return None
 
 
 @dataclass(frozen=True)
@@ -31,9 +109,14 @@ class PressLiveEmissionTracker:
     def __init__(
         self,
         config: PressLiveEmissionConfig | None = None,
+        *,
+        rng: PressTimingRng | None = None,
     ) -> None:
         self.config = config or PressLiveEmissionConfig()
+        self.rng = rng or random.Random()
         self._attempted_episodes: set[int] = set()
+        self._reserved_episodes: set[int] = set()
+        self._pending: ScheduledPressEmission | None = None
         self._awaiting_episode: int | None = None
         self._visual_deadline: float | None = None
         self._terminal_outcomes: dict[int, str] = {}
@@ -43,6 +126,131 @@ class PressLiveEmissionTracker:
         self._failed_count = 0
         self._visual_acknowledged_count = 0
         self._visual_timeout_count = 0
+        self._scheduled_count = 0
+        self._cancelled_count = 0
+
+    @property
+    def pending(self) -> ScheduledPressEmission | None:
+        return self._pending
+
+    def _timing_plan(self, sequence: tuple[str, ...]) -> PressTimingPlan:
+        initial = self.rng.randint(
+            self.config.initial_delay_min_ms,
+            self.config.initial_delay_max_ms,
+        )
+        holds = tuple(self.config.key_hold_ms for _ in sequence)
+        gaps = tuple(
+            self.rng.randint(
+                self.config.inter_key_gap_min_ms,
+                self.config.inter_key_gap_max_ms,
+            )
+            for _ in range(max(0, len(sequence) - 1))
+        )
+        return PressTimingPlan(
+            initial,
+            holds,
+            gaps,
+            initial + sum(holds) + sum(gaps),
+        )
+
+    def schedule(
+        self,
+        *,
+        episode_index: int,
+        timestamp: float,
+        sequence: tuple[str, ...],
+        slot_capacity: int,
+    ) -> tuple[ScheduledPressEmission | None, tuple[PressLiveEvent, ...]]:
+        if self._pending is not None:
+            return None, (PressLiveEvent(
+                "press_schedule_blocked",
+                {
+                    "episode_index": episode_index,
+                    "timestamp": timestamp,
+                    "reason": "another_press_schedule_is_pending",
+                    "action_applied": False,
+                },
+            ),)
+        if episode_index in self._reserved_episodes:
+            return None, (PressLiveEvent(
+                "press_schedule_blocked",
+                {
+                    "episode_index": episode_index,
+                    "timestamp": timestamp,
+                    "reason": "press_episode_opportunity_already_reserved",
+                    "action_applied": False,
+                },
+            ),)
+        timing = self._timing_plan(sequence)
+        pending = ScheduledPressEmission(
+            episode_index,
+            sequence,
+            slot_capacity,
+            float(timestamp),
+            float(timestamp) + timing.sampled_initial_delay_ms / 1000.0,
+            timing,
+        )
+        self._reserved_episodes.add(episode_index)
+        self._pending = pending
+        self._scheduled_count += 1
+        return pending, (PressLiveEvent(
+            "press_emission_scheduled",
+            {
+                "episode_index": episode_index,
+                "timestamp": timestamp,
+                "deadline": pending.deadline,
+                "sequence": list(sequence),
+                "slot_capacity": slot_capacity,
+                **timing.payload(),
+                "action_applied": False,
+            },
+        ),)
+
+    def due(self, timestamp: float) -> bool:
+        return bool(
+            self._pending is not None
+            and float(timestamp) + 1e-9 >= self._pending.deadline
+        )
+
+    def cancel_pending(
+        self,
+        *,
+        timestamp: float,
+        reason: str,
+    ) -> tuple[PressLiveEvent, ...]:
+        pending = self._pending
+        if pending is None:
+            return ()
+        self._pending = None
+        self._cancelled_count += 1
+        self._terminal_outcomes[pending.episode_index] = (
+            f"cancelled_not_retried:{reason}"
+        )
+        return (PressLiveEvent("press_emission_cancelled", {
+            "episode_index": pending.episode_index,
+            "timestamp": timestamp,
+            "sequence": list(pending.sequence),
+            "reason": reason,
+            **pending.timing.payload(),
+            "terminal_outcome": "cancelled_not_retried",
+            "action_applied": False,
+        }),)
+
+    def begin_scheduled_attempt(
+        self,
+        *,
+        timestamp: float,
+    ) -> tuple[ScheduledPressEmission | None, tuple[PressLiveEvent, ...]]:
+        pending = self._pending
+        if pending is None or not self.due(timestamp):
+            return None, ()
+        self._pending = None
+        started, events = self.begin_attempt(
+            episode_index=pending.episode_index,
+            timestamp=timestamp,
+            sequence=pending.sequence,
+        )
+        return (pending if started else None), events
 
     def begin_attempt(
         self,
@@ -63,6 +271,7 @@ class PressLiveEmissionTracker:
                 },
             ),)
         self._attempted_episodes.add(episode_index)
+        self._reserved_episodes.add(episode_index)
         self._attempted_count += 1
         return True, (PressLiveEvent(
             "press_emission_attempt_started",
@@ -179,6 +388,12 @@ class PressLiveEmissionTracker:
                 self._visual_acknowledged_count
             ),
             "press_live_visual_timeout_count": self._visual_timeout_count,
+            "press_live_emission_scheduled_count": self._scheduled_count,
+            "press_live_emission_cancelled_count": self._cancelled_count,
+            "press_live_emission_pending": self._pending is not None,
+            "press_live_emission_deadline": (
+                self._pending.deadline if self._pending is not None else None
+            ),
             "press_live_awaiting_visual_ack": (
                 self._awaiting_episode is not None
             ),

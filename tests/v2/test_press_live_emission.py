@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import random
 import pytest
 
 from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
 from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionConfig,
     PressLiveEmissionTracker,
+    pending_press_cancellation_reason,
 )
+from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.runtime.press_action_contract import (
     validate_frozen_press_payload,
@@ -65,6 +68,122 @@ def test_press_emission_is_once_per_episode_but_resets_for_next_episode() -> Non
         "press_episode_emission_already_attempted"
     )
     assert second is True
+
+
+def test_press_schedule_samples_bounded_reproducible_pacing() -> None:
+    config = PressLiveEmissionConfig(
+        initial_delay_min_ms=300,
+        initial_delay_max_ms=500,
+        inter_key_gap_min_ms=30,
+        inter_key_gap_max_ms=80,
+        key_hold_ms=40,
+    )
+    first = PressLiveEmissionTracker(config, rng=random.Random(73))
+    second = PressLiveEmissionTracker(config, rng=random.Random(73))
+    scheduled_a, events_a = first.schedule(
+        episode_index=1,
+        timestamp=10.0,
+        sequence=tuple("WWAD"),
+        slot_capacity=8,
+    )
+    scheduled_b, _ = second.schedule(
+        episode_index=1,
+        timestamp=10.0,
+        sequence=tuple("WWAD"),
+        slot_capacity=8,
+    )
+    assert scheduled_a is not None and scheduled_b is not None
+    assert scheduled_a.timing == scheduled_b.timing
+    assert 300 <= scheduled_a.timing.sampled_initial_delay_ms <= 500
+    assert scheduled_a.timing.key_hold_ms == (40, 40, 40, 40)
+    assert len(scheduled_a.timing.inter_key_gap_ms) == 3
+    assert all(
+        30 <= gap <= 80
+        for gap in scheduled_a.timing.inter_key_gap_ms
+    )
+    assert scheduled_a.deadline == pytest.approx(
+        10.0 + scheduled_a.timing.sampled_initial_delay_ms / 1000.0
+    )
+    assert events_a[0].payload["planned_total_duration_ms"] == (
+        scheduled_a.timing.planned_total_duration_ms
+    )
+
+
+def test_press_schedule_is_nonblocking_and_cancelled_episode_is_not_retried() -> None:
+    tracker = PressLiveEmissionTracker(
+        PressLiveEmissionConfig(
+            initial_delay_min_ms=300,
+            initial_delay_max_ms=300,
+        )
+    )
+    scheduled, _ = tracker.schedule(
+        episode_index=4,
+        timestamp=2.0,
+        sequence=tuple("WAS"),
+        slot_capacity=8,
+    )
+    assert scheduled is not None
+    assert tracker.due(2.299) is False
+    assert tracker.due(2.300) is True
+    cancelled = tracker.cancel_pending(
+        timestamp=2.1,
+        reason="press_panel_disappeared",
+    )
+    assert cancelled[0].event_type == "press_emission_cancelled"
+    repeated, blocked = tracker.schedule(
+        episode_index=4,
+        timestamp=2.2,
+        sequence=tuple("WAS"),
+        slot_capacity=8,
+    )
+    assert repeated is None
+    assert blocked[0].payload["reason"] == (
+        "press_episode_opportunity_already_reserved"
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"runtime_state": RuntimeState.RESULT_PENDING}, "runtime_left_press"),
+        ({"panel_disappeared": True}, "press_panel_disappeared"),
+        ({"foreground": False}, "foreground_not_confirmed"),
+        ({"panic_triggered": True}, "panic_triggered"),
+    ],
+)
+def test_initial_delay_context_loss_cancels_before_any_attempt(
+    overrides: dict,
+    reason: str,
+) -> None:
+    tracker = PressLiveEmissionTracker(
+        PressLiveEmissionConfig(
+            initial_delay_min_ms=300,
+            initial_delay_max_ms=300,
+        )
+    )
+    pending, _ = tracker.schedule(
+        episode_index=7,
+        timestamp=1.0,
+        sequence=tuple("WAS"),
+        slot_capacity=8,
+    )
+    assert pending is not None
+    context = {
+        "runtime_state": RuntimeState.PRESS,
+        "active_episode": True,
+        "episode_index": 7,
+        "frozen_sequence": tuple("WAS"),
+        "panel_disappeared": False,
+        "foreground": True,
+        "panic_triggered": False,
+    }
+    context.update(overrides)
+    assert pending_press_cancellation_reason(
+        pending,
+        **context,
+    ) == reason
+    tracker.cancel_pending(timestamp=1.1, reason=reason)
+    assert tracker.summary()["press_live_emission_attempted_count"] == 0
 
 
 def test_partial_press_emission_is_terminal_and_not_waiting_for_ack() -> None:

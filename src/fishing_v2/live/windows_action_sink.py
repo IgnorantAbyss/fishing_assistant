@@ -25,6 +25,7 @@ from src.fishing_v2.ports.action_sink import (
 )
 from src.fishing_v2.runtime.press_action_contract import (
     validate_frozen_press_payload,
+    validate_press_timing_plan,
 )
 from src.screen_capture import normalize_process_name
 
@@ -870,6 +871,34 @@ class WindowsSendInputActionSink:
             )
         try:
             keys = self._key_sequence(request)
+            sampled_initial_delay_ms: int | None = None
+            planned_total_duration_ms: int | None = None
+            if request.intent == ActionIntent.PRESS_SEQUENCE:
+                (
+                    planned_holds,
+                    planned_gaps,
+                    sampled_initial_delay_ms,
+                    planned_total_duration_ms,
+                ) = validate_press_timing_plan(
+                    request.payload,
+                    sequence_length=len(keys),
+                )
+                if not planned_holds:
+                    planned_holds = tuple(
+                        self.config.key_hold_ms for _ in keys
+                    )
+                    planned_gaps = tuple(
+                        self.config.sequence_interval_ms
+                        for _ in range(max(0, len(keys) - 1))
+                    )
+            else:
+                planned_holds = tuple(
+                    self.config.key_hold_ms for _ in keys
+                )
+                planned_gaps = tuple(
+                    self.config.sequence_interval_ms
+                    for _ in range(max(0, len(keys) - 1))
+                )
         except ValueError as exc:
             return self._reject(request, context, str(exc))
         try:
@@ -923,6 +952,10 @@ class WindowsSendInputActionSink:
         action_allowed_payload = {
             **self._base_payload(request, context, keys),
             "foreground_hwnd": snapshot.foreground_hwnd,
+            "sampled_initial_delay_ms": sampled_initial_delay_ms,
+            "key_hold_ms": list(planned_holds),
+            "inter_key_gap_ms": list(planned_gaps),
+            "planned_total_duration_ms": planned_total_duration_ms,
             "action_applied": False,
         }
         defer_press_diagnostics = (
@@ -942,6 +975,10 @@ class WindowsSendInputActionSink:
             **self._base_payload(request, context, keys),
             "foreground_hwnd": snapshot.foreground_hwnd,
             "expected_event_count": expected,
+            "sampled_initial_delay_ms": sampled_initial_delay_ms,
+            "key_hold_ms": list(planned_holds),
+            "inter_key_gap_ms": list(planned_gaps),
+            "planned_total_duration_ms": planned_total_duration_ms,
             "action_applied": False,
         }
         if not defer_press_diagnostics:
@@ -1007,6 +1044,11 @@ class WindowsSendInputActionSink:
                     "started_at": key_started_at,
                     "completed_at": None,
                     "outcome": "started",
+                    "planned_hold_ms": planned_holds[index],
+                    "planned_gap_after_ms": (
+                        planned_gaps[index]
+                        if index < len(planned_gaps) else None
+                    ),
                 }
                 down = self.api.send_key_event(
                     VIRTUAL_KEYS[key], key_up=False,
@@ -1024,7 +1066,7 @@ class WindowsSendInputActionSink:
                         f"{down.windows_error_message}"
                     )
                     break
-                self.sleep(self.config.key_hold_ms / 1000.0)
+                self.sleep(planned_holds[index] / 1000.0)
                 up = self.api.send_key_event(
                     VIRTUAL_KEYS[key], key_up=True,
                     input_mode=self.config.input_mode,
@@ -1049,7 +1091,7 @@ class WindowsSendInputActionSink:
                     if self.poll_panic(context):
                         error = "panic_triggered_during_sequence"
                         break
-                    self.sleep(self.config.sequence_interval_ms / 1000.0)
+                    self.sleep(planned_gaps[index] / 1000.0)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         applied = emitted == expected and error is None
@@ -1070,6 +1112,10 @@ class WindowsSendInputActionSink:
             **self._base_payload(request, context, keys),
             **asdict(result),
             "sendinput_return_count": emitted,
+            "sampled_initial_delay_ms": sampled_initial_delay_ms,
+            "key_hold_ms": list(planned_holds),
+            "inter_key_gap_ms": list(planned_gaps),
+            "planned_total_duration_ms": planned_total_duration_ms,
             "opportunity_result": (
                 "os_input_emitted" if applied
                 else "partial_not_applied" if partial

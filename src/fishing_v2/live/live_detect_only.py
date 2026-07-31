@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 import csv
 from dataclasses import asdict, dataclass
 import json
@@ -51,6 +52,7 @@ from src.fishing_v2.live.diagnostic_evidence import (
     DiagnosticEvidenceConfig,
     DiagnosticEvidenceRecorder,
 )
+from src.fishing_v2.live.console_events import LiveConsoleEventQueue
 from src.fishing_v2.live.hook_critical_loop import (
     HookCriticalFrameAssembler,
     HookDecisionTraceBuffer,
@@ -62,6 +64,8 @@ from src.fishing_v2.live.press_shadow_verification import PressShadowVerifier
 from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionConfig,
     PressLiveEmissionTracker,
+    PressTimingRng,
+    pending_press_cancellation_reason,
 )
 from src.fishing_v2.live.windows_action_sink import (
     ACTION_SINK_NONE,
@@ -138,6 +142,10 @@ class LiveDetectOnlyConfig:
     evidence_video_fps: float = 10.0
     hook_critical_target_fps: float = 40.0
     max_completed_cycles: int | None = None
+    press_initial_delay_min_ms: int = 300
+    press_initial_delay_max_ms: int = 500
+    press_inter_key_gap_min_ms: int = 30
+    press_inter_key_gap_max_ms: int = 80
 
     def __post_init__(self) -> None:
         if self.duration_seconds <= 0:
@@ -154,6 +162,14 @@ class LiveDetectOnlyConfig:
             raise ValueError("hook_critical_target_fps must be at least 30")
         if self.max_completed_cycles is not None and self.max_completed_cycles <= 0:
             raise ValueError("max_completed_cycles must be positive when provided")
+        if self.press_initial_delay_min_ms < 0:
+            raise ValueError("press_initial_delay_min_ms must be non-negative")
+        if self.press_initial_delay_min_ms > self.press_initial_delay_max_ms:
+            raise ValueError("PRESS initial delay range is inverted")
+        if self.press_inter_key_gap_min_ms < 0:
+            raise ValueError("press_inter_key_gap_min_ms must be non-negative")
+        if self.press_inter_key_gap_min_ms > self.press_inter_key_gap_max_ms:
+            raise ValueError("PRESS inter-key gap range is inverted")
 
 
 class WouldFireDeduplicator:
@@ -394,6 +410,8 @@ class LiveDetectOnlyRuntime:
         action_sink_factory: Callable[..., ActionSink] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        press_timing_rng: PressTimingRng | None = None,
+        console_queue: LiveConsoleEventQueue | None = None,
     ) -> None:
         validate_emit_actions(
             emit_actions,
@@ -420,6 +438,7 @@ class LiveDetectOnlyRuntime:
         self.action_sink: ActionSink | None = None
         self.clock = clock
         self.sleep = sleep
+        self.console = console_queue or LiveConsoleEventQueue()
         self.overlay = DiagnosticOverlay(live_config.show_overlay)
         self.deduplicator = WouldFireDeduplicator()
         self._raw_config = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
@@ -497,9 +516,28 @@ class LiveDetectOnlyRuntime:
                         "press_visual_ack_timeout_seconds",
                         3.0,
                     )
-                )
-            )
+                ),
+                initial_delay_min_ms=(
+                    self.live_config.press_initial_delay_min_ms
+                ),
+                initial_delay_max_ms=(
+                    self.live_config.press_initial_delay_max_ms
+                ),
+                inter_key_gap_min_ms=(
+                    self.live_config.press_inter_key_gap_min_ms
+                ),
+                inter_key_gap_max_ms=(
+                    self.live_config.press_inter_key_gap_max_ms
+                ),
+                key_hold_ms=int(
+                    self._raw_config["action"].get("key_hold_ms", 40)
+                ),
+            ),
+            rng=press_timing_rng,
         )
+        self._hook_video_suspensions: list[dict[str, Any]] = []
+        self._hook_video_suspension_active: dict[str, Any] | None = None
+        self._press_seen_cycles: set[int] = set()
         self._preflight_passed = False
         self._preflight_failure_reason: str | None = None
         self._preflight_failure_message: str | None = None
@@ -529,6 +567,8 @@ class LiveDetectOnlyRuntime:
                     sink_summary().get("integrity_diagnostics", {})
                 )
         for event in events:
+            if event.event_type == "collect_retry_succeeded":
+                self.console.emit("COLLECT acknowledged")
             self.logger.event(event.event_type, {
                 "timestamp": timestamp,
                 "frame_index": frame_index,
@@ -1137,6 +1177,60 @@ class LiveDetectOnlyRuntime:
             "hook_roi_clip_fps": output_fps,
         }
 
+    def _start_hook_video_suspension(
+        self,
+        *,
+        timestamp: float,
+        frame_index: int,
+    ) -> None:
+        if self._hook_video_suspension_active is not None:
+            return
+        self._hook_video_suspension_active = {
+            "episode_index": len(self._hook_video_suspensions) + 1,
+            "start_timestamp": float(timestamp),
+            "start_frame_index": int(frame_index),
+        }
+
+    def _finish_hook_video_suspension(
+        self,
+        *,
+        timestamp: float,
+        frame_index: int,
+    ) -> None:
+        active = self._hook_video_suspension_active
+        if active is None:
+            return
+        start = float(active["start_timestamp"])
+        end = max(start, float(timestamp))
+        samples = [
+            item
+            for item in self._hook_roi_clip_samples
+            if start - 1e-9 <= item.timestamp <= end + 1e-9
+        ]
+        first_roi_timestamp = samples[0].timestamp if samples else None
+        last_roi_timestamp = samples[-1].timestamp if samples else None
+        coverage_tolerance = max(
+            0.1,
+            2.0 / self.live_config.hook_critical_target_fps,
+        )
+        self._hook_video_suspensions.append({
+            **active,
+            "end_timestamp": end,
+            "end_frame_index": int(frame_index),
+            "duration_seconds": end - start,
+            "hook_roi_clip_frame_count": len(samples),
+            "hook_roi_clip_first_timestamp": first_roi_timestamp,
+            "hook_roi_clip_last_timestamp": last_roi_timestamp,
+            "hook_roi_clip_covers_interval": bool(
+                samples
+                and first_roi_timestamp is not None
+                and last_roi_timestamp is not None
+                and first_roi_timestamp - start <= coverage_tolerance
+                and end - last_roi_timestamp <= coverage_tolerance
+            ),
+        })
+        self._hook_video_suspension_active = None
+
     def _flush_hook_decision_trace(self, reason: str) -> None:
         rows = self._hook_decision_trace.drain(reason)
         if not rows or self.evidence_recorder is None:
@@ -1272,12 +1366,25 @@ class LiveDetectOnlyRuntime:
                     and callable(getattr(self.capture, "capture_roi", None))
                 )
                 if hook_critical_mode:
+                    if self._hook_video_suspension_active is None:
+                        self._start_hook_video_suspension(
+                            timestamp=elapsed,
+                            frame_index=captured + 1,
+                        )
+                        self.console.emit(
+                            "HOOK critical active fps=0.0"
+                        )
                     self._hook_episode_telemetry.start(
                         elapsed,
                         self._latest_hook_frame.stale_frames_dropped,
                     )
                     self._hook_decision_trace.start(
                         str(self.deduplicator.cycle_id)
+                    )
+                elif self._hook_video_suspension_active is not None:
+                    self._finish_hook_video_suspension(
+                        timestamp=elapsed,
+                        frame_index=captured,
                     )
                 try:
                     if hook_critical_mode:
@@ -1327,10 +1434,11 @@ class LiveDetectOnlyRuntime:
                     break
                 captured += 1
                 frame_captured_at = self.clock() - started
+                panic_triggered_this_frame = False
                 if self.action_sink is not None:
                     poll_panic = getattr(self.action_sink, "poll_panic", None)
                     if callable(poll_panic):
-                        poll_panic()
+                        panic_triggered_this_frame = bool(poll_panic())
                 height, width = frame.shape[:2]
                 if (width, height) != EXPECTED_RESOLUTION:
                     result_name = "safe_stop_resolution_changed"
@@ -1342,6 +1450,10 @@ class LiveDetectOnlyRuntime:
                     break
                 defer_video_for_hook_fast_path = bool(
                     hook_critical_mode
+                    or (
+                        self.evidence_recorder is not None
+                        and self._press_live_emission.pending is not None
+                    )
                     or (
                     self.evidence_recorder is not None
                     and self.action_sink is not None
@@ -1466,6 +1578,13 @@ class LiveDetectOnlyRuntime:
                     if hook_critical_mode and hook is not None:
                         self._hook_episode_telemetry.record_detector_frame(
                             elapsed
+                        )
+                        self.console.heartbeat(
+                            "hook_critical",
+                            "HOOK critical active fps="
+                            f"{self._hook_episode_telemetry.current_actual_fps():.1f}",
+                            timestamp=elapsed,
+                            minimum_interval_seconds=0.5,
                         )
                     raw_bundle = ObservationBundle(
                         captured, elapsed, prompt, hook, press, get, result_banner
@@ -1621,10 +1740,7 @@ class LiveDetectOnlyRuntime:
                     press_roi_pixels = None
                     if (
                         self.evidence_recorder is not None
-                        and press is not None
-                        and self.fsm.state == RuntimeState.PRESS
-                        and activation.press
-                        == DetectorActivationMode.ACTIVE
+                        and not hook_critical_mode
                     ):
                         x1, y1, x2, y2 = (
                             self._diagnostic_roi_bounds["press"]
@@ -1644,12 +1760,25 @@ class LiveDetectOnlyRuntime:
                             .qualification_reason
                         ),
                         safety_reason=last_result.safety.reason,
-                        roi_pixels=press_roi_pixels,
+                        roi_pixels=None,
                         live_emission_enabled=(
                             self.enable_live_press_sequence
                         ),
                     )
-                    press_shadow_request = (
+                    self._press_shadow.capture_roi_frame(
+                        timestamp=elapsed,
+                        frame_index=captured,
+                        fsm_state=self.fsm.state,
+                        activation_mode=activation.press,
+                        roi_pixels=press_roi_pixels,
+                        panel_disappeared=bool(
+                            qualified_press_for_shadow
+                            and qualified_press_for_shadow.evidence.get(
+                                "panel_disappeared"
+                            ) is True
+                        ),
+                    )
+                    press_candidate_request = (
                         ActionRequest(
                             ActionIntent.PRESS_SEQUENCE,
                             qualified_press_for_shadow.confidence,
@@ -1658,7 +1787,9 @@ class LiveDetectOnlyRuntime:
                                 "sequence": (
                                     press_shadow_proposal.sequence
                                 ),
-                                "shadow_only": True,
+                                "shadow_only": (
+                                    not self.enable_live_press_sequence
+                                ),
                                 "slot_capacity": (
                                     press_shadow_proposal
                                     .slot_capacity
@@ -1682,6 +1813,10 @@ class LiveDetectOnlyRuntime:
                         )
                         else None
                     )
+                    press_shadow_request = (
+                        press_candidate_request
+                        if not self.enable_live_press_sequence else None
+                    )
                     press_fast_would_fire: dict[str, Any] | None = None
                     press_fast_execution: ActionExecutionResult | None = None
                     press_fast_commit = None
@@ -1689,21 +1824,141 @@ class LiveDetectOnlyRuntime:
                     press_fast_safety_reason: str | None = None
                     press_fast_events = ()
                     if (
-                        press_shadow_request is not None
+                        press_candidate_request is not None
                         and self.enable_live_press_sequence
                     ):
-                        press_shadow_request = ActionRequest(
-                            press_shadow_request.intent,
-                            press_shadow_request.confidence,
-                            press_shadow_request.reason,
-                            {
-                                **dict(press_shadow_request.payload),
-                                "shadow_only": False,
-                            },
+                        scheduled, schedule_events = (
+                            self._press_live_emission.schedule(
+                                episode_index=(
+                                    press_shadow_proposal.episode_index
+                                ),
+                                timestamp=elapsed,
+                                sequence=press_shadow_proposal.sequence,
+                                slot_capacity=(
+                                    press_shadow_proposal.slot_capacity
+                                ),
+                            )
                         )
-                        press_safety = (
-                            self.controller
-                            .evaluate_external_action_safety(
+                        if scheduled is not None:
+                            self._press_seen_cycles.add(
+                                self.deduplicator.cycle_id
+                            )
+                            self._press_shadow.record_schedule(
+                                deadline=scheduled.deadline,
+                                timing=scheduled.timing.payload(),
+                            )
+                            sequence_text = " ".join(scheduled.sequence)
+                            self.logger.event("press_sequence_frozen", {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                "sequence": list(scheduled.sequence),
+                                "slot_capacity": scheduled.slot_capacity,
+                                "selected_clean_frame": (
+                                    qualified_press_for_shadow.evidence.get(
+                                        "selected_clean_frame"
+                                    )
+                                ),
+                                "action_applied": False,
+                            })
+                            self.console.emit(
+                                f"PRESS frozen: {sequence_text}"
+                            )
+                            self.console.emit(
+                                "PRESS scheduled: "
+                                f"delay={scheduled.timing.sampled_initial_delay_ms}ms"
+                            )
+                        for press_event in schedule_events:
+                            self.logger.event(press_event.event_type, {
+                                **dict(press_event.payload),
+                                "frame_index": captured,
+                                "runtime_state": self.fsm.state.value,
+                            })
+
+                    pending_press = self._press_live_emission.pending
+                    pending_cancel_reason: str | None = None
+                    panel_disappeared = bool(
+                        qualified_press_for_shadow
+                        and qualified_press_for_shadow.evidence.get(
+                            "panel_disappeared"
+                        ) is True
+                    )
+                    if pending_press is not None:
+                        pending_cancel_reason = (
+                            pending_press_cancellation_reason(
+                                pending_press,
+                                runtime_state=self.fsm.state,
+                                active_episode=self._press_shadow.active,
+                                episode_index=self._press_shadow.episode_index,
+                                frozen_sequence=(
+                                    self._press_shadow.frozen_sequence
+                                ),
+                                panel_disappeared=panel_disappeared,
+                                foreground=foreground,
+                                panic_triggered=(
+                                    panic_triggered_this_frame
+                                ),
+                            )
+                        )
+                    if pending_cancel_reason is not None:
+                        cancelled = self._press_live_emission.cancel_pending(
+                            timestamp=elapsed,
+                            reason=pending_cancel_reason,
+                        )
+                        self._press_shadow.record_emission_result(
+                            safety_reason=pending_cancel_reason,
+                            action_sink_called=False,
+                            terminal_outcome="cancelled",
+                            total_key_count=len(pending_press.sequence),
+                        )
+                        self.console.emit("PRESS cancelled")
+                        for press_event in cancelled:
+                            self.logger.event(press_event.event_type, {
+                                **dict(press_event.payload),
+                                "frame_index": captured,
+                                "runtime_state": self.fsm.state.value,
+                            })
+                        pending_press = None
+
+                    if (
+                        pending_press is not None
+                        and self._press_live_emission.due(elapsed)
+                        and press is not None
+                    ):
+                        current_sequence = tuple(
+                            qualified_press_for_shadow.sequence
+                            if (
+                                qualified_press_for_shadow is not None
+                                and qualified_press_for_shadow.sequence_ready
+                            ) else ()
+                        )
+                        if (
+                            qualified_press_for_shadow is None
+                            or not qualified_press_for_shadow.detected
+                        ):
+                            pending_cancel_reason = (
+                                "press_panel_not_confirmed_at_deadline"
+                            )
+                        elif current_sequence != pending_press.sequence:
+                            pending_cancel_reason = "frozen_sequence_changed"
+                        if pending_cancel_reason is None:
+                            press_shadow_request = ActionRequest(
+                                ActionIntent.PRESS_SEQUENCE,
+                                qualified_press_for_shadow.confidence,
+                                "press_sequence_scheduled_emission",
+                                payload={
+                                    "sequence": pending_press.sequence,
+                                    "shadow_only": False,
+                                    "slot_capacity": pending_press.slot_capacity,
+                                    "active_press_episode": True,
+                                    "panel_confirmed": True,
+                                    "frozen_by_consensus": True,
+                                    "episode_index": pending_press.episode_index,
+                                    "press_timing_plan": (
+                                        pending_press.timing.payload()
+                                    ),
+                                },
+                            )
+                            press_safety = self.controller.evaluate_external_action_safety(
                                 press_shadow_request,
                                 last_result.evidence,
                                 timestamp=elapsed,
@@ -1711,226 +1966,156 @@ class LiveDetectOnlyRuntime:
                                 foreground=foreground,
                                 runtime_environment_supported=True,
                             )
-                        )
-                        press_fast_safety_reason = press_safety.reason
-                        if (
-                            press_safety.reason
-                            == "action_emission_disabled"
-                            and self.action_sink is not None
-                            and ActionIntent.PRESS_SEQUENCE
-                            in self.action_allowlist
-                            and self.controller
-                            .stage_external_press_sequence(
-                                press_shadow_request
-                            )
-                        ):
-                            press_fast_would_fire = (
-                                self.deduplicator.observe(
+                            press_fast_safety_reason = press_safety.reason
+                            if (
+                                press_safety.reason
+                                == "action_emission_disabled"
+                                and self.action_sink is not None
+                                and ActionIntent.PRESS_SEQUENCE
+                                in self.action_allowlist
+                                and self.controller.stage_external_press_sequence(
+                                    press_shadow_request
+                                )
+                            ):
+                                press_fast_would_fire = self.deduplicator.observe(
                                     press_shadow_request,
-                                    safety_reason=(
-                                        "action_emission_disabled"
-                                    ),
+                                    safety_reason="action_emission_disabled",
                                     frame_index=captured,
                                     timestamp=elapsed,
-                                    runtime_state=(
-                                        self.fsm.state.value
-                                    ),
+                                    runtime_state=self.fsm.state.value,
                                     prompt_evidence=None,
                                     specialized_evidence={},
                                 )
-                            )
-                            attempt_started, start_events = (
-                                self._press_live_emission
-                                .begin_attempt(
-                                    episode_index=(
-                                        press_shadow_proposal
-                                        .episode_index
-                                    ),
-                                    timestamp=elapsed,
-                                    sequence=(
-                                        press_shadow_proposal.sequence
-                                    ),
+                                scheduled_attempt, start_events = (
+                                    self._press_live_emission.begin_scheduled_attempt(
+                                        timestamp=elapsed
+                                    )
                                 )
-                            )
-                            press_fast_events = start_events
-                            if (
-                                attempt_started
-                                and press_fast_would_fire is not None
-                            ):
-                                action_id = str(
-                                    press_fast_would_fire[
-                                        "deduplication_key"
-                                    ]
-                                )
-                                press_fast_would_fire.update({
-                                    "action_id": action_id,
-                                    "episode_id": str(
-                                        press_shadow_proposal
-                                        .episode_index
-                                    ),
-                                })
-                                press_fast_apply_called = True
-                                press_fast_execution = (
-                                    self.action_sink.apply(
+                                press_fast_events = start_events
+                                if (
+                                    scheduled_attempt is not None
+                                    and press_fast_would_fire is not None
+                                ):
+                                    action_id = str(
+                                        press_fast_would_fire["deduplication_key"]
+                                    )
+                                    press_fast_would_fire.update({
+                                        "action_id": action_id,
+                                        "episode_id": str(
+                                            scheduled_attempt.episode_index
+                                        ),
+                                    })
+                                    press_fast_apply_called = True
+                                    self.console.emit(
+                                        "PRESS emitting: "
+                                        + " ".join(scheduled_attempt.sequence)
+                                    )
+                                    press_fast_execution = self.action_sink.apply(
                                         press_shadow_request,
                                         ActionExecutionContext(
                                             action_id=action_id,
                                             episode_id=str(
-                                                press_shadow_proposal
-                                                .episode_index
+                                                scheduled_attempt.episode_index
                                             ),
                                             requested_at=elapsed,
-                                            capture_frame_index=(
-                                                captured
-                                            ),
-                                            runtime_state=(
-                                                RuntimeState.PRESS
-                                                .value
-                                            ),
-                                            target_hwnd=(
-                                                self
-                                                ._capture_diagnostics
-                                                .get("hwnd")
+                                            capture_frame_index=captured,
+                                            runtime_state=RuntimeState.PRESS.value,
+                                            target_hwnd=self._capture_diagnostics.get(
+                                                "hwnd"
                                             ),
                                         ),
                                     )
-                                )
-                                execution_events = (
-                                    self._press_live_emission
-                                    .record_execution(
-                                        episode_index=(
-                                            press_shadow_proposal
-                                            .episode_index
-                                        ),
-                                        timestamp=(
-                                            press_fast_execution
-                                            .completed_at
-                                        ),
-                                        execution=(
-                                            press_fast_execution
-                                        ),
-                                    )
-                                )
-                                press_fast_events = (
-                                    *press_fast_events,
-                                    *execution_events,
-                                )
-                                outcome = (
-                                    "completed"
-                                    if press_fast_execution.applied
-                                    else (
-                                        "partial"
-                                        if press_fast_execution
-                                        .partial_execution
-                                        else "failed"
-                                    )
-                                )
-                                self._press_shadow.record_emission_result(
-                                    safety_reason=(
-                                        press_safety.reason
-                                    ),
-                                    action_sink_called=True,
-                                    terminal_outcome=outcome,
-                                    attempted_count=(
-                                        press_fast_execution
-                                        .attempted_count
-                                    ),
-                                    completed_key_count=(
-                                        press_fast_execution
-                                        .completed_key_count
-                                    ),
-                                    total_key_count=(
-                                        press_fast_execution
-                                        .total_key_count
-                                    ),
-                                )
-                                if press_fast_execution.applied:
-                                    actions_applied += 1
-                                    press_fast_commit = (
-                                        self.controller
-                                        .commit_external_action(
-                                            press_shadow_request,
-                                            elapsed,
+                                    execution_events = (
+                                        self._press_live_emission.record_execution(
+                                            episode_index=(
+                                                scheduled_attempt.episode_index
+                                            ),
+                                            timestamp=(
+                                                press_fast_execution.completed_at
+                                            ),
+                                            execution=press_fast_execution,
                                         )
                                     )
-                                    if not (
-                                        press_fast_commit
-                                        .action_applied
-                                    ):
-                                        result_name = (
-                                            "safe_stop_"
-                                            "action_commit_failure"
-                                        )
-                                        stop_after_action_commit_failure = (
-                                            True
-                                        )
-                                else:
-                                    (
-                                        self.controller
-                                        .discard_external_proposal()
+                                    press_fast_events = (
+                                        *press_fast_events,
+                                        *execution_events,
                                     )
-                                sequence_text = " ".join(
-                                    press_shadow_proposal.sequence
-                                )
-                                self.logger.event(
-                                    "press_sequence_frozen",
-                                    {
-                                        "timestamp": elapsed,
-                                        "frame_index": captured,
-                                        "selected_clean_frame": (
-                                            qualified_press_for_shadow
-                                            .evidence.get(
-                                                "selected_clean_frame"
+                                    outcome = (
+                                        "completed"
+                                        if press_fast_execution.applied
+                                        else (
+                                            "partial"
+                                            if press_fast_execution.partial_execution
+                                            else "failed"
+                                        )
+                                    )
+                                    self.console.emit(f"PRESS {outcome}")
+                                    self._press_shadow.record_emission_result(
+                                        safety_reason=press_safety.reason,
+                                        action_sink_called=True,
+                                        terminal_outcome=outcome,
+                                        attempted_count=(
+                                            press_fast_execution.attempted_count
+                                        ),
+                                        completed_key_count=(
+                                            press_fast_execution.completed_key_count
+                                        ),
+                                        total_key_count=(
+                                            press_fast_execution.total_key_count
+                                        ),
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                    )
+                                    if press_fast_execution.applied:
+                                        actions_applied += 1
+                                        press_fast_commit = (
+                                            self.controller.commit_external_action(
+                                                press_shadow_request,
+                                                elapsed,
                                             )
-                                        ),
-                                        "sequence": list(
-                                            press_shadow_proposal
-                                            .sequence
-                                        ),
-                                        "slot_capacity": (
-                                            press_shadow_proposal
-                                            .slot_capacity
-                                        ),
-                                        "stability_frame_count": (
-                                            press_shadow_proposal
-                                            .stability_frame_count
-                                        ),
-                                        "action_applied": False,
-                                    },
+                                        )
+                                        if not press_fast_commit.action_applied:
+                                            result_name = (
+                                                "safe_stop_action_commit_failure"
+                                            )
+                                            stop_after_action_commit_failure = True
+                                    else:
+                                        self.controller.discard_external_proposal()
+                                    for press_event in press_fast_events:
+                                        self.logger.event(
+                                            press_event.event_type,
+                                            {
+                                                **dict(press_event.payload),
+                                                "frame_index": captured,
+                                                "runtime_state": self.fsm.state.value,
+                                            },
+                                        )
+                            else:
+                                pending_cancel_reason = (
+                                    press_safety.reason
+                                    if press_safety.reason
+                                    != "action_emission_disabled"
+                                    else "press_emission_stage_rejected"
                                 )
-                                print(
-                                    f"PRESS frozen: {sequence_text}"
-                                )
-                                print(
-                                    f"PRESS emitting: {sequence_text}"
-                                )
-                                print(f"PRESS {outcome}")
-                                for press_event in press_fast_events:
-                                    self.logger.event(
-                                        press_event.event_type,
-                                        {
-                                            **dict(
-                                                press_event.payload
-                                            ),
-                                            "frame_index": captured,
-                                            "runtime_state": (
-                                                self.fsm.state.value
-                                            ),
-                                        },
-                                    )
-                        else:
-                            self.controller.discard_external_proposal()
-                            self.deduplicator.record_raw_proposal(
-                                press_shadow_request
+                                self.controller.discard_external_proposal()
+                        if pending_cancel_reason is not None:
+                            cancelled = self._press_live_emission.cancel_pending(
+                                timestamp=elapsed,
+                                reason=pending_cancel_reason,
                             )
                             self._press_shadow.record_emission_result(
-                                safety_reason=press_safety.reason,
+                                safety_reason=pending_cancel_reason,
                                 action_sink_called=False,
-                                terminal_outcome="safety_blocked",
-                                total_key_count=len(
-                                    press_shadow_proposal.sequence
-                                ),
+                                terminal_outcome="cancelled",
+                                total_key_count=len(pending_press.sequence),
                             )
+                            self.console.emit("PRESS cancelled")
+                            for press_event in cancelled:
+                                self.logger.event(press_event.event_type, {
+                                    **dict(press_event.payload),
+                                    "frame_index": captured,
+                                    "runtime_state": self.fsm.state.value,
+                                })
                     press_visual_events = (
                         self._press_live_emission.observe_panel(
                             timestamp=elapsed,
@@ -1948,6 +2133,14 @@ class LiveDetectOnlyRuntime:
                         )
                     )
                     for press_event in press_visual_events:
+                        if (
+                            press_event.event_type
+                            == "press_visual_acknowledged"
+                        ):
+                            self._press_shadow.record_visual_ack(
+                                timestamp=elapsed,
+                                frame_index=captured,
+                            )
                         self.logger.event(
                             press_event.event_type,
                             {
@@ -2144,6 +2337,7 @@ class LiveDetectOnlyRuntime:
                                 ),
                             )
                             if hook_fast_execution.applied:
+                                self.console.emit("HOOK_ACTION applied")
                                 actions_applied += 1
                                 hook_fast_commit = (
                                     self.controller.commit_external_action(
@@ -2460,6 +2654,8 @@ class LiveDetectOnlyRuntime:
                             "next_label": prompt.kind.value,
                             "prompt_evidence": dict(prompt.evidence),
                         })
+                        if prompt.kind == PromptObservationKind.READY_BITE:
+                            self.console.emit("READY detected")
                         last_prompt_kind = prompt.kind.value
                     current_banner_visible = bool(result_banner and result_banner.detected)
                     if current_banner_visible != result_banner_visible:
@@ -2526,6 +2722,7 @@ class LiveDetectOnlyRuntime:
                         }
                         self.logger.event(event_type, payload)
                         if get_now:
+                            self.console.emit("GET detected")
                             self.logger.update_cycle(self.deduplicator.cycle_id, event_type, payload)
                         get_visible = get_now
 
@@ -2592,6 +2789,18 @@ class LiveDetectOnlyRuntime:
                             "frame_index": captured,
                             "runtime_state": transition_result.next_state.value,
                         })
+                        if (
+                            transition_result.previous_state
+                            == RuntimeState.RESULT_PENDING
+                            and transition_result.next_state
+                            == RuntimeState.GET
+                            and self.deduplicator.cycle_id
+                            not in self._press_seen_cycles
+                        ):
+                            self.console.emit(
+                                "PERFECT or no-PRESS path inferred: "
+                                "RESULT_PENDING -> GET"
+                            )
                         if (
                             transition_result.next_state == RuntimeState.IDLE
                             and transition_result.previous_state not in {
@@ -2921,15 +3130,10 @@ class LiveDetectOnlyRuntime:
                                 str(cast_attempt.opportunity_id)
                                 if cast_attempt is not None
                                 else (
-                                    str(
-                                        press_shadow_proposal
-                                        .episode_index
-                                    )
+                                    str(request.payload.get("episode_index"))
                                     if (
                                         event_type
                                         == "WOULD_PRESS_SEQUENCE"
-                                        and press_shadow_proposal
-                                        is not None
                                     )
                                     else str(would_fire["cycle_id"])
                                 )
@@ -3133,6 +3337,8 @@ class LiveDetectOnlyRuntime:
                                     runtime_state=self.fsm.state.value,
                                 )
                             if execution.applied:
+                                if request.intent == ActionIntent.START_HOOK:
+                                    self.console.emit("START_HOOK applied")
                                 actions_applied += 1
                                 commit = self.controller.commit_external_action(
                                     request,
@@ -3295,8 +3501,12 @@ class LiveDetectOnlyRuntime:
                     elapsed_total,
                     self._latest_hook_frame.stale_frames_dropped,
                 )
+            if self._hook_video_suspension_active is not None:
+                self._finish_hook_video_suspension(
+                    timestamp=elapsed_total,
+                    frame_index=captured,
+                )
             self._flush_hook_decision_trace("session_ended")
-            hook_roi_clip_summary = self._write_hook_roi_clip()
             press_shadow_summary: dict[str, Any] = {
                 "press_decision_trace_path": None,
                 "press_decision_trace_rows": 0,
@@ -3304,16 +3514,32 @@ class LiveDetectOnlyRuntime:
                 "press_roi_frames_path": None,
                 "press_roi_frame_count": 0,
                 "press_roi_clip_fps": 0.0,
+                "press_roi_pre_roll_seconds": 1.0,
+                "press_roi_post_roll_seconds": 0.5,
+                "press_roi_frames_dropped": 0,
                 "press_review_items_path": None,
                 "press_episode_review_items": [],
                 "press_shadow_proposal_count": 0,
             }
-            if self.evidence_recorder is not None:
-                press_shadow_summary = self._press_shadow.write_artifacts(
-                    self.logger.path / "diagnostic_evidence"
+            with ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="live-artifact-writer",
+            ) as artifact_executor:
+                hook_future = artifact_executor.submit(
+                    self._write_hook_roi_clip
                 )
-            else:
-                self._press_shadow.finish_session()
+                press_future = (
+                    artifact_executor.submit(
+                        self._press_shadow.write_artifacts,
+                        self.logger.path / "diagnostic_evidence",
+                    )
+                    if self.evidence_recorder is not None else None
+                )
+                if press_future is None:
+                    self._press_shadow.finish_session()
+                hook_roi_clip_summary = hook_future.result()
+                if press_future is not None:
+                    press_shadow_summary = press_future.result()
             evidence_summary: dict[str, Any] = {
                 "evidence_mode": "minimal",
                 "video_path": None,
@@ -3361,6 +3587,7 @@ class LiveDetectOnlyRuntime:
                     ],
                 }
             self.overlay.close()
+            self.console.close()
             if self._opened:
                 self.capture.close()
                 self._opened = False
@@ -3415,11 +3642,31 @@ class LiveDetectOnlyRuntime:
                 "missed_ready_recovery_count": (
                     missed_ready_recovery_count
                 ),
+                "press_initial_delay_range_ms": [
+                    self.live_config.press_initial_delay_min_ms,
+                    self.live_config.press_initial_delay_max_ms,
+                ],
+                "press_inter_key_gap_range_ms": [
+                    self.live_config.press_inter_key_gap_min_ms,
+                    self.live_config.press_inter_key_gap_max_ms,
+                ],
+                "press_key_hold_ms": int(
+                    self._raw_config["action"].get("key_hold_ms", 40)
+                ),
                 "hook_critical_target_fps": (
                     self.live_config.hook_critical_target_fps
                 ),
                 "hook_critical_episodes": (
                     self._hook_episode_telemetry.summaries()
+                ),
+                "full_video_suspended_during_hook_critical": bool(
+                    self._hook_video_suspensions
+                ),
+                "full_video_suspension_episode_count": len(
+                    self._hook_video_suspensions
+                ),
+                "full_video_suspensions": list(
+                    self._hook_video_suspensions
                 ),
                 "stale_hook_frames_dropped": (
                     self._latest_hook_frame.stale_frames_dropped
@@ -3437,6 +3684,7 @@ class LiveDetectOnlyRuntime:
                 **self.cast_opportunity.summary(),
                 **self.collect_retry.summary(),
                 **self._press_live_emission.summary(),
+                **self.console.summary(),
                 **action_summary,
                 **evidence_summary,
                 **hook_roi_clip_summary,

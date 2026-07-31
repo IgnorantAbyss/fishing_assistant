@@ -108,6 +108,18 @@ class HookEpisodeTelemetry:
     def active(self) -> bool:
         return self._active is not None
 
+    def current_actual_fps(self) -> float:
+        if self._active is None:
+            return 0.0
+        timestamps = list(self._active["timestamps"])
+        if len(timestamps) < 2:
+            return 0.0
+        duration = timestamps[-1] - timestamps[0]
+        return (
+            (len(timestamps) - 1) / duration
+            if duration > 0.0 else 0.0
+        )
+
     def start(self, timestamp: float, stale_frames_dropped: int) -> None:
         if self._active is not None:
             return
