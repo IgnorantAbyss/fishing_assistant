@@ -177,6 +177,24 @@ class PressSequenceTemporalAggregator:
             confidences.append(max(0.0, min(1.0, aggregated)))
         return tuple(sequence), tuple(confidences)
 
+    @staticmethod
+    def _is_high_confidence_clean_candidate(observation: PressObservation) -> bool:
+        slots = observation.evidence.get("slots", ())
+        occupied = [
+            item for item in slots
+            if isinstance(item, dict) and item.get("occupancy") == "OCCUPIED"
+        ]
+        if not occupied or len(occupied) != len(observation.sequence_candidate):
+            return False
+        per_key = [float(item.get("arrow_confidence", 0.0)) for item in occupied]
+        return bool(
+            observation.evidence.get("clean_frame_eligible") is True
+            and observation.evidence.get("arrow_sequence_ready") is True
+            and observation.sequence_candidate
+            and min(per_key) >= 0.90
+            and float(observation.sequence_confidence) >= 0.90
+        )
+
     def update(self, observation: PressObservation) -> PressSequenceAggregation:
         if observation.panel_present:
             self._panel_seen = True
@@ -194,6 +212,22 @@ class PressSequenceTemporalAggregator:
             )
             if self._frozen_clean_sequence is None:
                 if clean_eligible:
+                    previous_clean = [
+                        item for item in self._clean_window
+                        if (
+                            item.evidence.get("clean_frame_eligible") is True
+                            and item.evidence.get("arrow_sequence_ready") is True
+                            and item.sequence_candidate
+                        )
+                    ]
+                    if (
+                        previous_clean
+                        and self._is_high_confidence_clean_candidate(observation)
+                        and self._is_high_confidence_clean_candidate(previous_clean[-1])
+                        and tuple(previous_clean[-1].sequence_candidate)
+                        != tuple(observation.sequence_candidate)
+                    ):
+                        self._clean_window.clear()
                     self._clean_window.append(observation)
                 elif not self._input_effect_seen:
                     # Keep the short window so one missed-glyph frame between

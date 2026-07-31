@@ -223,6 +223,45 @@ def test_two_matching_clean_frames_freeze_across_one_missing_glyph_frame() -> No
     assert result.bundle.press.evidence["selected_clean_frame"] == 1
 
 
+def test_high_confidence_conflict_resets_clean_consensus() -> None:
+    qualifier = DetectorEvidenceQualifier(EvidenceQualificationConfig(
+        press_panel_confirmation_frames=1,
+        press_sequence_consensus_frames=3,
+    ))
+
+    def high_confidence(frame: int, sequence: str) -> PressObservation:
+        observation = _with_arrow_phase(
+            _press(frame, panel=True, sequence=sequence),
+            clean=True,
+            input_effect=False,
+        )
+        return replace(
+            observation,
+            sequence_confidence=0.95,
+            evidence={
+                **observation.evidence,
+                "slots": [
+                    {"occupancy": "OCCUPIED", "arrow_confidence": 0.95}
+                    for _ in sequence
+                ],
+            },
+        )
+
+    qualifier.qualify(_bundle(high_confidence(1, "WASD")), _activation())
+    conflict = qualifier.qualify(
+        _bundle(high_confidence(2, "DDDD")), _activation()
+    )
+    assert conflict.bundle.press is not None
+    assert conflict.bundle.press.sequence_ready is False
+    resolved = qualifier.qualify(
+        _bundle(high_confidence(3, "DDDD")), _activation()
+    )
+    assert resolved.bundle.press is not None
+    assert resolved.bundle.press.sequence_ready is True
+    assert resolved.bundle.press.sequence == tuple("DDDD")
+    assert resolved.bundle.press.evidence["selected_clean_frame"] == 2
+
+
 def test_clean_looking_frame_after_input_effect_is_never_frozen() -> None:
     qualifier = DetectorEvidenceQualifier(EvidenceQualificationConfig(
         press_panel_confirmation_frames=1,

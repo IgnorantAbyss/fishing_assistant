@@ -10,14 +10,16 @@ FRAMES = ROOT / "assets" / "replay" / "sessions" / "session_20260710_130308" / "
 
 def test_pilot_press_frame_428_parses_mixed_progress_colours() -> None:
     result = detect_press_sequence(FRAMES / "000428.jpg", save_debug=False)
-    assert len(result["key_boxes"]) == 8
-    assert all(key in "WASD" for key in result["sequence_candidate"])
+    assert result["occupied_slot_count"] == 8
+    assert result["input_effect_detected"] is True
+    assert result["input_effect_reason"].startswith("progress_colour_hue_spread")
     # Panel presence is structural and independent of glyph confidence. A
-    # single frame never exposes an action-ready sequence.
+    # progress frame never exposes an action-ready sequence.
     assert result["panel_present"] is True
     assert result["detected"] is True
     assert result["sequence_ready"] is False
     assert result["sequence"] == []
+    assert result["sequence_candidate"] == []
     assert result["sequence_confidence"] < 0.68
 
 

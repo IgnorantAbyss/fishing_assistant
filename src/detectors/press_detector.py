@@ -347,51 +347,120 @@ def _decode_panel_slots(
 
 
 ARROW_TO_KEY = {"LEFT": "A", "DOWN": "S", "RIGHT": "D", "UP": "W"}
-KEY_TO_ARROW = {key: direction for direction, key in ARROW_TO_KEY.items()}
+PRESS_PROGRESS_HUE_SPREAD_MIN = 22.0
 
 
-def _extract_arrow_glyph(mask: np.ndarray) -> tuple[np.ndarray | None, list[int] | None]:
-    count, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
-    components = [
-        (int(area), int(x), int(y), int(width), int(height))
-        for x, y, width, height, area in stats[1:count]
-        if area >= 6 and width >= 3 and height >= 3
-    ]
-    if not components:
-        return None, None
-    _, x, y, width, height = max(components)
-    component = mask[y:y + height, x:x + width].astype(np.uint8)
-    glyph = cv2.resize(component, (24, 24), interpolation=cv2.INTER_NEAREST)
-    return glyph, [x, y, x + width, y + height]
+def _split_letter_arrow_regions(mask: np.ndarray) -> tuple[int, int, dict[str, Any]]:
+    """Find a non-overlapping arrow band immediately below the letter glyph."""
+    height, width = mask.shape[:2]
+    count, _, stats, centroids = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=8
+    )
+    letter_candidates: list[dict[str, Any]] = []
+    for label in range(1, count):
+        x, y, component_width, component_height, area = (
+            int(value) for value in stats[label]
+        )
+        centroid_x, centroid_y = (float(value) for value in centroids[label])
+        if (
+            area >= 8
+            and component_width >= 2
+            and component_height >= 3
+            and y < height * 0.68
+            and component_width < width * 0.80
+        ):
+            letter_candidates.append({
+                "label": label,
+                "bbox": [x, y, x + component_width, y + component_height],
+                "area": area,
+                "centroid": [round(centroid_x, 3), round(centroid_y, 3)],
+            })
+    letter = max(letter_candidates, key=lambda item: item["area"], default=None)
+    default_start = round(height * 0.40)
+    arrow_start = default_start if letter is None else max(default_start, int(letter["bbox"][3]) + 1)
+    arrow_start = min(height - 1, arrow_start)
+    arrow_end = max(arrow_start + 1, min(height, round(height * 0.98)))
+    return arrow_start, arrow_end, {
+        "letter_component_candidates": letter_candidates,
+        "selected_letter_component": letter,
+        "letter_region": [0, 0, width, arrow_start],
+        "arrow_region": [0, arrow_start, width, arrow_end],
+        "regions_overlap": False,
+    }
 
 
-@lru_cache(maxsize=1)
-def _load_arrow_templates() -> dict[str, list[np.ndarray]]:
-    live = cv2.imread(str(LIVE_TEMPLATE_IMAGE), cv2.IMREAD_COLOR)
-    if live is None:
-        return {}
-    geometry = _find_panel_geometry(live)
-    hsv = cv2.cvtColor(live, cv2.COLOR_BGR2HSV)
-    templates: dict[str, list[np.ndarray]] = {}
-    for key, (x1, y1, x2, y2) in zip(
-        LIVE_BOOTSTRAP_SEQUENCE,
-        geometry["slot_boxes"],
-        strict=False,
-    ):
-        cell = hsv[y1:y2, x1:x2]
-        height, width = cell.shape[:2]
-        arrow_start = min(height - 1, round(height * 0.53))
-        arrow_end = max(arrow_start + 1, round(height * 0.93))
-        colour = (cell[:, :, 1] >= 75) & (cell[:, :, 2] >= 70)
-        glyph, _ = _extract_arrow_glyph(colour[arrow_start:arrow_end, 3:max(4, width - 3)])
-        if glyph is not None:
-            templates.setdefault(key, []).append(glyph)
-    return templates
+def _extract_arrow_glyph(
+    mask: np.ndarray,
+) -> tuple[np.ndarray | None, list[int] | None, list[dict[str, Any]], str]:
+    """Select a lower-centred arrow-shaped component, never merely the largest blob."""
+    raw_mask = mask.astype(np.uint8)
+    working_mask = raw_mask
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        working_mask, connectivity=8
+    )
+    height, width = mask.shape[:2]
+    candidates: list[dict[str, Any]] = []
+    for label in range(1, count):
+        x, y, component_width, component_height, area = (
+            int(value) for value in stats[label]
+        )
+        centroid_x, centroid_y = (float(value) for value in centroids[label])
+        rejection_reasons: list[str] = []
+        if area < 6 or area > 240:
+            rejection_reasons.append("area_out_of_range")
+        if component_width < 3 or component_height < 3:
+            rejection_reasons.append("bbox_too_small")
+        if component_width >= width * 0.72:
+            rejection_reasons.append("bbox_too_wide_for_arrow")
+        if centroid_y < height * 0.08 or centroid_y > height * 0.72:
+            rejection_reasons.append("centroid_outside_expected_lower_slot_band")
+        area_quality = min(1.0, area / 55.0)
+        size_quality = min(1.0, component_width / 9.0, component_height / 7.0)
+        centre_quality = max(0.0, 1.0 - abs(centroid_x - (width - 1) * 0.5) / max(1.0, width * 0.5))
+        vertical_quality = max(
+            0.0,
+            1.0 - abs(centroid_y - height * 0.32) / max(1.0, height * 0.32),
+        )
+        selection_score = (
+            0.35 * area_quality
+            + 0.25 * size_quality
+            + 0.25 * centre_quality
+            + 0.15 * vertical_quality
+        )
+        candidates.append({
+            "label": label,
+            "bbox": [x, y, x + component_width, y + component_height],
+            "area": area,
+            "centroid": [round(centroid_x, 3), round(centroid_y, 3)],
+            "selection_score": round(selection_score, 4),
+            "eligible": not rejection_reasons,
+            "rejection_reasons": rejection_reasons,
+        })
+    eligible = [item for item in candidates if item["eligible"]]
+    if not eligible:
+        for item in candidates:
+            item["selected"] = False
+        return None, None, candidates, "no_eligible_arrow_component"
+    selected = max(eligible, key=lambda item: (item["selection_score"], item["area"]))
+    for item in candidates:
+        item["selected"] = item is selected
+    x, y, x2, y2 = (int(value) for value in selected["bbox"])
+    component = (labels[y:y2, x:x2] == int(selected["label"])).astype(np.uint8)
+    return component, [x, y, x2, y2], candidates, "best_area_size_centre_position_score"
+
+
+def _normalised_projection_slope(values: np.ndarray) -> float:
+    if len(values) < 2 or float(np.max(values)) <= 0.0:
+        return 0.0
+    axis = np.linspace(-1.0, 1.0, len(values))
+    normalised = values.astype(np.float64) / float(np.max(values))
+    slope = float(np.dot(axis, normalised - np.mean(normalised)) / np.dot(axis, axis))
+    return max(-1.0, min(1.0, slope))
 
 
 def _classify_arrow(mask: np.ndarray) -> dict[str, Any]:
-    glyph, bbox = _extract_arrow_glyph(mask)
-    if glyph is None or bbox is None:
+    component, bbox, component_candidates, selection_reason = _extract_arrow_glyph(mask)
+    if component is None or bbox is None:
         return {
             "arrow_direction": None,
             "arrow_confidence": 0.0,
@@ -400,68 +469,153 @@ def _classify_arrow(mask: np.ndarray) -> dict[str, Any]:
             "mapped_key": None,
             "arrow_bbox": None,
             "arrow_top_candidates": [],
+            "arrow_component_candidates": component_candidates,
+            "arrow_component_selection_reason": selection_reason,
+            "arrow_geometry_features": {},
+            "arrow_geometry_scores": {},
         }
-    templates = _load_arrow_templates()
-    template_scores = {
-        key: max(
-            float(cv2.matchTemplate(glyph, template, cv2.TM_CCOEFF_NORMED)[0, 0])
-            for template in variants
-        )
-        for key, variants in templates.items()
-    } if templates else {}
-    if template_scores:
-        ranked_keys = sorted(
-            (
-                (key, max(0.0, min(1.0, (score + 1.0) / 2.0)))
-                for key, score in template_scores.items()
-            ),
-            key=lambda item: item[1],
-            reverse=True,
-        )
-        key, confidence = ranked_keys[0]
-        second_key, second_confidence = ranked_keys[1] if len(ranked_keys) > 1 else (None, 0.0)
-        return {
-            "arrow_direction": KEY_TO_ARROW[key],
-            "arrow_confidence": round(confidence, 4),
-            "second_direction": KEY_TO_ARROW.get(second_key),
-            "ambiguity_margin": round(max(0.0, confidence - second_confidence), 4),
-            "mapped_key": key,
-            "arrow_bbox": bbox,
-            "arrow_top_candidates": [
-                {"key": candidate, "direction": KEY_TO_ARROW[candidate], "confidence": round(score, 4)}
-                for candidate, score in ranked_keys[:2]
-            ],
-        }
-
-    x, y, x2, y2 = bbox
-    width, height = x2 - x, y2 - y
-    component = mask[y:y2, x:x2].astype(bool)
-    third_x = max(1, round(width / 3))
-    third_y = max(1, round(height / 3))
+    component_bool = component.astype(bool)
+    height, width = component_bool.shape[:2]
     total = max(1.0, float(np.sum(component)))
-    left = float(np.sum(component[:, :third_x]))
-    right = float(np.sum(component[:, width - third_x:]))
-    top = float(np.sum(component[:third_y, :]))
-    bottom = float(np.sum(component[height - third_y:, :]))
-    raw_scores = {
-        "RIGHT": max(0.0, (left - right) / total),
-        "LEFT": max(0.0, (right - left) / total),
-        "DOWN": max(0.0, (top - bottom) / total),
-        "UP": max(0.0, (bottom - top) / total),
+    rows, columns = np.where(component_bool)
+    moments = cv2.moments(component.astype(np.uint8), binaryImage=True)
+    centroid_x = float(
+        (moments["m10"] / max(1.0, moments["m00"])) / max(1, width - 1)
+    )
+    centroid_y = float(
+        (moments["m01"] / max(1.0, moments["m00"])) / max(1, height - 1)
+    )
+    left = float(np.sum(component_bool[:, : max(1, width // 2)]))
+    right = total - left
+    top = float(np.sum(component_bool[: max(1, height // 2), :]))
+    bottom = total - top
+    column_slope = _normalised_projection_slope(np.sum(component_bool, axis=0))
+    row_slope = _normalised_projection_slope(np.sum(component_bool, axis=1))
+    quarter_width = max(1, int(np.ceil(width * 0.25)))
+    quarter_height = max(1, int(np.ceil(height * 0.25)))
+
+    def _orthogonal_span(values: np.ndarray, size: int) -> float:
+        return float(np.ptp(values) + 1) / size if len(values) else 0.0
+
+    left_span = _orthogonal_span(rows[columns < quarter_width], height)
+    right_span = _orthogonal_span(rows[columns >= width - quarter_width], height)
+    top_span = _orthogonal_span(columns[rows < quarter_height], width)
+    bottom_span = _orthogonal_span(columns[rows >= height - quarter_height], width)
+    features = {
+        "centroid_horizontal": 2.0 * (0.5 - centroid_x),
+        "centroid_vertical": 2.0 * (0.5 - centroid_y),
+        "mass_horizontal": (left - right) / total,
+        "mass_vertical": (top - bottom) / total,
+        "projection_horizontal": -column_slope,
+        "projection_vertical": -row_slope,
+        "base_span_horizontal": left_span - right_span,
+        "base_span_vertical": top_span - bottom_span,
     }
-    ranked = sorted(raw_scores.items(), key=lambda item: item[1], reverse=True)
+    horizontal = (
+        0.45 * features["centroid_horizontal"]
+        + 0.30 * features["mass_horizontal"]
+        + 0.25 * features["projection_horizontal"]
+    )
+    vertical = (
+        0.45 * features["centroid_vertical"]
+        + 0.30 * features["mass_vertical"]
+        + 0.25 * features["projection_vertical"]
+    )
+    axis_bias = (height - width) / max(1.0, height + width)
+    covariance = np.cov(np.vstack((columns, rows)))
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    principal = eigenvectors[:, int(np.argmax(eigenvalues))]
+    largest_eigenvalue = float(np.max(eigenvalues))
+    pca_anisotropy = (
+        (largest_eigenvalue - float(np.min(eigenvalues))) / largest_eigenvalue
+        if largest_eigenvalue > 0.0 else 0.0
+    )
+    # A triangle's longest mass axis follows its base, perpendicular to the
+    # pointing direction.  Positive values therefore favour LEFT/RIGHT.
+    pca_axis_bias = (
+        abs(float(principal[1])) - abs(float(principal[0]))
+    ) * pca_anisotropy
+    horizontal += 0.35 * features["base_span_horizontal"]
+    vertical += 0.35 * features["base_span_vertical"]
+    geometry_scores = {
+        "RIGHT": horizontal,
+        "LEFT": -horizontal,
+        "DOWN": vertical,
+        "UP": -vertical,
+    }
+    contours, _ = cv2.findContours(
+        component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    contour_base_direction = None
+    contour_base_quality = 0.0
+    if contours:
+        hull = cv2.convexHull(max(contours, key=cv2.contourArea)).reshape(-1, 2)
+        edge_candidates: list[tuple[float, np.ndarray, np.ndarray]] = []
+        for index, start in enumerate(hull):
+            end = hull[(index + 1) % len(hull)]
+            vector = end - start
+            length = float(np.linalg.norm(vector))
+            if length <= 0.0:
+                continue
+            horizontal_edge = abs(int(vector[0])) >= abs(int(vector[1]))
+            alignment = max(abs(int(vector[0])), abs(int(vector[1]))) / length
+            midpoint = (start + end) * 0.5
+            if horizontal_edge:
+                boundary_distance = min(midpoint[1], height - 1 - midpoint[1]) / max(1.0, (height - 1) * 0.5)
+            else:
+                boundary_distance = min(midpoint[0], width - 1 - midpoint[0]) / max(1.0, (width - 1) * 0.5)
+            edge_score = length * alignment * (1.0 - 0.70 * boundary_distance)
+            edge_candidates.append((edge_score, start, end))
+        if edge_candidates:
+            edge_score, base_start, base_end = max(edge_candidates, key=lambda item: item[0])
+            base_vector = base_end - base_start
+            relative = hull - base_start
+            distances = (
+                base_vector[0] * relative[:, 1] - base_vector[1] * relative[:, 0]
+            ) / max(1.0, float(np.linalg.norm(base_vector)))
+            tip = hull[int(np.argmax(np.abs(distances)))]
+            direction_vector = tip - (base_start + base_end) * 0.5
+            if abs(float(direction_vector[0])) > abs(float(direction_vector[1])):
+                contour_base_direction = "RIGHT" if direction_vector[0] > 0 else "LEFT"
+            else:
+                contour_base_direction = "DOWN" if direction_vector[1] > 0 else "UP"
+            contour_base_quality = float(
+                edge_score / max(1.0, float(max(width, height)))
+            )
+            if contour_base_quality >= 0.55:
+                geometry_scores[contour_base_direction] += 0.50
+    ranked = sorted(geometry_scores.items(), key=lambda item: item[1], reverse=True)
     direction, best = ranked[0]
     second_direction, second = ranked[1]
-    confidence = max(0.0, min(1.0, best * 3.0))
-    margin = max(0.0, min(1.0, (best - second) * 3.0))
+    signal_margin = max(0.0, best - second)
+    confidence = max(0.0, min(1.0, 0.55 + 1.35 * max(0.0, best) + 1.10 * signal_margin))
+    classified = bool(best >= 0.055 and signal_margin >= 0.025)
     return {
-        "arrow_direction": direction if confidence > 0 else None,
-        "arrow_confidence": round(confidence, 4),
-        "second_direction": second_direction if second > 0 else None,
-        "ambiguity_margin": round(margin, 4),
-        "mapped_key": ARROW_TO_KEY.get(direction) if confidence > 0 else None,
+        "arrow_direction": direction if classified else None,
+        "arrow_confidence": round(confidence if classified else 0.0, 4),
+        "second_direction": second_direction,
+        "ambiguity_margin": round(signal_margin, 4),
+        "mapped_key": ARROW_TO_KEY.get(direction) if classified else None,
         "arrow_bbox": bbox,
-        "arrow_top_candidates": [],
+        "arrow_top_candidates": [
+            {
+                "key": ARROW_TO_KEY[candidate],
+                "direction": candidate,
+                "confidence": round(max(0.0, min(1.0, 0.5 + score)), 4),
+            }
+            for candidate, score in ranked[:2]
+        ],
+        "arrow_component_candidates": component_candidates,
+        "arrow_component_selection_reason": selection_reason,
+        "arrow_geometry_features": {
+            **{key: round(value, 4) for key, value in features.items()},
+            "axis_aspect_bias": round(axis_bias, 4),
+            "pca_axis_bias": round(pca_axis_bias, 4),
+            "pca_anisotropy": round(pca_anisotropy, 4),
+            "contour_base_direction": contour_base_direction,
+            "contour_base_quality": round(contour_base_quality, 4),
+        },
+        "arrow_geometry_scores": {key: round(value, 4) for key, value in geometry_scores.items()},
     }
 
 
@@ -469,38 +623,80 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     slots: list[dict[str, Any]] = []
     for index, (x1, y1, x2, y2) in enumerate(geometry["slot_boxes"]):
-        cell = hsv[y1:y2, x1:x2]
+        slot_height = y2 - y1
+        extended_y2 = min(hsv.shape[0], y2 + max(4, round(slot_height * 0.20)))
+        cell = hsv[y1:extended_y2, x1:x2]
         if not cell.size:
             continue
         height, width = cell.shape[:2]
         colour = (cell[:, :, 1] >= 60) & (cell[:, :, 2] >= 60)
         arrow_colour = (cell[:, :, 1] >= 75) & (cell[:, :, 2] >= 70)
-        letter_end = max(1, round(height * 0.56))
-        arrow_start = min(height - 1, round(height * 0.53))
-        arrow_end = max(arrow_start + 1, round(height * 0.93))
-        letter_mask = colour[2:letter_end, 3:max(4, width - 3)]
-        arrow_mask = arrow_colour[arrow_start:arrow_end, 3:max(4, width - 3)]
+        inner_colour = colour[:, 3:max(4, width - 3)]
+        inner_arrow_colour = arrow_colour[:, 3:max(4, width - 3)]
+        arrow_start, arrow_end, region_debug = _split_letter_arrow_regions(inner_arrow_colour)
+        letter_mask = inner_colour[2:arrow_start]
+        arrow_value = cell[arrow_start:arrow_end, 3:max(4, width - 3), 2]
+        value_range = int(np.max(arrow_value)) - int(np.min(arrow_value))
+        if arrow_value.size and value_range >= 25:
+            arrow_value_threshold, arrow_shape = cv2.threshold(
+                arrow_value,
+                0,
+                1,
+                cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+            )
+            arrow_mask = arrow_shape.astype(bool)
+            arrow_shape_segmentation = "local_value_otsu"
+        else:
+            arrow_value_threshold = 0.0
+            arrow_mask = inner_arrow_colour[arrow_start:arrow_end]
+            arrow_shape_segmentation = "fixed_colour_mask"
         arrow = _classify_arrow(arrow_mask)
-        coloured_pixels = int(np.sum(letter_mask)) + int(np.sum(arrow_mask))
-        arrow_pixels = int(np.sum(arrow_mask))
-        if coloured_pixels < 8 and arrow_pixels < 5:
+        for candidate in arrow["arrow_component_candidates"]:
+            centroid = candidate.get("centroid")
+            if isinstance(centroid, list) and len(centroid) == 2:
+                slot_centroid_y = float(centroid[1]) + arrow_start
+                candidate["slot_centroid"] = [
+                    round(float(centroid[0]) + 3.0, 3),
+                    round(slot_centroid_y, 3),
+                ]
+                candidate["centroid_in_slot_lower_half"] = bool(
+                    slot_centroid_y >= height * 0.5
+                )
+        selected_component = next(
+            (
+                item for item in arrow["arrow_component_candidates"]
+                if item["eligible"] and item["bbox"] == arrow["arrow_bbox"]
+            ),
+            None,
+        )
+        letter_pixels = int(np.sum(letter_mask))
+        arrow_pixels = int(selected_component["area"]) if selected_component else 0
+        visible_pixels = letter_pixels + arrow_pixels
+        if visible_pixels < 6:
             occupancy = "EMPTY"
-            occupancy_confidence = max(0.0, min(1.0, 1.0 - coloured_pixels / 8.0))
-        elif arrow["mapped_key"] and arrow["arrow_confidence"] >= 0.35:
+            occupancy_confidence = max(0.0, min(1.0, 1.0 - visible_pixels / 6.0))
+        elif visible_pixels >= 10 and (letter_pixels >= 6 or arrow_pixels >= 6):
             occupancy = "OCCUPIED"
-            occupancy_confidence = min(1.0, 0.5 + coloured_pixels / 80.0)
+            occupancy_confidence = min(1.0, 0.5 + visible_pixels / 80.0)
         else:
             occupancy = "UNCERTAIN"
-            occupancy_confidence = min(1.0, coloured_pixels / 40.0)
+            occupancy_confidence = min(1.0, visible_pixels / 10.0)
         coloured_hues = cell[:, :, 0][colour]
         median_hue = float(np.median(coloured_hues)) if len(coloured_hues) else None
         slot = {
             "index": index,
             "bbox": [x1, y1, x2, y2],
+            "recognition_bbox": [x1, y1, x2, extended_y2],
             "occupancy": occupancy,
             "occupancy_confidence": round(float(occupancy_confidence), 4),
-            "coloured_pixel_count": coloured_pixels,
+            "coloured_pixel_count": visible_pixels,
+            "letter_pixel_count": letter_pixels,
+            "arrow_pixel_count": arrow_pixels,
+            "arrow_shape_segmentation": arrow_shape_segmentation,
+            "arrow_value_threshold": round(float(arrow_value_threshold), 3),
+            "occupancy_uses_classification": False,
             "median_hue": None if median_hue is None else round(median_hue, 2),
+            **region_debug,
             **arrow,
         }
         if arrow["arrow_bbox"]:
@@ -531,30 +727,34 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
     panel = geometry["panel_bbox"]
     panel_hsv = hsv[panel[1]:panel[3], panel[0]:panel[2]]
     glow_ratio = float(np.mean((panel_hsv[:, :, 2] >= 215) & (panel_hsv[:, :, 1] <= 80)))
-    uncertain_effect = bool(occupied_count > 0 and uncertain_count > 0)
-    input_effect_detected = bool(
-        glow_ratio >= 0.045 or uncertain_effect or layout_conflict
+    progress_colour_detected = bool(
+        occupied_count >= 2 and hue_spread >= PRESS_PROGRESS_HUE_SPREAD_MIN
     )
+    input_effect_detected = bool(glow_ratio >= 0.045 or progress_colour_detected)
     effect_reasons = []
     if glow_ratio >= 0.045:
         effect_reasons.append(f"panel_glow_ratio:{glow_ratio:.4f}")
-    if uncertain_effect:
-        effect_reasons.append(f"uncertain_slots:{uncertain_count}")
-    if layout_conflict:
-        effect_reasons.append("occupied_after_empty_layout_conflict")
+    if progress_colour_detected:
+        effect_reasons.append(f"progress_colour_hue_spread:{hue_spread:.4f}")
     clean_frame_eligible = bool(
         geometry["panel_present"]
         and occupied_count > 0
         and uncertain_count == 0
         and not layout_conflict
         and not input_effect_detected
-        and all(slot["mapped_key"] for slot in occupied)
     )
-    sequence = tuple(str(slot["mapped_key"]) for slot in occupied if slot["mapped_key"])
+    classification_complete = bool(
+        occupied_count > 0 and all(slot["mapped_key"] for slot in occupied)
+    )
+    sequence = (
+        tuple(str(slot["mapped_key"]) for slot in occupied)
+        if classification_complete else ()
+    )
     per_slot_confidence = tuple(float(slot["arrow_confidence"]) for slot in occupied)
     sequence_confidence = float(np.mean(per_slot_confidence)) if per_slot_confidence else 0.0
     arrow_sequence_ready = bool(
         clean_frame_eligible
+        and classification_complete
         and len(sequence) == occupied_count
         and all(value >= 0.55 for value in per_slot_confidence)
         and sequence_confidence >= 0.68
@@ -568,6 +768,8 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
         "layout_conflict": layout_conflict,
         "input_effect_detected": input_effect_detected,
         "input_effect_reason": ";".join(effect_reasons) if effect_reasons else "none",
+        "input_effect_uses_classification": False,
+        "progress_colour_detected": progress_colour_detected,
         "panel_glow_ratio": round(glow_ratio, 4),
         "slot_hue_spread": round(hue_spread, 4),
         "clean_frame_eligible": clean_frame_eligible,
@@ -619,23 +821,26 @@ def detect_press_sequence(
     purple_ratio = float(np.mean((hsv[:, :, 0] >= 125) & (hsv[:, :, 0] <= 170) & (hsv[:, :, 1] >= 60)))
     colour_mode = "purple" if purple_ratio >= 0.003 else "mixed_live"
     templates = template_sets.get("purple" if colour_mode == "purple" else "teal", {})
-    local_key_boxes = _decode_panel_slots(crop, geometry, templates)
+    auxiliary_key_boxes = _decode_panel_slots(crop, geometry, templates)
     arrow_result = _decode_arrow_slots(crop, geometry)
     key_boxes: list[dict[str, Any]] = []
-    for item in local_key_boxes:
-        x1, y1, x2, y2 = item["bbox"]
+    for slot in arrow_result["slots"][:arrow_result["occupied_slot_count"]]:
+        if not slot.get("mapped_key") or not slot.get("arrow_bbox"):
+            continue
+        x1, y1, x2, y2 = slot["arrow_bbox"]
         key_boxes.append({
-            **item,
+            "key": slot["mapped_key"],
             "bbox": [left + x1, top + y1, left + x2, top + y2],
+            "confidence": slot["arrow_confidence"],
+            "top_candidates": slot["arrow_top_candidates"],
         })
-    auxiliary_sequence = [item["key"] for item in key_boxes]
-    sequence = list(arrow_result["arrow_sequence"]) or auxiliary_sequence
+    sequence = list(arrow_result["arrow_sequence"])
     sequence_text = "".join(sequence)
-    glyph_confidence = float(np.mean([item["confidence"] for item in key_boxes])) if key_boxes else 0.0
-    sequence_confidence = (
-        float(arrow_result["arrow_sequence_confidence"])
-        if arrow_result["arrow_sequence"] else glyph_confidence
+    glyph_confidence = (
+        float(np.mean([item["confidence"] for item in auxiliary_key_boxes]))
+        if auxiliary_key_boxes else 0.0
     )
+    sequence_confidence = float(arrow_result["arrow_sequence_confidence"])
     panel_local = geometry["panel_bbox"]
     panel = None if panel_local is None else (
         left + panel_local[0], top + panel_local[1], left + panel_local[2], top + panel_local[3]
@@ -710,6 +915,9 @@ def detect_press_sequence(
             "slot_hue_spread": arrow_result["slot_hue_spread"],
             "template_error": template_errors.get(colour_mode),
             "template_keys": sorted(templates),
+            "auxiliary_letter_sequence": "".join(
+                str(item["key"]) for item in auxiliary_key_boxes
+            ),
             "detector_min_confidence": active_thresholds.min_confidence_for("PRESS"),
             "debug_image_path": debug_path,
         },

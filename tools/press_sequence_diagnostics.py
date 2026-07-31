@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.config_loader import load_roi_config, normalized_to_pixel_roi  # noqa: E402
+from src.detectors.press_detector import _decode_arrow_slots, _find_panel_geometry  # noqa: E402
 from src.fishing_v2.data.press_sequence_ground_truth import (  # noqa: E402
     load_press_sequence_ground_truth,
 )
@@ -40,11 +41,19 @@ DEFAULT_REVIEW_ROOT = ROOT / "reports" / "fishing_v2" / "press_sequence_review"
 DEFAULT_SEQUENCE_GROUND_TRUTH = ROOT / "data" / "annotations" / "press_sequence_ground_truth.yaml"
 SUMMARY_MD = ROOT / "reports" / "fishing_v2" / "press_detector_diagnostics_summary.md"
 SUMMARY_JSON = ROOT / "reports" / "fishing_v2" / "press_detector_diagnostics_summary.json"
+SAS_REGRESSION_ROOT = ROOT / "tests" / "fixtures" / "press_sas"
 REVIEW_FIELDS = (
     "session_id", "press_start", "press_end", "review_frame",
     "predicted_sequence", "manually_confirmed_sequence", "review_status",
     "source_yaml", "notes",
 )
+
+
+def _project_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _aggregation_config(path: Path) -> PressSequenceAggregationConfig:
@@ -149,6 +158,29 @@ def _best_review_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def _compact_slot_diagnostic(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    return {
+        key: item.get(key)
+        for key in (
+            "index",
+            "occupancy",
+            "occupancy_confidence",
+            "letter_pixel_count",
+            "arrow_pixel_count",
+            "arrow_direction",
+            "mapped_key",
+            "arrow_confidence",
+            "second_direction",
+            "ambiguity_margin",
+            "arrow_component_selection_reason",
+            "arrow_geometry_features",
+            "arrow_geometry_scores",
+        )
+    }
+
+
 def _episode_summary(
     session_id: str,
     start: int,
@@ -160,7 +192,8 @@ def _episode_summary(
     first_candidate = next((row["frame"] for row in rows if row["raw"].panel_candidate), None)
     first_present = next((row["frame"] for row in rows if row["raw"].panel_present), None)
     first_confirmed = next((row["frame"] for row in rows if row["aggregation"].panel_confirmed), None)
-    first_ready = next((row["frame"] for row in rows if row["aggregation"].sequence_ready), None)
+    ready_row = next((row for row in rows if row["aggregation"].sequence_ready), None)
+    first_ready = None if ready_row is None else ready_row["frame"]
     first_input_effect = next((
         row["frame"] for row in rows
         if row["raw"].evidence.get("input_effect_detected") is True
@@ -176,9 +209,10 @@ def _episode_summary(
     ])
     review = clean_row or _best_review_row(rows)
     predicted_sequence = (
-        "".join(clean_row["raw"].sequence_candidate) if clean_row is not None else ""
+        "".join(ready_row["aggregation"].sequence_candidate)
+        if ready_row is not None else ""
     )
-    evaluable = bool(clean_row is not None and expected_sequence)
+    evaluable = bool(expected_sequence)
     return {
         "session_id": session_id,
         "press_start": start,
@@ -219,11 +253,14 @@ def _episode_summary(
         "exact_match": predicted_sequence == expected_sequence if evaluable else None,
         "sequence_evaluable": evaluable,
         "sequence_status": (
-            "sequence_ready" if clean_row is not None
-            else "sequence_not_evaluable_from_existing_replay"
+            "sequence_ready" if ready_row is not None
+            else "sequence_abstained"
         ),
         "review_frame": review["frame"],
-        "selected_slot_observations": list(review["raw"].evidence.get("slots", ())),
+        "selected_slot_observations": [
+            _compact_slot_diagnostic(item)
+            for item in review["raw"].evidence.get("slots", ())
+        ],
         "selected_panel_phase": review["raw"].evidence.get("panel_phase"),
         "selected_occupied_slot_count": int(review["raw"].evidence.get("occupied_slot_count", 0)),
         "selected_empty_slot_count": int(review["raw"].evidence.get("empty_slot_count", 0)),
@@ -233,6 +270,57 @@ def _episode_summary(
             item.get("top_candidates", []) for item in review["raw"].evidence.get("key_boxes", ())
         ],
     }
+
+
+def _sas_regression_summary() -> dict[str, Any]:
+    candidates: list[tuple[str, ...]] = []
+    panel_present = 0
+    ready_frames: list[int] = []
+    for frame_index in (159, 160, 161):
+        path = SAS_REGRESSION_ROOT / f"frame_{frame_index:06d}.jpg"
+        frame = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise FileNotFoundError(path)
+        geometry = _find_panel_geometry(frame)
+        decoded = _decode_arrow_slots(frame, geometry)
+        panel_present += int(bool(geometry["panel_present"]))
+        candidate = tuple(str(value) for value in decoded["arrow_sequence"])
+        if decoded["arrow_sequence_ready"] and candidate:
+            candidates.append(candidate)
+            if Counter(candidates)[candidate] >= 2:
+                ready_frames.append(frame_index)
+    predicted = ""
+    if candidates:
+        candidate, support = Counter(candidates).most_common(1)[0]
+        if support >= 2:
+            predicted = "".join(candidate)
+    return {
+        "session_id": "session_20260731_194416_local_fixture",
+        "press_start": 159,
+        "press_end": 161,
+        "support": 3,
+        "panel_present_frames": panel_present,
+        "panel_presence_recall": round(panel_present / 3, 4),
+        "sequence_ready_first_frame": ready_frames[0] if ready_frames else None,
+        "predicted_sequence": predicted,
+        "expected_sequence": "SAS",
+        "exact_match": predicted == "SAS",
+        "sequence_evaluable": True,
+        "sequence_status": "sequence_ready" if predicted else "sequence_abstained",
+        "source": "local_small_live_roi_regression_fixture",
+    }
+
+
+def _per_key_confusion(episodes: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    labels = ("W", "A", "S", "D", "ABSTAIN", "EXTRA")
+    matrix = {expected: {predicted: 0 for predicted in labels} for expected in "WASD"}
+    for episode in episodes:
+        expected = str(episode.get("expected_sequence") or "")
+        predicted = str(episode.get("predicted_sequence") or "")
+        for index, expected_key in enumerate(expected):
+            predicted_key = predicted[index] if index < len(predicted) else "ABSTAIN"
+            matrix[expected_key][predicted_key] += 1
+    return matrix
 
 
 def _write_review(
@@ -386,15 +474,23 @@ def run(
         })
         print(f"{session_path.name}: frames={len(rows)} press={present}/{support} episodes={len(episodes)}", flush=True)
 
-    total_support = sum(item["press_frame_support"] for item in session_summaries)
-    total_present = sum(item["panel_present_frames"] for item in session_summaries)
+    sas_regression = _sas_regression_summary()
+    evaluation_episodes = [*all_episodes, sas_regression]
+    total_support = sum(item["press_frame_support"] for item in session_summaries) + int(sas_regression["support"])
+    total_present = sum(item["panel_present_frames"] for item in session_summaries) + int(sas_regression["panel_present_frames"])
     non_press_states = ("IDLE", "WAITING", "READY", "HOOK", "GET")
-    evaluable_episodes = [item for item in all_episodes if item["sequence_evaluable"]]
-    exact_matches = sum(item["exact_match"] is True for item in evaluable_episodes)
+    exact_matches = sum(item["exact_match"] is True for item in evaluation_episodes)
+    abstained = [item for item in evaluation_episodes if not item["predicted_sequence"]]
+    wrong = [
+        item for item in evaluation_episodes
+        if item["predicted_sequence"] and item["exact_match"] is not True
+    ]
     summary = {
         "config": asdict(aggregation_config),
         "session_count": len(session_summaries),
-        "episode_count": len(all_episodes),
+        "episode_count": len(evaluation_episodes),
+        "confirmed_ground_truth_episode_count": len(all_episodes),
+        "local_regression_episode_count": 1,
         "press_frame_support": total_support,
         "panel_present_frames": total_present,
         "panel_presence_recall": round(total_present / total_support, 4) if total_support else None,
@@ -407,21 +503,29 @@ def run(
         "runtime_fusion_false_positive_reason": (
             "Non-PRESS diagnostic scans do not bypass detector activation; OFF evidence is never used by Fusion."
         ),
-        "sequence_ready_episode_count": sum(item["sequence_status"] == "sequence_ready" for item in all_episodes),
-        "sequence_ground_truth_path": str(sequence_ground_truth_path),
+        "sequence_ready_episode_count": sum(item["sequence_status"] == "sequence_ready" for item in evaluation_episodes),
+        "sequence_ground_truth_path": _project_path(sequence_ground_truth_path),
         "sequence_ground_truth_episode_count": len(expected_by_episode),
-        "sequence_evaluable_episode_count": len(evaluable_episodes),
+        "sequence_evaluable_episode_count": len(evaluation_episodes),
         "sequence_exact_match_count": exact_matches,
-        "sequence_accuracy": round(exact_matches / len(evaluable_episodes), 4) if evaluable_episodes else None,
-        "sequence_accuracy_reason": (
-            "Exact match is computed only for episodes with manual ground truth and an eligible clean frame."
-            if evaluable_episodes else
-            "No episode has both manual ground truth and an eligible clean frame."
+        "sequence_ready_coverage": round(
+            sum(item["sequence_status"] == "sequence_ready" for item in evaluation_episodes)
+            / len(evaluation_episodes), 4
         ),
+        "all_episode_exact_sequence_accuracy": round(
+            exact_matches / len(evaluation_episodes), 4
+        ),
+        "sequence_accuracy": round(exact_matches / len(evaluation_episodes), 4),
+        "sequence_accuracy_reason": "All confirmed and local regression episodes are included in the denominator; abstentions count as misses.",
+        "per_key_confusion_matrix": _per_key_confusion(evaluation_episodes),
+        "abstained_episode_count": len(abstained),
+        "abstained_episodes": [item["session_id"] for item in abstained],
+        "wrong_sequence_episode_count": len(wrong),
+        "wrong_sequence_episodes": [item["session_id"] for item in wrong],
         "sessions": session_summaries,
-        "episodes": all_episodes,
-        "review_html": str(review_root / "index.html"),
-        "review_csv": str(review_root / "review_items.csv"),
+        "episodes": evaluation_episodes,
+        "review_html": _project_path(review_root / "index.html"),
+        "review_csv": _project_path(review_root / "review_items.csv"),
     }
     SUMMARY_JSON.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_JSON.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -434,9 +538,12 @@ def run(
         f"- Temporally confirmed structural false positives by global state: `{summary['false_positive_temporally_confirmed_by_state']}`",
         "- Runtime Fusion false positives: **0**; diagnostic OFF evidence remains excluded from Fusion.",
         f"- Sequence-ready episodes: **{summary['sequence_ready_episode_count']}/{summary['episode_count']}**",
-        f"- Sequence exact match: **{exact_matches}/{len(evaluable_episodes)}** ({summary['sequence_accuracy'] if summary['sequence_accuracy'] is not None else 'N/A'}).",
-        f"- Manual sequence ground truth: `{sequence_ground_truth_path}` ({len(expected_by_episode)} confirmed episodes).",
-        "- Existing glyph threshold was not lowered; arrow direction is primary evidence and letter templates remain auxiliary diagnostics.",
+        f"- Sequence-ready coverage: **{summary['sequence_ready_episode_count']}/{summary['episode_count']}** ({summary['sequence_ready_coverage']:.2%}).",
+        f"- All-episode exact sequence accuracy: **{exact_matches}/{summary['episode_count']}** ({summary['all_episode_exact_sequence_accuracy']:.2%}).",
+        f"- Abstained / wrong-sequence episodes: **{summary['abstained_episode_count']} / {summary['wrong_sequence_episode_count']}**.",
+        f"- Manual sequence ground truth: `{_project_path(sequence_ground_truth_path)}` ({len(expected_by_episode)} confirmed episodes) plus one local SAS ROI fixture.",
+        "- Existing panel/glyph thresholds were not lowered; arrow direction is derived from local-contrast geometry and letter templates remain diagnostic only.",
+        f"- Per-key confusion matrix: `{summary['per_key_confusion_matrix']}`",
         "",
         "## Sessions",
         "",
@@ -450,10 +557,13 @@ def run(
         f"- `{item['session_id']}` {item['press_start']}-{item['press_end']}: candidate/present/clean/input `{item['panel_candidate_first_frame']}/{item['panel_present_first_frame']}/{item['earliest_clean_frame']}/{item['first_input_effect_frame']}`; selected `{item['selected_review_frame']}` ({item['selected_review_reason']}); slots `{item['selected_occupied_slot_count']}/{len(item['selected_slot_observations'])}`; predicted `{item['predicted_sequence'] or 'N/A'}`; expected `{item['expected_sequence'] or 'N/A'}`; exact `{item['exact_match']}`; status `{item['sequence_status']}`."
         for item in all_episodes
     )
+    lines.append(
+        f"- `{sas_regression['session_id']}` 159-161: predicted `{sas_regression['predicted_sequence'] or 'N/A'}`; expected `SAS`; exact `{sas_regression['exact_match']}`; status `{sas_regression['sequence_status']}`; source `{sas_regression['source']}`."
+    )
     lines.extend([
         "",
-        f"- Manual review: `{review_root / 'index.html'}`",
-        f"- Review CSV: `{review_root / 'review_items.csv'}`",
+        f"- Manual review: `{_project_path(review_root / 'index.html')}`",
+        f"- Review CSV: `{_project_path(review_root / 'review_items.csv')}`",
     ])
     SUMMARY_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
     _write_review(review_root, all_episodes, review_rows)
