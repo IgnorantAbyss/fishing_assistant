@@ -126,6 +126,7 @@ class DiagnosticEvidenceRecorder:
         )
         self._evidence_records = 0
         self._finalized = False
+        self._disabled_reason: str | None = None
 
         self.root.mkdir(parents=True, exist_ok=True)
         for name in ROI_NAMES:
@@ -178,13 +179,29 @@ class DiagnosticEvidenceRecorder:
 
     def prepare_video(self, frame: np.ndarray) -> None:
         """Initialize and verify the writer during diagnostic preflight."""
+        if self._disabled_reason is not None:
+            return
         frame = validate_bgr_frame(frame)
         self._ensure_writer(frame)
+
+    def disable(self, reason: str) -> None:
+        """Stop all diagnostic disk work after the first I/O failure."""
+        if self._disabled_reason is not None:
+            return
+        self._disabled_reason = str(reason)
+        if self._writer is not None:
+            try:
+                self._writer.release()
+            except Exception:
+                pass
+            self._writer = None
 
     def record_frame(
         self, frame: np.ndarray, *, capture_frame_index: int, timestamp: float
     ) -> bool:
         """Sample one original capture frame without resizing or overlay drawing."""
+        if self._disabled_reason is not None:
+            return False
         if self._finalized:
             raise RuntimeError("Diagnostic evidence recorder is finalized")
         frame = validate_bgr_frame(frame)
@@ -237,7 +254,7 @@ class DiagnosticEvidenceRecorder:
         return True
 
     def mark_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
-        if self._finalized:
+        if self._finalized or self._disabled_reason is not None:
             return
         timestamp = float(payload.get("timestamp", self._last_capture_timestamp or 0.0))
         frame_index = int(payload.get("frame_index", 0) or 0)
@@ -292,6 +309,8 @@ class DiagnosticEvidenceRecorder:
         executed: Mapping[str, bool],
     ) -> None:
         """Save four small ROIs for every frame on which any detector ran."""
+        if self._disabled_reason is not None:
+            return
         frame = validate_bgr_frame(frame)
         roi_paths: dict[str, str] = {}
         for name in ROI_NAMES:
@@ -324,6 +343,9 @@ class DiagnosticEvidenceRecorder:
         self._evidence_records += 1
 
     def finalize(self) -> dict[str, Any]:
+        if self._disabled_reason is not None:
+            self._finalized = True
+            return self.summary()
         if self._finalized:
             return self.summary()
         for event in self._pending_events:
@@ -379,4 +401,6 @@ class DiagnosticEvidenceRecorder:
             "evidence_record_count": self._evidence_records,
             "has_evidence_gaps": bool(gaps),
             "evidence_gap_intervals": gaps,
+            "logging_disabled": self._disabled_reason is not None,
+            "logging_failure_reason": self._disabled_reason,
         }

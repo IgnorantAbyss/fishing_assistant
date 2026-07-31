@@ -2,6 +2,8 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import tarfile
 
 import numpy as np
 import pytest
@@ -87,10 +89,50 @@ def test_bundle_hash_verifies_and_tampering_is_rejected(tmp_path: Path) -> None:
     )
     altered = tmp_path / "bundle"
     shutil.copytree(BUNDLE, altered)
-    with (altered / "bundle.json").open("ab") as handle:
-        handle.write(b" ")
+    payload = json.loads((altered / "bundle.json").read_text(encoding="utf-8"))
+    payload["ambiguity_margin"] = float(payload["ambiguity_margin"]) + 0.01
+    (altered / "bundle.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     with pytest.raises(PromptBundleError, match="SHA-256"):
         load_prompt_bundle(altered)
+
+
+def test_bundle_loads_from_git_archive_and_checkout_newlines_are_irrelevant(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "bundle.tar"
+    with archive.open("wb") as handle:
+        subprocess.run(
+            [
+                "git", "archive", "--format=tar", "HEAD",
+                "artifacts/prompt_observer/prototype_v1",
+            ],
+            cwd=ROOT,
+            stdout=handle,
+            check=True,
+        )
+    extracted = tmp_path / "archive"
+    extracted.mkdir()
+    with tarfile.open(archive) as handle:
+        handle.extractall(extracted, filter="data")
+    archived_bundle = (
+        extracted / "artifacts" / "prompt_observer" / "prototype_v1"
+    )
+    load_prompt_bundle(archived_bundle)
+
+    crlf_bundle = tmp_path / "crlf_bundle"
+    shutil.copytree(archived_bundle, crlf_bundle)
+    bundle_path = crlf_bundle / "bundle.json"
+    bundle_path.write_bytes(
+        bundle_path.read_bytes().replace(b"\r\n", b"\n").replace(
+            b"\n", b"\r\n"
+        )
+    )
+    loaded = load_prompt_bundle(crlf_bundle)
+    assert loaded.bundle_sha256 == loaded.metadata["bundle_sha256"]
 
 
 def test_final_bundle_predicted_replay_is_a_clean_deployment_regression() -> None:

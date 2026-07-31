@@ -27,7 +27,10 @@ from src.fishing_v2.live.windows_action_sink import (
     parse_action_allowlist,
     process_architecture,
 )
+from src.fishing_v2.live.session_logger import LiveSessionLogger
 from src.fishing_v2.ports.action_sink import ActionExecutionContext
+from src.fishing_v2.domain.runtime_state import RuntimeState
+from src.fishing_v2.runtime.fishing_fsm import FishingFSM
 from tools.run_live_detect_only import parse_args
 
 
@@ -146,12 +149,20 @@ def _sink(
 
 
 def _press_payload(sequence: tuple[str, ...], capacity: int) -> dict:
+    holds = [40 for _ in sequence]
+    gaps = [60 for _ in range(max(0, len(sequence) - 1))]
     return {
         "sequence": sequence,
         "slot_capacity": capacity,
         "active_press_episode": True,
         "panel_confirmed": True,
         "frozen_by_consensus": True,
+        "press_timing_plan": {
+            "sampled_initial_delay_ms": 350,
+            "key_hold_ms": holds,
+            "inter_key_gap_ms": gaps,
+            "planned_total_duration_ms": 350 + sum(holds) + sum(gaps),
+        },
     }
 
 
@@ -492,6 +503,54 @@ def test_press_sink_constructor_requires_explicit_opt_in() -> None:
         )
 
 
+def test_live_press_requires_complete_timing_plan_before_sendinput() -> None:
+    api = FakeWindowsApi()
+    payload = _press_payload(("W", "A"), 8)
+    payload.pop("press_timing_plan")
+
+    result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
+        ActionRequest(ActionIntent.PRESS_SEQUENCE, 0.99, "frozen", payload),
+        _context("cycle:missing-plan", intent="PRESS"),
+    )
+
+    assert result.rejection_reason == "press_timing_plan_required"
+    assert api.inspect_calls == 0
+    assert api.send_calls == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("sampled_initial_delay_ms", 299, "press_initial_delay_out_of_range"),
+        ("inter_key_gap_ms", [30, 81], "press_inter_key_gap_out_of_range"),
+        ("key_hold_ms", [40, 41, 40], "press_key_hold_out_of_range"),
+    ],
+)
+def test_live_press_rejects_timing_values_outside_configured_ranges(
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    api = FakeWindowsApi()
+    payload = _press_payload(("W", "A", "S"), 8)
+    payload["press_timing_plan"][field] = value
+    plan = payload["press_timing_plan"]
+    plan["planned_total_duration_ms"] = (
+        plan["sampled_initial_delay_ms"]
+        + sum(plan["key_hold_ms"])
+        + sum(plan["inter_key_gap_ms"])
+    )
+
+    result = _sink(api, allowlist="PRESS_SEQUENCE").apply(
+        ActionRequest(ActionIntent.PRESS_SEQUENCE, 0.99, "frozen", payload),
+        _context(f"cycle:{field}", intent="PRESS"),
+    )
+
+    assert result.rejection_reason == reason
+    assert api.inspect_calls == 0
+    assert api.send_calls == []
+
+
 def test_invalid_press_character_rejects_entire_sequence_before_input() -> None:
     api = FakeWindowsApi()
     request = ActionRequest(
@@ -700,6 +759,121 @@ def test_third_press_key_failure_stops_after_completed_prefix() -> None:
         (VIRTUAL_KEYS["S"], False),
     ]
     assert second.rejection_reason == "partial_action_not_retried"
+
+
+def test_failed_key_up_gets_one_cleanup_key_up_and_stops_sequence() -> None:
+    api = FakeWindowsApi()
+    api.send_results = [1, 0, 1]
+    sink = _sink(api, allowlist="PRESS_SEQUENCE")
+    request = ActionRequest(
+        ActionIntent.PRESS_SEQUENCE,
+        0.99,
+        "frozen",
+        _press_payload(("W", "A", "S"), 8),
+    )
+
+    first = sink.apply(
+        request,
+        _context("cycle:key-up-cleanup", intent="PRESS"),
+    )
+    second = sink.apply(
+        request,
+        _context("cycle:key-up-cleanup", intent="PRESS"),
+    )
+
+    assert first.partial_execution is True
+    assert first.applied is False
+    assert first.completed_key_count == 0
+    assert api.send_calls == [
+        (VIRTUAL_KEYS["W"], False),
+        (VIRTUAL_KEYS["W"], True),
+        (VIRTUAL_KEYS["W"], True),
+    ]
+    assert first.key_timings[0]["cleanup_key_up_attempted"] is True
+    assert first.key_timings[0]["cleanup_key_up_succeeded"] is True
+    assert second.rejection_reason == "partial_action_not_retried"
+
+
+def test_event_callback_disk_failure_does_not_change_action_result() -> None:
+    api = FakeWindowsApi()
+    callback_calls = 0
+
+    def disk_full(_event_type, _payload):
+        nonlocal callback_calls
+        callback_calls += 1
+        raise OSError("disk full")
+
+    sink = WindowsSendInputActionSink(
+        target_hwnd=4242,
+        expected_title="test-window",
+        expected_process_id=99,
+        allowlist=parse_action_allowlist("COLLECT"),
+        api=api,
+        clock=FakeClock(),
+        sleep=FakeClock().sleep,
+        event_callback=disk_full,
+    )
+    request = ActionRequest(ActionIntent.COLLECT, 0.99, "qualified GET")
+
+    first = sink.apply(request, _context("cycle:disk-full"))
+    second = sink.apply(request, _context("cycle:disk-full"))
+
+    assert first.applied is True
+    assert second.rejection_reason == "duplicate_action"
+    assert api.send_calls == [
+        (VIRTUAL_KEYS["R"], False),
+        (VIRTUAL_KEYS["R"], True),
+    ]
+    assert callback_calls == 1
+    assert sink.summary()["event_callback_disabled"] is True
+    assert "disk full" in sink.summary()["event_callback_failure_reason"]
+
+
+def test_disk_full_logger_does_not_block_press_apply_or_fsm_commit(
+    tmp_path: Path,
+) -> None:
+    logger = LiveSessionLogger(tmp_path, bundle_version="test")
+    logger.events_path = logger.path
+    api = FakeWindowsApi()
+    sink = WindowsSendInputActionSink(
+        target_hwnd=4242,
+        expected_title="test-window",
+        expected_process_id=99,
+        allowlist=parse_action_allowlist("PRESS_SEQUENCE"),
+        api=api,
+        event_callback=logger.event,
+        enable_live_press_sequence=True,
+    )
+    request = ActionRequest(
+        ActionIntent.PRESS_SEQUENCE,
+        0.99,
+        "frozen",
+        _press_payload(("W", "A"), 8),
+    )
+    fsm = FishingFSM(initial_state=RuntimeState.PRESS)
+    assert fsm.stage_external_press_sequence(request) is True
+
+    execution = sink.apply(
+        request,
+        _context("cycle:disk-full-press", intent="PRESS"),
+    )
+    commit = fsm.commit_action(request, 2.0)
+    repeated = sink.apply(
+        request,
+        _context("cycle:disk-full-press", intent="PRESS"),
+    )
+
+    assert logger.logging_disabled is True
+    assert execution.applied is True
+    assert commit.action_applied is True
+    assert commit.next_state == RuntimeState.RESULT_PENDING
+    assert repeated.rejection_reason == "duplicate_action"
+    assert api.send_calls == [
+        (VIRTUAL_KEYS["W"], False),
+        (VIRTUAL_KEYS["W"], True),
+        (VIRTUAL_KEYS["A"], False),
+        (VIRTUAL_KEYS["A"], True),
+    ]
 
 
 def test_press_focus_loss_before_third_key_stops_sequence() -> None:

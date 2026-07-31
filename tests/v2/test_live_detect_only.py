@@ -740,6 +740,54 @@ def test_diagnostic_mode_records_video_and_roi_without_would_fire(
     assert recorder.finalized is True
 
 
+def test_diagnostic_disk_failure_degrades_without_stopping_runtime(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class DiskFullEvidenceRecorder(StubEvidenceRecorder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.write_attempts = 0
+            self.disabled_reason = None
+
+        def record_frame(self, frame, *, capture_frame_index, timestamp):
+            if self.disabled_reason is not None:
+                return False
+            self.write_attempts += 1
+            raise OSError("disk full")
+
+        def disable(self, reason):
+            self.disabled_reason = reason
+
+        def finalize(self):
+            summary = super().finalize()
+            summary.update({
+                "logging_disabled": True,
+                "logging_failure_reason": self.disabled_reason,
+                "has_evidence_gaps": True,
+                "evidence_gap_intervals": [
+                    {"reason": self.disabled_reason}
+                ],
+            })
+            return summary
+
+    recorder = DiskFullEvidenceRecorder()
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        evidence_mode="diagnostic",
+        evidence_recorder=recorder,
+    )
+
+    summary = runtime.run(max_frames=3)
+
+    assert summary["result"] == "completed"
+    assert summary["captured_frames"] == 3
+    assert summary["actions_applied"] == 0
+    assert recorder.write_attempts == 1
+    assert "disk full" in recorder.disabled_reason
+
+
 def test_diagnostic_video_finalizes_after_ctrl_c(
     tmp_path: Path, supported_frame: np.ndarray
 ) -> None:

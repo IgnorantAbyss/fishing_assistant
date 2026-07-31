@@ -4,7 +4,7 @@
   "bundle_version": "prototype_v1_final_3",
   "contains_fonts": false,
   "contains_neural_network_weights": false,
-  "hash_definition": "sha256(domain_separator + bundle.json bytes + separator + prototypes.npz bytes)",
+  "hash_definition": "sha256(domain_separator + canonical_json_utf8_lf(bundle.json) + separator + prototypes.npz bytes)",
   "immutable_runtime_calibration": true,
   "prototypes_sha256": "46a8e4690e2d8b5dd009230c950c6e195f65cab0e334b2b51a61f2c737807c10"
 }

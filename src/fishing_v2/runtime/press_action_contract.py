@@ -50,10 +50,16 @@ def validate_press_timing_plan(
     payload: Mapping[str, Any],
     *,
     sequence_length: int,
+    required: bool = False,
+    initial_delay_range_ms: tuple[int, int] | None = None,
+    inter_key_gap_range_ms: tuple[int, int] | None = None,
+    required_key_hold_ms: int | None = None,
 ) -> tuple[tuple[int, ...], tuple[int, ...], int | None, int | None]:
     """Validate a pre-sampled PRESS pacing plan without transforming it."""
     plan = payload.get("press_timing_plan")
     if plan is None:
+        if required:
+            raise ValueError("press_timing_plan_required")
         return (), (), None, None
     if not isinstance(plan, Mapping):
         raise ValueError("invalid_press_timing_plan")
@@ -92,4 +98,22 @@ def validate_press_timing_plan(
         or total != initial + sum(holds) + sum(gaps)
     ):
         raise ValueError("invalid_press_timing_plan")
+    if (
+        initial_delay_range_ms is not None
+        and not initial_delay_range_ms[0]
+        <= initial
+        <= initial_delay_range_ms[1]
+    ):
+        raise ValueError("press_initial_delay_out_of_range")
+    if inter_key_gap_range_ms is not None and any(
+        not inter_key_gap_range_ms[0]
+        <= value
+        <= inter_key_gap_range_ms[1]
+        for value in gaps
+    ):
+        raise ValueError("press_inter_key_gap_out_of_range")
+    if required_key_hold_ms is not None and any(
+        value != required_key_hold_ms for value in holds
+    ):
+        raise ValueError("press_key_hold_out_of_range")
     return tuple(holds), tuple(gaps), initial, total

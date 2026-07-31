@@ -67,6 +67,7 @@ class LoadedPromptBundle:
 
 
 def _json_bytes(payload: Mapping[str, Any]) -> bytes:
+    """Canonical UTF-8 JSON: sorted keys, two-space indent and one LF."""
     return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
@@ -266,7 +267,10 @@ def build_final_prompt_bundle(
     metadata = {
         "bundle_version": BUNDLE_VERSION,
         "bundle_sha256": bundle_sha256,
-        "hash_definition": "sha256(domain_separator + bundle.json bytes + separator + prototypes.npz bytes)",
+        "hash_definition": (
+            "sha256(domain_separator + canonical_json_utf8_lf(bundle.json) "
+            "+ separator + prototypes.npz bytes)"
+        ),
         "bundle_json_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
         "prototypes_sha256": bundle["prototypes_sha256"],
         "immutable_runtime_calibration": True,
@@ -286,20 +290,29 @@ def load_prompt_bundle(path: str | Path) -> LoadedPromptBundle:
     prototype_path = root / PROTOTYPES_FILE
     metadata_path = root / METADATA_JSON
     try:
-        bundle_bytes = bundle_path.read_bytes()
+        checkout_bundle_bytes = bundle_path.read_bytes()
         prototype_bytes = prototype_path.read_bytes()
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        bundle = json.loads(bundle_bytes.decode("utf-8"))
+        bundle = json.loads(checkout_bundle_bytes.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PromptBundleError(f"Prompt bundle could not be loaded: {exc}") from exc
     if bundle.get("bundle_version") != BUNDLE_VERSION or metadata.get("bundle_version") != BUNDLE_VERSION:
         raise PromptBundleError("Unsupported Prompt bundle version")
+    bundle_bytes = _json_bytes(bundle)
+    expected_json = str(metadata.get("bundle_json_sha256", ""))
+    if (
+        not expected_json
+        or hashlib.sha256(bundle_bytes).hexdigest() != expected_json
+    ):
+        raise PromptBundleError("Prompt bundle JSON SHA-256 verification failed")
     expected = str(metadata.get("bundle_sha256", ""))
     actual = _bundle_digest(bundle_bytes, prototype_bytes)
     if not expected or actual != expected:
         raise PromptBundleError("Prompt bundle SHA-256 verification failed")
     if hashlib.sha256(prototype_bytes).hexdigest() != bundle.get("prototypes_sha256"):
         raise PromptBundleError("Prompt prototype file SHA-256 verification failed")
+    if metadata.get("prototypes_sha256") != bundle.get("prototypes_sha256"):
+        raise PromptBundleError("Prompt prototype metadata SHA-256 mismatch")
     try:
         stored = np.load(prototype_path, allow_pickle=False)
         vectors = stored["features"].astype(np.float32, copy=False)

@@ -804,8 +804,23 @@ class LiveDetectOnlyRuntime:
                 f"Action sink requires a {EXPECTED_RESOLUTION[0]}x{EXPECTED_RESOLUTION[1]} client"
             )
         try:
+            action_values = {
+                **dict(self._raw_config.get("action") or {}),
+                "press_initial_delay_min_ms": (
+                    self.live_config.press_initial_delay_min_ms
+                ),
+                "press_initial_delay_max_ms": (
+                    self.live_config.press_initial_delay_max_ms
+                ),
+                "press_inter_key_gap_min_ms": (
+                    self.live_config.press_inter_key_gap_min_ms
+                ),
+                "press_inter_key_gap_max_ms": (
+                    self.live_config.press_inter_key_gap_max_ms
+                ),
+            }
             action_config = WindowsActionConfig.from_mapping(
-                self._raw_config.get("action"), panic_key=self.panic_key
+                action_values, panic_key=self.panic_key
             )
             self.action_sink = self.action_sink_factory(
                 target_hwnd=hwnd,
@@ -896,9 +911,19 @@ class LiveDetectOnlyRuntime:
                 try:
                     prepare_video(frame)
                 except Exception as exc:
-                    raise LivePreflightError(
-                        f"Diagnostic video preflight failed: {type(exc).__name__}: {exc}"
-                    ) from exc
+                    reason = (
+                        "video_preflight: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    disable = getattr(
+                        self.evidence_recorder, "disable", None
+                    )
+                    if callable(disable):
+                        disable(reason)
+                    self.logger.event(
+                        "diagnostic_evidence_failure",
+                        {"timestamp": 0.0, "frame_index": 0, "reason": reason},
+                    )
         expected_count = int(self.prompt_bundle.bundle.get("prototype_count", 0))
         if len(self.prompt_bundle.model.prototypes) != expected_count or expected_count not in {36, 37}:
             raise LivePreflightError("Final Prompt bundle must contain 35 medoids plus reviewed Live candidates")
@@ -1473,14 +1498,17 @@ class LiveDetectOnlyRuntime:
                             frame, capture_frame_index=captured, timestamp=elapsed
                         )
                     except Exception as exc:
-                        result_name = "safe_stop_evidence_failure"
                         evidence_failure_reason = f"video: {type(exc).__name__}: {exc}"
+                        disable = getattr(
+                            self.evidence_recorder, "disable", None
+                        )
+                        if callable(disable):
+                            disable(evidence_failure_reason)
                         self.logger.event("diagnostic_evidence_failure", {
                             "timestamp": elapsed,
                             "frame_index": captured,
                             "reason": evidence_failure_reason,
                         })
-                        break
                 prompt_due = (
                     not hook_critical_mode
                     and elapsed >= next_prompt_due
@@ -2369,10 +2397,14 @@ class LiveDetectOnlyRuntime:
                             )
                             deferred_video_recorded = True
                         except Exception as exc:
-                            result_name = "safe_stop_evidence_failure"
                             evidence_failure_reason = (
                                 f"video: {type(exc).__name__}: {exc}"
                             )
+                            disable = getattr(
+                                self.evidence_recorder, "disable", None
+                            )
+                            if callable(disable):
+                                disable(evidence_failure_reason)
                             self.logger.event(
                                 "diagnostic_evidence_failure",
                                 {
@@ -2381,7 +2413,6 @@ class LiveDetectOnlyRuntime:
                                     "reason": evidence_failure_reason,
                                 },
                             )
-                            break
                     collect_retry_enabled = bool(
                         self.action_sink is not None
                         and ActionIntent.COLLECT in self.action_allowlist
@@ -2638,14 +2669,17 @@ class LiveDetectOnlyRuntime:
                                 executed=executed,
                             )
                         except Exception as exc:
-                            result_name = "safe_stop_evidence_failure"
                             evidence_failure_reason = f"roi: {type(exc).__name__}: {exc}"
+                            disable = getattr(
+                                self.evidence_recorder, "disable", None
+                            )
+                            if callable(disable):
+                                disable(evidence_failure_reason)
                             self.logger.event("diagnostic_evidence_failure", {
                                 "timestamp": elapsed,
                                 "frame_index": captured,
                                 "reason": evidence_failure_reason,
                             })
-                            break
 
                     if prompt and prompt.kind.value != last_prompt_kind:
                         self.logger.event("prompt_label_change", {
@@ -3403,10 +3437,14 @@ class LiveDetectOnlyRuntime:
                             timestamp=elapsed,
                         )
                     except Exception as exc:
-                        result_name = "safe_stop_evidence_failure"
                         evidence_failure_reason = (
                             f"video: {type(exc).__name__}: {exc}"
                         )
+                        disable = getattr(
+                            self.evidence_recorder, "disable", None
+                        )
+                        if callable(disable):
+                            disable(evidence_failure_reason)
                         self.logger.event(
                             "diagnostic_evidence_failure",
                             {
@@ -3415,7 +3453,6 @@ class LiveDetectOnlyRuntime:
                                 "reason": evidence_failure_reason,
                             },
                         )
-                        break
                 capture_fps = captured / max(1e-9, self.clock() - started)
                 latency_ms = latencies[-1] if latencies else 0.0
                 if not hook_critical_mode:
@@ -3564,7 +3601,6 @@ class LiveDetectOnlyRuntime:
                 try:
                     evidence_summary = self.evidence_recorder.finalize()
                 except Exception as exc:
-                    result_name = "safe_stop_evidence_finalize_failure"
                     self.logger.event("diagnostic_evidence_failure", {
                         "timestamp": elapsed_total,
                         "frame_index": captured,

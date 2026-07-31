@@ -48,8 +48,34 @@ class LiveSessionLogger:
         self._cycles: dict[int, dict[str, Any]] = {}
         self._warnings: list[str] = []
         self._event_listener: Callable[[str, Mapping[str, Any]], None] | None = None
-        with self.transitions_path.open("w", encoding="utf-8", newline="") as handle:
-            csv.DictWriter(handle, fieldnames=TRANSITION_FIELDS).writeheader()
+        self._logging_disabled = False
+        self._logging_failure_reason: str | None = None
+        try:
+            with self.transitions_path.open(
+                "w", encoding="utf-8", newline=""
+            ) as handle:
+                csv.DictWriter(
+                    handle, fieldnames=TRANSITION_FIELDS
+                ).writeheader()
+        except OSError as exc:
+            self._disable_logging("transitions_header", exc)
+
+    @property
+    def logging_disabled(self) -> bool:
+        return self._logging_disabled
+
+    @property
+    def logging_failure_reason(self) -> str | None:
+        return self._logging_failure_reason
+
+    def _disable_logging(self, operation: str, exc: BaseException) -> None:
+        if self._logging_disabled:
+            return
+        self._logging_disabled = True
+        self._logging_failure_reason = (
+            f"{operation}: {type(exc).__name__}: {exc}"
+        )
+        self._warnings.append(self._logging_failure_reason)
 
     def set_event_listener(
         self, listener: Callable[[str, Mapping[str, Any]], None] | None
@@ -57,25 +83,43 @@ class LiveSessionLogger:
         self._event_listener = listener
 
     def save_screenshot(self, frame: Any, frame_index: int, event_type: str) -> str:
+        if self._logging_disabled:
+            return ""
         safe_type = "".join(char.lower() if char.isalnum() else "_" for char in event_type)
         relative = Path("screenshots") / f"{frame_index:06d}_{safe_type}.jpg"
         destination = self.path / relative
-        if not cv2.imwrite(str(destination), frame, [cv2.IMWRITE_JPEG_QUALITY, 86]):
-            raise OSError(f"Could not save live diagnostic screenshot: {destination}")
+        try:
+            if not cv2.imwrite(
+                str(destination), frame, [cv2.IMWRITE_JPEG_QUALITY, 86]
+            ):
+                raise OSError(
+                    f"Could not save live diagnostic screenshot: {destination}"
+                )
+        except OSError as exc:
+            self._disable_logging("screenshot", exc)
+            return ""
         return relative.as_posix()
 
     def event(self, event_type: str, payload: Mapping[str, Any]) -> None:
         row = {"event_type": event_type, "bundle_version": self.bundle_version, **dict(payload)}
-        with self.events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         self._event_counts[event_type] += 1
-        if self._event_listener is not None:
-            self._event_listener(event_type, payload)
         if event_type in {
             "preflight_failure", "preflight_failed", "capture_failure", "capture_backend_fallback",
             "capture_backend_warning", "SYNC_REQUIRED", "detector_conflict",
         }:
             self._warnings.append(str(payload.get("reason", event_type)))
+        if self._logging_disabled:
+            return
+        try:
+            with self.events_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True)
+                    + "\n"
+                )
+            if self._event_listener is not None:
+                self._event_listener(event_type, payload)
+        except (OSError, RuntimeError) as exc:
+            self._disable_logging("event", exc)
 
     def transition(
         self,
@@ -87,16 +131,24 @@ class LiveSessionLogger:
         reason: str,
         screenshot_reference: str | None,
     ) -> None:
-        with self.transitions_path.open("a", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=TRANSITION_FIELDS)
-            writer.writerow({
-                "timestamp": timestamp,
-                "frame_index": frame_index,
-                "previous_state": previous_state,
-                "next_state": next_state,
-                "reason": reason,
-                "screenshot_reference": screenshot_reference or "",
-            })
+        if not self._logging_disabled:
+            try:
+                with self.transitions_path.open(
+                    "a", encoding="utf-8", newline=""
+                ) as handle:
+                    writer = csv.DictWriter(
+                        handle, fieldnames=TRANSITION_FIELDS
+                    )
+                    writer.writerow({
+                        "timestamp": timestamp,
+                        "frame_index": frame_index,
+                        "previous_state": previous_state,
+                        "next_state": next_state,
+                        "reason": reason,
+                        "screenshot_reference": screenshot_reference or "",
+                    })
+            except OSError as exc:
+                self._disable_logging("transition", exc)
         self.event("runtime_transition", {
             "timestamp": timestamp,
             "frame_index": frame_index,
@@ -134,10 +186,6 @@ class LiveSessionLogger:
 
     def finalize(self, summary: Mapping[str, Any]) -> None:
         cycles = [self._cycles[index] for index in sorted(self._cycles)]
-        with self.review_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=REVIEW_FIELDS)
-            writer.writeheader()
-            writer.writerows(cycles)
         complete = {
             **dict(summary),
             "bundle_version": self.bundle_version,
@@ -148,10 +196,25 @@ class LiveSessionLogger:
             "events_path": str(self.events_path),
             "transitions_path": str(self.transitions_path),
             "review_items_path": str(self.review_path),
+            "logging_disabled": self._logging_disabled,
+            "logging_failure_reason": self._logging_failure_reason,
         }
-        (self.path / "session_summary.json").write_text(
-            json.dumps(complete, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
+        if not self._logging_disabled:
+            try:
+                with self.review_path.open(
+                    "w", encoding="utf-8", newline=""
+                ) as handle:
+                    writer = csv.DictWriter(
+                        handle, fieldnames=REVIEW_FIELDS
+                    )
+                    writer.writeheader()
+                    writer.writerows(cycles)
+                (self.path / "session_summary.json").write_text(
+                    json.dumps(complete, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                self._disable_logging("finalize", exc)
         lines = [
             "# Live Detect-Only Session",
             "",
@@ -221,4 +284,10 @@ class LiveSessionLogger:
             )
         if not cycles:
             lines.append("| - | - | - | - | - | - | no completed cycle evidence |")
-        (self.path / "session_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if not self._logging_disabled:
+            try:
+                (self.path / "session_summary.md").write_text(
+                    "\n".join(lines) + "\n", encoding="utf-8"
+                )
+            except OSError as exc:
+                self._disable_logging("summary_markdown", exc)

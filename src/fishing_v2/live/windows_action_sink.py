@@ -63,6 +63,10 @@ class WindowsActionConfig:
     input_mode: str = "vk"
     key_hold_ms: int = 40
     sequence_interval_ms: int = 60
+    press_initial_delay_min_ms: int = 300
+    press_initial_delay_max_ms: int = 500
+    press_inter_key_gap_min_ms: int = 30
+    press_inter_key_gap_max_ms: int = 80
     press_visual_ack_timeout_seconds: float = 3.0
     minimum_action_interval_ms: int = 150
     panic_key: str = "F12"
@@ -75,6 +79,18 @@ class WindowsActionConfig:
             raise ValueError("key_hold_ms must be positive")
         if self.sequence_interval_ms < 0:
             raise ValueError("sequence_interval_ms must be non-negative")
+        if (
+            self.press_initial_delay_min_ms < 0
+            or self.press_initial_delay_min_ms
+            > self.press_initial_delay_max_ms
+        ):
+            raise ValueError("PRESS initial delay range is invalid")
+        if (
+            self.press_inter_key_gap_min_ms < 0
+            or self.press_inter_key_gap_min_ms
+            > self.press_inter_key_gap_max_ms
+        ):
+            raise ValueError("PRESS inter-key gap range is invalid")
         if self.press_visual_ack_timeout_seconds <= 0:
             raise ValueError(
                 "press_visual_ack_timeout_seconds must be positive"
@@ -559,6 +575,8 @@ class WindowsSendInputActionSink:
         self._focus_loss_count = 0
         self._foreground_unavailable_count = 0
         self._foreground_unavailable_active = False
+        self._event_callback_disabled = False
+        self._event_callback_failure_reason: str | None = None
         integrity_reader = getattr(self.api, "process_integrity_diagnostics", None)
         if callable(integrity_reader):
             try:
@@ -635,8 +653,15 @@ class WindowsSendInputActionSink:
         return max(0.0, float(self.clock()) - self.session_started_at)
 
     def _event(self, event_type: str, payload: Mapping[str, Any]) -> None:
-        if self.event_callback is not None:
+        if self.event_callback is None or self._event_callback_disabled:
+            return
+        try:
             self.event_callback(event_type, payload)
+        except Exception as exc:
+            self._event_callback_disabled = True
+            self._event_callback_failure_reason = (
+                f"{type(exc).__name__}: {exc}"
+            )
 
     @staticmethod
     def _key_sequence(request: ActionRequest) -> tuple[str, ...]:
@@ -882,15 +907,17 @@ class WindowsSendInputActionSink:
                 ) = validate_press_timing_plan(
                     request.payload,
                     sequence_length=len(keys),
+                    required=True,
+                    initial_delay_range_ms=(
+                        self.config.press_initial_delay_min_ms,
+                        self.config.press_initial_delay_max_ms,
+                    ),
+                    inter_key_gap_range_ms=(
+                        self.config.press_inter_key_gap_min_ms,
+                        self.config.press_inter_key_gap_max_ms,
+                    ),
+                    required_key_hold_ms=self.config.key_hold_ms,
                 )
-                if not planned_holds:
-                    planned_holds = tuple(
-                        self.config.key_hold_ms for _ in keys
-                    )
-                    planned_gaps = tuple(
-                        self.config.sequence_interval_ms
-                        for _ in range(max(0, len(keys) - 1))
-                    )
             else:
                 planned_holds = tuple(
                     self.config.key_hold_ms for _ in keys
@@ -990,6 +1017,9 @@ class WindowsSendInputActionSink:
         deferred_press_events: list[
             tuple[str, dict[str, Any]]
         ] = []
+        active_key: str | None = None
+        active_timing: dict[str, Any] | None = None
+        successful_key_down = False
         try:
             for index, key in enumerate(keys):
                 if self.poll_panic(context):
@@ -1050,6 +1080,7 @@ class WindowsSendInputActionSink:
                         if index < len(planned_gaps) else None
                     ),
                 }
+                key_timings.append(timing)
                 down = self.api.send_key_event(
                     VIRTUAL_KEYS[key], key_up=False,
                     input_mode=self.config.input_mode,
@@ -1059,13 +1090,16 @@ class WindowsSendInputActionSink:
                 if down.return_count != 1:
                     timing["outcome"] = "key_down_failed"
                     timing["completed_at"] = self._timestamp()
-                    key_timings.append(timing)
                     error = (
                         f"SendInput key-down returned {down.return_count}, expected 1; "
                         f"Windows error {down.windows_error_code}: "
                         f"{down.windows_error_message}"
                     )
                     break
+                successful_key_down = True
+                if request.intent == ActionIntent.PRESS_SEQUENCE:
+                    active_key = key
+                    active_timing = timing
                 self.sleep(planned_holds[index] / 1000.0)
                 up = self.api.send_key_event(
                     VIRTUAL_KEYS[key], key_up=True,
@@ -1076,17 +1110,18 @@ class WindowsSendInputActionSink:
                 if up.return_count != 1:
                     timing["outcome"] = "key_up_failed"
                     timing["completed_at"] = self._timestamp()
-                    key_timings.append(timing)
                     error = (
                         f"SendInput key-up returned {up.return_count}, expected 1; "
                         f"Windows error {up.windows_error_code}: "
                         f"{up.windows_error_message}"
                     )
                     break
+                if request.intent == ActionIntent.PRESS_SEQUENCE:
+                    active_key = None
+                    active_timing = None
                 completed_key_count += 1
                 timing["completed_at"] = self._timestamp()
                 timing["outcome"] = "completed"
-                key_timings.append(timing)
                 if index + 1 < len(keys):
                     if self.poll_panic(context):
                         error = "panic_triggered_during_sequence"
@@ -1094,8 +1129,48 @@ class WindowsSendInputActionSink:
                     self.sleep(planned_gaps[index] / 1000.0)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
+        finally:
+            if active_key is not None:
+                cleanup_started_at = self._timestamp()
+                try:
+                    cleanup = self.api.send_key_event(
+                        VIRTUAL_KEYS[active_key],
+                        key_up=True,
+                        input_mode=self.config.input_mode,
+                    )
+                    calls.append(cleanup)
+                    emitted += max(0, cleanup.return_count)
+                    cleanup_succeeded = cleanup.return_count == 1
+                    cleanup_error = (
+                        None
+                        if cleanup_succeeded
+                        else (
+                            "SendInput cleanup key-up returned "
+                            f"{cleanup.return_count}, expected 1; Windows error "
+                            f"{cleanup.windows_error_code}: "
+                            f"{cleanup.windows_error_message}"
+                        )
+                    )
+                except Exception as exc:
+                    cleanup_succeeded = False
+                    cleanup_error = f"{type(exc).__name__}: {exc}"
+                if active_timing is not None:
+                    active_timing.update({
+                        "cleanup_key_up_attempted": True,
+                        "cleanup_key_up_started_at": cleanup_started_at,
+                        "cleanup_key_up_completed_at": self._timestamp(),
+                        "cleanup_key_up_succeeded": cleanup_succeeded,
+                        "cleanup_key_up_error": cleanup_error,
+                        "outcome": (
+                            "key_up_failed_cleanup_succeeded"
+                            if cleanup_succeeded
+                            else "key_up_failed_cleanup_failed"
+                        ),
+                    })
         applied = emitted == expected and error is None
-        partial = 0 < emitted < expected
+        partial = bool(
+            not applied and (emitted > 0 or successful_key_down)
+        )
         result = self._result(
             request, context, started_at=started_at, emitted=emitted,
             expected=expected, foreground_hwnd=snapshot.foreground_hwnd,
@@ -1168,4 +1243,8 @@ class WindowsSendInputActionSink:
             "input_struct_size": ctypes.sizeof(_INPUT),
             "process_architecture": process_architecture(),
             "integrity_diagnostics": self._integrity_diagnostics,
+            "event_callback_disabled": self._event_callback_disabled,
+            "event_callback_failure_reason": (
+                self._event_callback_failure_reason
+            ),
         }
