@@ -59,6 +59,19 @@ class PressTimingPlan:
             "planned_total_duration_ms": self.planned_total_duration_ms,
         }
 
+    def console_schedule(self, sequence: tuple[str, ...]) -> str:
+        """Render the complete immutable plan sampled before emission."""
+        holds = ",".join(str(value) for value in self.key_hold_ms)
+        gaps = ",".join(str(value) for value in self.inter_key_gap_ms)
+        return (
+            "PRESS scheduled: "
+            f"sequence={''.join(sequence)} "
+            f"initial_delay_ms={self.sampled_initial_delay_ms} "
+            f"hold_ms=[{holds}] "
+            f"gap_ms=[{gaps}] "
+            f"planned_total_duration_ms={self.planned_total_duration_ms}"
+        )
+
 
 @dataclass(frozen=True)
 class ScheduledPressEmission:

@@ -1331,6 +1331,11 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
     }
     console = capsys.readouterr().out
     assert "PRESS frozen: W W A D" in console
+    assert "PRESS scheduled: sequence=WWAD" in console
+    assert "initial_delay_ms=40" in console
+    assert "hold_ms=[40,40,40,40]" in console
+    assert "gap_ms=[" in console
+    assert "planned_total_duration_ms=" in console
     assert "PRESS emitting: W W A D" in console
     assert "PRESS completed" in console
 

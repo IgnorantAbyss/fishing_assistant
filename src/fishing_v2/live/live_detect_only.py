@@ -1864,8 +1864,9 @@ class LiveDetectOnlyRuntime:
                                 f"PRESS frozen: {sequence_text}"
                             )
                             self.console.emit(
-                                "PRESS scheduled: "
-                                f"delay={scheduled.timing.sampled_initial_delay_ms}ms"
+                                scheduled.timing.console_schedule(
+                                    scheduled.sequence
+                                )
                             )
                         for press_event in schedule_events:
                             self.logger.event(press_event.event_type, {

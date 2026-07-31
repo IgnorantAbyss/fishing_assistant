@@ -109,6 +109,82 @@ def test_press_schedule_samples_bounded_reproducible_pacing() -> None:
     )
 
 
+class ScriptedTimingRng:
+    def __init__(self, values: list[int]) -> None:
+        self.values = iter(values)
+        self.calls: list[tuple[int, int]] = []
+
+    def randint(self, lower: int, upper: int) -> int:
+        self.calls.append((lower, upper))
+        value = next(self.values)
+        assert lower <= value <= upper
+        return value
+
+
+def test_each_press_key_gap_is_sampled_independently_and_plan_is_frozen() -> None:
+    rng = ScriptedTimingRng([437, 31, 55, 79])
+    tracker = PressLiveEmissionTracker(
+        PressLiveEmissionConfig(),
+        rng=rng,
+    )
+
+    scheduled, events = tracker.schedule(
+        episode_index=8,
+        timestamp=10.0,
+        sequence=tuple("WASD"),
+        slot_capacity=8,
+    )
+
+    assert scheduled is not None
+    assert rng.calls == [
+        (300, 500),
+        (30, 80),
+        (30, 80),
+        (30, 80),
+    ]
+    assert scheduled.timing.sampled_initial_delay_ms == 437
+    assert scheduled.timing.key_hold_ms == (40, 40, 40, 40)
+    assert scheduled.timing.inter_key_gap_ms == (31, 55, 79)
+    assert scheduled.timing.planned_total_duration_ms == 762
+    assert events[0].payload["inter_key_gap_ms"] == [31, 55, 79]
+    assert scheduled.timing.console_schedule(tuple("WASD")) == (
+        "PRESS scheduled: sequence=WASD initial_delay_ms=437 "
+        "hold_ms=[40,40,40,40] gap_ms=[31,55,79] "
+        "planned_total_duration_ms=762"
+    )
+
+    frozen_plan = scheduled.timing
+    started, _ = tracker.begin_scheduled_attempt(timestamp=10.437)
+    assert started is not None
+    assert started.timing is frozen_plan
+    assert rng.calls == [
+        (300, 500),
+        (30, 80),
+        (30, 80),
+        (30, 80),
+    ]
+
+
+def test_equal_press_timing_bounds_produce_fixed_values() -> None:
+    tracker = PressLiveEmissionTracker(PressLiveEmissionConfig(
+        initial_delay_min_ms=350,
+        initial_delay_max_ms=350,
+        inter_key_gap_min_ms=45,
+        inter_key_gap_max_ms=45,
+    ))
+
+    scheduled, _ = tracker.schedule(
+        episode_index=9,
+        timestamp=1.0,
+        sequence=tuple("WASD"),
+        slot_capacity=8,
+    )
+
+    assert scheduled is not None
+    assert scheduled.timing.sampled_initial_delay_ms == 350
+    assert scheduled.timing.inter_key_gap_ms == (45, 45, 45)
+
+
 def test_press_schedule_is_nonblocking_and_cancelled_episode_is_not_retried() -> None:
     tracker = PressLiveEmissionTracker(
         PressLiveEmissionConfig(
