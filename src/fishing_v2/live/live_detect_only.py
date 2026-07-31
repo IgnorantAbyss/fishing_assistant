@@ -66,7 +66,6 @@ from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionTracker,
     PressTimingRng,
     pending_press_cancellation_reason,
-    press_deadline_observation_decision,
 )
 from src.fishing_v2.live.windows_action_sink import (
     ACTION_SINK_NONE,
@@ -181,17 +180,11 @@ class WouldFireDeduplicator:
         self.raw_proposals: Counter[str] = Counter()
         self.unique_events: Counter[str] = Counter()
         self._seen: set[tuple[int, ActionIntent, str | None]] = set()
-        self._reserved: set[
-            tuple[int, ActionIntent, str | None]
-        ] = set()
         self._recovered_cycles: set[int] = set()
 
     @property
     def has_cycle_activity(self) -> bool:
-        return any(
-            cycle == self.cycle_id
-            for cycle, _, _ in self._seen | self._reserved
-        )
+        return any(cycle == self.cycle_id for cycle, _, _ in self._seen)
 
     def finish_cycle(self) -> None:
         if self.has_cycle_activity or self.cycle_id in self._recovered_cycles:
@@ -209,7 +202,6 @@ class WouldFireDeduplicator:
         if self.has_cycle_activity or self.cycle_id in self._recovered_cycles:
             self.cycle_id += 1
         self._seen.clear()
-        self._reserved.clear()
 
     def opportunity_id(
         self,
@@ -226,24 +218,6 @@ class WouldFireDeduplicator:
     ) -> bool:
         return (self.cycle_id, intent, identity_suffix) in self._seen
 
-    def mark_emission_started(
-        self,
-        intent: ActionIntent,
-        identity_suffix: str | None = None,
-    ) -> None:
-        key = (self.cycle_id, intent, identity_suffix)
-        self._reserved.discard(key)
-        self._seen.add(key)
-
-    def release_reservation(
-        self,
-        intent: ActionIntent,
-        identity_suffix: str | None = None,
-    ) -> None:
-        self._reserved.discard(
-            (self.cycle_id, intent, identity_suffix)
-        )
-
     def observe(
         self,
         request: ActionRequest,
@@ -256,7 +230,6 @@ class WouldFireDeduplicator:
         specialized_evidence: Mapping[str, Any],
         identity_suffix: str | None = None,
         count_raw: bool = True,
-        reserve_only: bool = False,
     ) -> dict[str, Any] | None:
         if request.intent == ActionIntent.NONE:
             return None
@@ -267,12 +240,9 @@ class WouldFireDeduplicator:
         if safety_reason != "action_emission_disabled":
             return None
         key = (self.cycle_id, request.intent, identity_suffix)
-        if key in self._seen or key in self._reserved:
+        if key in self._seen:
             return None
-        if reserve_only:
-            self._reserved.add(key)
-        else:
-            self._seen.add(key)
+        self._seen.add(key)
         event_type = WOULD_FIRE_NAMES[request.intent]
         self.unique_events[event_type] += 1
         deduplication_key = self.opportunity_id(
@@ -519,25 +489,12 @@ class LiveDetectOnlyRuntime:
         self._opened = False
         self._capture_diagnostics: dict[str, Any] = {}
         self.evidence_recorder = evidence_recorder
-        self._evidence_initialization_failure_reason: str | None = None
         if self.live_config.evidence_mode == "diagnostic":
-            if self.evidence_recorder is None:
-                try:
-                    self.evidence_recorder = DiagnosticEvidenceRecorder(
-                        self.logger.path,
-                        config=DiagnosticEvidenceConfig(
-                            video_fps=self.live_config.evidence_video_fps
-                        ),
-                    )
-                except OSError as exc:
-                    self._evidence_initialization_failure_reason = (
-                        "initialization: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-            if self.evidence_recorder is not None:
-                self.logger.set_event_listener(
-                    self.evidence_recorder.mark_event
-                )
+            self.evidence_recorder = self.evidence_recorder or DiagnosticEvidenceRecorder(
+                self.logger.path,
+                config=DiagnosticEvidenceConfig(video_fps=self.live_config.evidence_video_fps),
+            )
+            self.logger.set_event_listener(self.evidence_recorder.mark_event)
         elif self.evidence_recorder is not None:
             raise ValueError("evidence_recorder requires evidence_mode='diagnostic'")
         self._diagnostic_roi_bounds: dict[str, tuple[int, int, int, int]] = {}
@@ -1308,29 +1265,17 @@ class LiveDetectOnlyRuntime:
             / "diagnostic_evidence"
             / "hook_decision_trace.jsonl"
         )
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as handle:
-                for row in rows:
-                    handle.write(
-                        json.dumps(
-                            row,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                        )
-                        + "\n"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(
+                    json.dumps(
+                        row,
+                        ensure_ascii=False,
+                        sort_keys=True,
                     )
-        except OSError as exc:
-            failure = f"hook_trace: {type(exc).__name__}: {exc}"
-            disable = getattr(self.evidence_recorder, "disable", None)
-            if callable(disable):
-                disable(failure)
-            self.logger.event("diagnostic_evidence_failure", {
-                "timestamp": 0.0,
-                "frame_index": 0,
-                "reason": failure,
-            })
-            return
+                    + "\n"
+                )
         self._hook_decision_trace_path = path
         self._hook_decision_trace_rows_written += len(rows)
 
@@ -1367,9 +1312,7 @@ class LiveDetectOnlyRuntime:
         evidence_episode_id = 1
         stop_after_completed_cycle = False
         stop_after_action_commit_failure = False
-        evidence_failure_reason = (
-            self._evidence_initialization_failure_reason
-        )
+        evidence_failure_reason: str | None = None
         latencies: list[float] = []
         detector_runs: Counter[str] = Counter()
         result_name = "completed"
@@ -2010,18 +1953,23 @@ class LiveDetectOnlyRuntime:
                         and self._press_live_emission.due(elapsed)
                         and press is not None
                     ):
-                        deadline_decision = (
-                            press_deadline_observation_decision(
-                                pending_press,
-                                qualified_press_for_shadow,
-                            )
+                        current_sequence = tuple(
+                            qualified_press_for_shadow.sequence
+                            if (
+                                qualified_press_for_shadow is not None
+                                and qualified_press_for_shadow.sequence_ready
+                            ) else ()
                         )
-                        if deadline_decision == "frozen_sequence_changed":
-                            pending_cancel_reason = "frozen_sequence_changed"
                         if (
-                            pending_cancel_reason is None
-                            and deadline_decision == "ready_to_emit"
+                            qualified_press_for_shadow is None
+                            or not qualified_press_for_shadow.detected
                         ):
+                            pending_cancel_reason = (
+                                "press_panel_not_confirmed_at_deadline"
+                            )
+                        elif current_sequence != pending_press.sequence:
+                            pending_cancel_reason = "frozen_sequence_changed"
+                        if pending_cancel_reason is None:
                             press_shadow_request = ActionRequest(
                                 ActionIntent.PRESS_SEQUENCE,
                                 qualified_press_for_shadow.confidence,
@@ -2379,7 +2327,6 @@ class LiveDetectOnlyRuntime:
                                     prompt_evidence=None,
                                     specialized_evidence={},
                                     count_raw=False,
-                                    reserve_only=True,
                                 )
                             )
                             if hook_fast_would_fire is None:
@@ -2418,20 +2365,6 @@ class LiveDetectOnlyRuntime:
                                     ),
                                 ),
                             )
-                            if hook_fast_execution.started_at is not None:
-                                self.deduplicator.mark_emission_started(
-                                    ActionIntent.HOOK_ACTION
-                                )
-                                self.controller.mark_external_hook_emission_started(
-                                    request
-                                )
-                            else:
-                                self.deduplicator.release_reservation(
-                                    ActionIntent.HOOK_ACTION
-                                )
-                                self.controller.release_external_hook_proposal_for_retry(
-                                    request
-                                )
                             if hook_fast_execution.applied:
                                 self.console.emit("HOOK_ACTION applied")
                                 actions_applied += 1
@@ -3042,9 +2975,6 @@ class LiveDetectOnlyRuntime:
                                         "action_applied": False,
                                     },
                                 )
-                            self.controller.release_external_hook_proposal_for_retry(
-                                request
-                            )
                     elif request.intent == ActionIntent.PRESS_SEQUENCE:
                         # The verified shadow proposal owns guarded Live
                         # dispatch. Never send the earlier raw FSM proposal.
@@ -3645,43 +3575,9 @@ class LiveDetectOnlyRuntime:
                 )
                 if press_future is None:
                     self._press_shadow.finish_session()
-                try:
-                    hook_roi_clip_summary = hook_future.result()
-                except Exception as exc:
-                    hook_roi_clip_summary = {
-                        "hook_roi_clip_path": None,
-                        "hook_roi_frames_path": None,
-                        "hook_roi_clip_frame_count": 0,
-                        "hook_roi_clip_fps": 0.0,
-                        "hook_roi_clip_error": (
-                            f"{type(exc).__name__}: {exc}"
-                        ),
-                    }
-                    self.logger.event(
-                        "diagnostic_evidence_failure",
-                        {
-                            "timestamp": elapsed_total,
-                            "frame_index": captured,
-                            "reason": "hook_roi_clip: "
-                            f"{type(exc).__name__}: {exc}",
-                        },
-                    )
+                hook_roi_clip_summary = hook_future.result()
                 if press_future is not None:
-                    try:
-                        press_shadow_summary = press_future.result()
-                    except Exception as exc:
-                        press_shadow_summary["press_artifact_error"] = (
-                            f"{type(exc).__name__}: {exc}"
-                        )
-                        self.logger.event(
-                            "diagnostic_evidence_failure",
-                            {
-                                "timestamp": elapsed_total,
-                                "frame_index": captured,
-                                "reason": "press_artifacts: "
-                                f"{type(exc).__name__}: {exc}",
-                            },
-                        )
+                    press_shadow_summary = press_future.result()
             evidence_summary: dict[str, Any] = {
                 "evidence_mode": "minimal",
                 "video_path": None,

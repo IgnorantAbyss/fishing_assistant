@@ -192,42 +192,6 @@ def test_frame_535_explicit_geometry_satisfies_hook_safety_confidence() -> None:
     assert result.action_applied is False
 
 
-def test_hook_safety_block_before_emission_can_retry_same_explicit_window() -> None:
-    controller = _hook_state_controller()
-    blocked = controller.process(
-        _explicit_geometry_bundle(frame=535, timestamp=26.75),
-        foreground=False,
-        runtime_environment_supported=True,
-        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
-        preserve_proposal=True,
-    )
-    assert blocked.fsm.action_request.intent == ActionIntent.HOOK_ACTION
-    assert blocked.safety.reason == "foreground_window_not_confirmed"
-    assert controller.fsm.hook_opportunity_lifecycle == "reserved"
-    assert controller.release_external_hook_proposal_for_retry(
-        blocked.fsm.action_request
-    ) is True
-
-    retried = controller.process(
-        _explicit_geometry_bundle(frame=536, timestamp=26.78),
-        foreground=True,
-        runtime_environment_supported=True,
-        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
-        preserve_proposal=True,
-    )
-    assert retried.fsm.action_request.intent == ActionIntent.HOOK_ACTION
-    assert retried.safety.reason == "action_emission_disabled"
-    assert controller.mark_external_hook_emission_started(
-        retried.fsm.action_request
-    ) is True
-    commit = controller.commit_external_action(
-        retried.fsm.action_request,
-        26.78,
-    )
-    assert commit.action_applied is True
-    assert commit.next_state == RuntimeState.RESULT_PENDING
-
-
 def test_incomplete_or_unsafe_explicit_geometry_never_becomes_sendable() -> None:
     unsafe_cases = (
         _explicit_geometry_bundle(endpoint=None),

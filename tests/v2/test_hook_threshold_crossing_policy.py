@@ -77,47 +77,6 @@ def test_hook_action_is_proposed_once_even_when_never_applied() -> None:
     assert second.action_request.intent == ActionIntent.NONE
 
 
-def test_hook_proposal_can_be_released_before_emission_then_consumed_once() -> None:
-    fsm = FishingFSM(
-        FSMConfig(stable_frames=1),
-        initial_state=RuntimeState.HOOK,
-    )
-    crossing = {
-        "crossing_geometry_version": 1,
-        "divider_line_detected": True,
-        "divider_line_x": 300.0,
-        "divider_confidence": 1.0,
-        "fill_endpoint_x": 320.0,
-    }
-    first = fsm.advance(
-        _evidence(),
-        0.2,
-        _bundle(1, fill_ratio=0.50, crossing=crossing),
-        recorded_observation=True,
-    )
-
-    assert first.action_request.intent == ActionIntent.HOOK_ACTION
-    assert fsm.hook_opportunity_lifecycle == "reserved"
-    assert fsm.hook_episode_active is True
-    assert fsm.release_hook_proposal_for_retry(first.action_request) is True
-    assert fsm.hook_opportunity_lifecycle == "available"
-
-    second = fsm.advance(
-        _evidence(2),
-        0.4,
-        _bundle(2, fill_ratio=0.55, crossing=crossing),
-        recorded_observation=True,
-    )
-    assert second.action_request.intent == ActionIntent.HOOK_ACTION
-    assert fsm.mark_hook_emission_started(second.action_request) is True
-    assert fsm.hook_opportunity_lifecycle == "consumed"
-    assert fsm.hook_episode_active is False
-
-    committed = fsm.commit_action(second.action_request, 0.4)
-    assert committed.action_applied is True
-    assert committed.next_state == RuntimeState.RESULT_PENDING
-
-
 def test_detected_bar_is_not_ready_without_positive_fill() -> None:
     fsm = FishingFSM(FSMConfig(stable_frames=1), initial_state=RuntimeState.HOOK)
     result = fsm.advance(

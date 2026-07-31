@@ -150,15 +150,6 @@ class RuntimeController:
                 target_hwnd=None,
             )
             execution = self.action_sink.apply(fsm_result.action_request, context)
-            if fsm_result.action_request.intent == ActionIntent.HOOK_ACTION:
-                if execution.started_at is not None:
-                    self.fsm.mark_hook_emission_started(
-                        fsm_result.action_request
-                    )
-                else:
-                    self.fsm.release_hook_proposal_for_retry(
-                        fsm_result.action_request
-                    )
             if execution.applied:
                 commit = self.fsm.commit_action(fsm_result.action_request, bundle.timestamp)
             applied = bool(execution.applied and commit.action_applied)
@@ -207,18 +198,6 @@ class RuntimeController:
 
     def discard_external_proposal(self) -> None:
         self.fsm.discard_proposal()
-
-    def release_external_hook_proposal_for_retry(
-        self,
-        request: ActionRequest,
-    ) -> bool:
-        return self.fsm.release_hook_proposal_for_retry(request)
-
-    def mark_external_hook_emission_started(
-        self,
-        request: ActionRequest,
-    ) -> bool:
-        return self.fsm.mark_hook_emission_started(request)
 
     def stage_external_press_sequence(
         self,
