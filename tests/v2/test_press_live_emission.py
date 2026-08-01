@@ -10,6 +10,7 @@ from src.fishing_v2.live.press_live_emission import (
     pending_press_cancellation_reason,
 )
 from src.fishing_v2.domain.runtime_state import RuntimeState
+from src.fishing_v2.fusion.observation_fusion import StateEvidence
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.runtime.press_action_contract import (
     validate_frozen_press_payload,
@@ -122,7 +123,7 @@ class ScriptedTimingRng:
 
 
 def test_each_press_key_gap_is_sampled_independently_and_plan_is_frozen() -> None:
-    rng = ScriptedTimingRng([437, 31, 55, 79])
+    rng = ScriptedTimingRng([437, 91, 135, 169])
     tracker = PressLiveEmissionTracker(
         PressLiveEmissionConfig(),
         rng=rng,
@@ -138,19 +139,19 @@ def test_each_press_key_gap_is_sampled_independently_and_plan_is_frozen() -> Non
     assert scheduled is not None
     assert rng.calls == [
         (300, 500),
-        (30, 80),
-        (30, 80),
-        (30, 80),
+        (90, 170),
+        (90, 170),
+        (90, 170),
     ]
     assert scheduled.timing.sampled_initial_delay_ms == 437
     assert scheduled.timing.key_hold_ms == (40, 40, 40, 40)
-    assert scheduled.timing.inter_key_gap_ms == (31, 55, 79)
-    assert scheduled.timing.planned_total_duration_ms == 762
-    assert events[0].payload["inter_key_gap_ms"] == [31, 55, 79]
+    assert scheduled.timing.inter_key_gap_ms == (91, 135, 169)
+    assert scheduled.timing.planned_total_duration_ms == 992
+    assert events[0].payload["inter_key_gap_ms"] == [91, 135, 169]
     assert scheduled.timing.console_schedule(tuple("WASD")) == (
         "PRESS scheduled: sequence=WASD initial_delay_ms=437 "
-        "hold_ms=[40,40,40,40] gap_ms=[31,55,79] "
-        "planned_total_duration_ms=762"
+        "hold_ms=[40,40,40,40] gap_ms=[91,135,169] "
+        "planned_total_duration_ms=992"
     )
 
     frozen_plan = scheduled.timing
@@ -159,9 +160,9 @@ def test_each_press_key_gap_is_sampled_independently_and_plan_is_frozen() -> Non
     assert started.timing is frozen_plan
     assert rng.calls == [
         (300, 500),
-        (30, 80),
-        (30, 80),
-        (30, 80),
+        (90, 170),
+        (90, 170),
+        (90, 170),
     ]
 
 
@@ -223,6 +224,8 @@ def test_press_schedule_is_nonblocking_and_cancelled_episode_is_not_retried() ->
     [
         ({"runtime_state": RuntimeState.RESULT_PENDING}, "runtime_left_press"),
         ({"panel_disappeared": True}, "press_panel_disappeared"),
+        ({"active_episode": False}, "press_episode_changed"),
+        ({"episode_index": 8}, "press_episode_changed"),
         ({"foreground": False}, "foreground_not_confirmed"),
         ({"panic_triggered": True}, "panic_triggered"),
     ],
@@ -248,7 +251,6 @@ def test_initial_delay_context_loss_cancels_before_any_attempt(
         "runtime_state": RuntimeState.PRESS,
         "active_episode": True,
         "episode_index": 7,
-        "frozen_sequence": tuple("WAS"),
         "panel_disappeared": False,
         "foreground": True,
         "panic_triggered": False,
@@ -260,6 +262,90 @@ def test_initial_delay_context_loss_cancels_before_any_attempt(
     ) == reason
     tracker.cancel_pending(timestamp=1.1, reason=reason)
     assert tracker.summary()["press_live_emission_attempted_count"] == 0
+
+
+def test_default_press_gap_range_is_90_to_170_per_adjacent_key() -> None:
+    tracker = PressLiveEmissionTracker(
+        rng=random.Random(20260801),
+    )
+    scheduled, _ = tracker.schedule(
+        episode_index=11,
+        timestamp=1.0,
+        sequence=tuple("WSSAA"),
+        slot_capacity=8,
+    )
+    assert scheduled is not None
+    assert len(scheduled.timing.inter_key_gap_ms) == 4
+    assert all(
+        90 <= value <= 170
+        for value in scheduled.timing.inter_key_gap_ms
+    )
+    assert scheduled.sequence == tuple("WSSAA")
+
+
+@pytest.mark.parametrize(
+    ("current_candidate", "sequence_ready"),
+    [
+        (tuple("DASWW"), True),
+        (tuple("WSSAA"), False),
+        ((), False),
+    ],
+)
+def test_frozen_press_snapshot_survives_recognition_drift_until_deadline(
+    current_candidate: tuple[str, ...],
+    sequence_ready: bool,
+) -> None:
+    frozen_evidence = StateEvidence(
+        {RuntimeState.PRESS: 0.99},
+        ("press_consensus:0.990",),
+        (),
+        RuntimeState.PRESS,
+        0.99,
+        "press_sequence_frozen",
+        10,
+        1.0,
+    )
+    tracker = PressLiveEmissionTracker(PressLiveEmissionConfig(
+        initial_delay_min_ms=400,
+        initial_delay_max_ms=400,
+    ))
+    pending, _ = tracker.schedule(
+        episode_index=12,
+        timestamp=1.0,
+        sequence=tuple("WSSAA"),
+        slot_capacity=8,
+        frozen_evidence=frozen_evidence,
+    )
+    assert pending is not None
+
+    # Post-freeze recognition is deliberately different, not-ready, or empty.
+    # It is not an input to pending eligibility.
+    post_freeze_recognition = {
+        "sequence_candidate": current_candidate,
+        "sequence_ready": sequence_ready,
+    }
+    assert post_freeze_recognition != {
+        "sequence_candidate": pending.sequence,
+        "sequence_ready": True,
+    }
+    assert pending.sequence == tuple("WSSAA")
+    assert pending_press_cancellation_reason(
+        pending,
+        runtime_state=RuntimeState.PRESS,
+        active_episode=True,
+        episode_index=12,
+        panel_disappeared=False,
+        foreground=True,
+        panic_triggered=False,
+    ) is None
+    assert tracker.due(1.399) is False
+    assert tracker.due(1.400) is True
+    started, _ = tracker.begin_scheduled_attempt(timestamp=1.400)
+    assert started is not None
+    assert started.sequence == tuple("WSSAA")
+    assert started.slot_capacity == 8
+    assert started.timing is pending.timing
+    assert started.frozen_evidence is frozen_evidence
 
 
 def test_partial_press_emission_is_terminal_and_not_waiting_for_ack() -> None:

@@ -144,8 +144,8 @@ class LiveDetectOnlyConfig:
     max_completed_cycles: int | None = None
     press_initial_delay_min_ms: int = 300
     press_initial_delay_max_ms: int = 500
-    press_inter_key_gap_min_ms: int = 30
-    press_inter_key_gap_max_ms: int = 80
+    press_inter_key_gap_min_ms: int = 90
+    press_inter_key_gap_max_ms: int = 170
 
     def __post_init__(self) -> None:
         if self.duration_seconds <= 0:
@@ -1865,6 +1865,7 @@ class LiveDetectOnlyRuntime:
                                 slot_capacity=(
                                     press_shadow_proposal.slot_capacity
                                 ),
+                                frozen_evidence=last_result.evidence,
                             )
                         )
                         if scheduled is not None:
@@ -1918,9 +1919,6 @@ class LiveDetectOnlyRuntime:
                                 runtime_state=self.fsm.state,
                                 active_episode=self._press_shadow.active,
                                 episode_index=self._press_shadow.episode_index,
-                                frozen_sequence=(
-                                    self._press_shadow.frozen_sequence
-                                ),
                                 panel_disappeared=panel_disappeared,
                                 foreground=foreground,
                                 panic_triggered=(
@@ -1951,28 +1949,15 @@ class LiveDetectOnlyRuntime:
                     if (
                         pending_press is not None
                         and self._press_live_emission.due(elapsed)
-                        and press is not None
                     ):
-                        current_sequence = tuple(
-                            qualified_press_for_shadow.sequence
-                            if (
-                                qualified_press_for_shadow is not None
-                                and qualified_press_for_shadow.sequence_ready
-                            ) else ()
-                        )
-                        if (
-                            qualified_press_for_shadow is None
-                            or not qualified_press_for_shadow.detected
-                        ):
-                            pending_cancel_reason = (
-                                "press_panel_not_confirmed_at_deadline"
-                            )
-                        elif current_sequence != pending_press.sequence:
-                            pending_cancel_reason = "frozen_sequence_changed"
                         if pending_cancel_reason is None:
+                            frozen_evidence = (
+                                pending_press.frozen_evidence
+                                or last_result.evidence
+                            )
                             press_shadow_request = ActionRequest(
                                 ActionIntent.PRESS_SEQUENCE,
-                                qualified_press_for_shadow.confidence,
+                                frozen_evidence.confidence,
                                 "press_sequence_scheduled_emission",
                                 payload={
                                     "sequence": pending_press.sequence,
@@ -1989,7 +1974,7 @@ class LiveDetectOnlyRuntime:
                             )
                             press_safety = self.controller.evaluate_external_action_safety(
                                 press_shadow_request,
-                                last_result.evidence,
+                                frozen_evidence,
                                 timestamp=elapsed,
                                 state=self.fsm.state,
                                 foreground=foreground,

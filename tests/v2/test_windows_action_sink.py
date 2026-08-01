@@ -175,8 +175,8 @@ def test_cli_defaults_to_detect_only_with_no_sink() -> None:
     assert args.enable_live_press_sequence is False
     assert args.press_initial_delay_min_ms == 300
     assert args.press_initial_delay_max_ms == 500
-    assert args.press_inter_key_gap_min_ms == 30
-    assert args.press_inter_key_gap_max_ms == 80
+    assert args.press_inter_key_gap_min_ms == 90
+    assert args.press_inter_key_gap_max_ms == 170
 
 
 def test_explicit_collect_only_cli_contract() -> None:

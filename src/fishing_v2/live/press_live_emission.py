@@ -8,6 +8,7 @@ from typing import Any, Mapping, Protocol
 
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.domain.runtime_state import RuntimeState
+from src.fishing_v2.fusion.observation_fusion import StateEvidence
 
 
 @dataclass(frozen=True)
@@ -15,8 +16,8 @@ class PressLiveEmissionConfig:
     visual_ack_timeout_seconds: float = 3.0
     initial_delay_min_ms: int = 300
     initial_delay_max_ms: int = 500
-    inter_key_gap_min_ms: int = 30
-    inter_key_gap_max_ms: int = 80
+    inter_key_gap_min_ms: int = 90
+    inter_key_gap_max_ms: int = 170
     key_hold_ms: int = 40
 
     def __post_init__(self) -> None:
@@ -81,6 +82,7 @@ class ScheduledPressEmission:
     scheduled_at: float
     deadline: float
     timing: PressTimingPlan
+    frozen_evidence: StateEvidence | None = None
 
 
 def pending_press_cancellation_reason(
@@ -89,7 +91,6 @@ def pending_press_cancellation_reason(
     runtime_state: RuntimeState,
     active_episode: bool,
     episode_index: int,
-    frozen_sequence: tuple[str, ...],
     panel_disappeared: bool,
     foreground: bool | None,
     panic_triggered: bool,
@@ -97,12 +98,10 @@ def pending_press_cancellation_reason(
     """Fail closed when a scheduled PRESS opportunity loses eligibility."""
     if runtime_state != RuntimeState.PRESS:
         return "runtime_left_press"
-    if not active_episode or episode_index != pending.episode_index:
-        return "press_episode_changed"
-    if frozen_sequence != pending.sequence:
-        return "frozen_sequence_changed"
     if panel_disappeared:
         return "press_panel_disappeared"
+    if not active_episode or episode_index != pending.episode_index:
+        return "press_episode_changed"
     if foreground is not True:
         return "foreground_not_confirmed"
     if panic_triggered:
@@ -173,6 +172,7 @@ class PressLiveEmissionTracker:
         timestamp: float,
         sequence: tuple[str, ...],
         slot_capacity: int,
+        frozen_evidence: StateEvidence | None = None,
     ) -> tuple[ScheduledPressEmission | None, tuple[PressLiveEvent, ...]]:
         if self._pending is not None:
             return None, (PressLiveEvent(
@@ -194,14 +194,17 @@ class PressLiveEmissionTracker:
                     "action_applied": False,
                 },
             ),)
-        timing = self._timing_plan(sequence)
+        frozen_sequence = tuple(sequence)
+        frozen_slot_capacity = int(slot_capacity)
+        timing = self._timing_plan(frozen_sequence)
         pending = ScheduledPressEmission(
             episode_index,
-            sequence,
-            slot_capacity,
+            frozen_sequence,
+            frozen_slot_capacity,
             float(timestamp),
             float(timestamp) + timing.sampled_initial_delay_ms / 1000.0,
             timing,
+            frozen_evidence,
         )
         self._reserved_episodes.add(episode_index)
         self._pending = pending
@@ -212,8 +215,8 @@ class PressLiveEmissionTracker:
                 "episode_index": episode_index,
                 "timestamp": timestamp,
                 "deadline": pending.deadline,
-                "sequence": list(sequence),
-                "slot_capacity": slot_capacity,
+                "sequence": list(frozen_sequence),
+                "slot_capacity": frozen_slot_capacity,
                 **timing.payload(),
                 "action_applied": False,
             },

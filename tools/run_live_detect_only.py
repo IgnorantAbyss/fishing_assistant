@@ -146,14 +146,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--press-inter-key-gap-min-ms",
         type=int,
-        default=30,
-        help="Minimum key-up to next key-down gap (default: 30)",
+        default=90,
+        help="Minimum key-up to next key-down gap (default: 90)",
     )
     parser.add_argument(
         "--press-inter-key-gap-max-ms",
         type=int,
-        default=80,
-        help="Maximum key-up to next key-down gap (default: 80)",
+        default=170,
+        help="Maximum key-up to next key-down gap (default: 170)",
     )
     parser.add_argument(
         "--panic-key", choices=("F12",), default="F12",

@@ -125,8 +125,8 @@ def _runtime(
     enable_live_press_sequence: bool = False,
     press_initial_delay_min_ms: int = 300,
     press_initial_delay_max_ms: int = 500,
-    press_inter_key_gap_min_ms: int = 30,
-    press_inter_key_gap_max_ms: int = 80,
+    press_inter_key_gap_min_ms: int = 90,
+    press_inter_key_gap_max_ms: int = 170,
 ) -> LiveDetectOnlyRuntime:
     return LiveDetectOnlyRuntime(
         config_path=CONFIG,
@@ -1386,6 +1386,144 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
     assert "planned_total_duration_ms=" in console
     assert "PRESS emitting: W W A D" in console
     assert "PRESS completed" in console
+
+
+def test_live_press_deadline_emits_original_snapshot_after_detector_drift(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class DriftingPressDetector:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.runtime = None
+
+        def observe(self, _frame, context):
+            self.calls += 1
+            sequence = "WSSAA" if self.calls <= 2 else "DASWW"
+            if self.calls == 3 and self.runtime is not None:
+                # Reproduce the Live session's post-schedule lifecycle drift.
+                self.runtime._press_shadow._frozen_sequence = tuple("DASWW")
+            boxes = [
+                {
+                    "key": key,
+                    "bbox": [100 + index * 30, 300, 125 + index * 30, 340],
+                    "confidence": 0.95,
+                    "top_candidates": [{"key": key, "confidence": 0.95}],
+                }
+                for index, key in enumerate(sequence)
+            ]
+            slots = [
+                {
+                    "occupancy": "OCCUPIED",
+                    "arrow_direction": key,
+                    "arrow_confidence": 0.95,
+                    "bbox": box["bbox"],
+                }
+                for key, box in zip(sequence, boxes, strict=True)
+            ]
+            return PressObservation(
+                True,
+                0.99,
+                context.frame_index,
+                context.timestamp,
+                sequence_candidate=tuple(sequence),
+                panel_candidate=True,
+                panel_present=True,
+                panel_qualification_reason="structural_panel_present",
+                key_box_count=len(sequence),
+                sequence_confidence=0.95,
+                evidence={
+                    "press_evidence_version": 2,
+                    "key_boxes": boxes,
+                    "slots": slots,
+                    "total_slot_count": 8,
+                    "panel_bbox": [80, 280, 500, 350],
+                    "clean_frame_eligible": True,
+                    "input_effect_detected": False,
+                    "arrow_sequence_ready": True,
+                },
+            )
+
+    class SnapshotPressSink:
+        def __init__(self, _kwargs):
+            self.requests = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.requests.append(request)
+            total = len(request.payload["sequence"])
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at + 0.01,
+                True,
+                True,
+                total * 2,
+                total * 2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+                attempted_count=total,
+                completed_key_count=total,
+                total_key_count=total,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "mock",
+                "action_allowlist": ["PRESS_SEQUENCE"],
+            }
+
+    sinks = []
+
+    def factory(**kwargs):
+        sink = SnapshotPressSink(kwargs)
+        sinks.append(sink)
+        return sink
+
+    detector = DriftingPressDetector()
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(
+            supported_frame,
+            diagnostics={
+                "hwnd": 4242,
+                "window_title": "test-window",
+                "process": "BlackDesert64",
+                "process_id": 99,
+                "client_size": [2560, 1440],
+            },
+        ),
+        FakeClock(),
+        duration_seconds=0.8,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="PRESS_SEQUENCE",
+        action_sink_factory=factory,
+        enable_live_press_sequence=True,
+        press_initial_delay_min_ms=120,
+        press_initial_delay_max_ms=120,
+    )
+    detector.runtime = runtime
+    runtime.press_detector = detector
+    runtime.fsm.force_state(RuntimeState.PRESS, 0.0, "press_snapshot_test")
+
+    summary = runtime.run(max_frames=14)
+
+    assert detector.calls >= 3
+    assert len(sinks) == 1
+    assert len(sinks[0].requests) == 1
+    request = sinks[0].requests[0]
+    assert request.intent == ActionIntent.PRESS_SEQUENCE
+    assert request.payload["sequence"] == tuple("WSSAA")
+    assert request.payload["slot_capacity"] == 8
+    assert summary["press_live_emission_cancelled_count"] == 0
+    assert summary["press_live_emission_completed_count"] == 1
+    assert summary["actions_applied"] == 1
 
 
 def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
