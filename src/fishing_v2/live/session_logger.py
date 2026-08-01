@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 import csv
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
+import threading
+import time
 from typing import Any, Callable, Mapping
 
 import cv2
@@ -22,7 +25,12 @@ TRANSITION_FIELDS = (
 )
 
 
-def create_live_session_directory(root: str | Path, *, timestamp: datetime | None = None) -> Path:
+def create_live_session_directory(
+    root: str | Path,
+    *,
+    timestamp: datetime | None = None,
+    create_screenshots: bool = True,
+) -> Path:
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     moment = timestamp or datetime.now(timezone.utc)
@@ -33,8 +41,365 @@ def create_live_session_directory(root: str | Path, *, timestamp: datetime | Non
         candidate = root / f"{stem}_{suffix:02d}"
         suffix += 1
     candidate.mkdir()
-    (candidate / "screenshots").mkdir()
+    if create_screenshots:
+        (candidate / "screenshots").mkdir()
     return candidate
+
+
+PRODUCTION_CRITICAL_EVENTS = frozenset({
+    "action_started",
+    "action_applied",
+    "action_rejected",
+    "action_partial",
+    "action_failed",
+    "press_emission_cancelled",
+    "panic_stop",
+    "integrity_failure",
+    "focus_lost",
+    "shutdown",
+    "logging_failure",
+    "capture_failure",
+})
+
+def _production_session(path: Path) -> bool:
+    if not path.is_dir() or not path.name.startswith("session_"):
+        return False
+    summary = path / "session_summary.json"
+    if summary.exists():
+        try:
+            data = json.loads(summary.read_text(encoding="utf-8"))
+            return data.get("runtime_profile") == "production"
+        except (OSError, ValueError, TypeError):
+            return False
+    return (path / "runtime.log").exists() and not (
+        path / "diagnostic_evidence"
+    ).exists()
+
+
+def cleanup_production_sessions(
+    root: str | Path,
+    *,
+    retention_days: int,
+    max_total_mb: float,
+    now: float | None = None,
+) -> list[str]:
+    """Best-effort cleanup limited to this tool's Production sessions."""
+    root_path = Path(root)
+    if not root_path.exists():
+        return []
+    warnings: list[str] = []
+    cutoff = (time.time() if now is None else float(now)) - (
+        max(0, int(retention_days)) * 86400
+    )
+    sessions = [item for item in root_path.iterdir() if _production_session(item)]
+    sessions.sort(key=lambda item: item.stat().st_mtime)
+
+    def size_bytes(path: Path) -> int:
+        try:
+            return sum(
+                item.stat().st_size for item in path.rglob("*") if item.is_file()
+            )
+        except OSError:
+            return 0
+
+    remaining: list[tuple[Path, int]] = []
+    for session in sessions:
+        try:
+            if session.stat().st_mtime < cutoff:
+                shutil.rmtree(session)
+            else:
+                remaining.append((session, size_bytes(session)))
+        except OSError as exc:
+            warnings.append(f"retention_cleanup: {session}: {exc}")
+            remaining.append((session, size_bytes(session)))
+    limit = max(0, int(float(max_total_mb) * 1024 * 1024))
+    total = sum(size for _, size in remaining)
+    for session, size in remaining:
+        if total <= limit:
+            break
+        try:
+            shutil.rmtree(session)
+            total -= size
+        except OSError as exc:
+            warnings.append(f"capacity_cleanup: {session}: {exc}")
+    return warnings
+
+
+class ProductionSessionLogger:
+    """Bounded asynchronous text-only logger for long-running Live sessions."""
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        bundle_version: str,
+        repeat_window_seconds: float = 10.0,
+        max_file_mb: float = 10.0,
+        backup_count: int = 5,
+        retention_days: int = 14,
+        max_total_mb: float = 100.0,
+        max_queue_events: int = 1024,
+    ) -> None:
+        if repeat_window_seconds < 0 or max_file_mb <= 0:
+            raise ValueError("Production log timing and size limits must be valid")
+        if backup_count < 0 or max_queue_events < 1:
+            raise ValueError("Production log counts must be non-negative")
+        self._warnings = cleanup_production_sessions(
+            root,
+            retention_days=retention_days,
+            max_total_mb=max_total_mb,
+        )
+        self.path = create_live_session_directory(
+            root, create_screenshots=False
+        )
+        self.bundle_version = bundle_version
+        self.events_path = self.path / "events.jsonl"
+        self.runtime_path = self.path / "runtime.log"
+        self.summary_path = self.path / "session_summary.json"
+        self.events_path.touch()
+        self.runtime_path.touch()
+        self._repeat_window = float(repeat_window_seconds)
+        self._max_file_bytes = max(1, int(max_file_mb * 1024 * 1024))
+        self._backup_count = int(backup_count)
+        self._max_queue_events = int(max_queue_events)
+        self._normal: deque[tuple[str, dict[str, Any]]] = deque()
+        self._critical: deque[tuple[str, dict[str, Any]]] = deque()
+        self._condition = threading.Condition()
+        self._closing = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="fishing-production-log-writer",
+            daemon=True,
+        )
+        self._event_counts: Counter[str] = Counter()
+        self._suppressed: dict[tuple[str, str, str], tuple[float, int, dict[str, Any]]] = {}
+        self._logging_disabled = False
+        self._logging_failure_reason: str | None = None
+        self._dropped_events = 0
+        self._thread.start()
+        for warning in self._warnings:
+            self.event("retention_warning", {"reason": warning})
+
+    @property
+    def logging_disabled(self) -> bool:
+        return self._logging_disabled
+
+    @property
+    def logging_failure_reason(self) -> str | None:
+        return self._logging_failure_reason
+
+    def set_event_listener(self, listener: Any) -> None:
+        # Production intentionally has no image/evidence listener.
+        if listener is not None:
+            raise ValueError("Production logger does not accept evidence listeners")
+
+    @staticmethod
+    def _is_critical(event_type: str) -> bool:
+        return event_type in PRODUCTION_CRITICAL_EVENTS or (
+            event_type.endswith((
+                "_applied", "_partial", "_failed", "_cancelled"
+            ))
+        )
+
+    @staticmethod
+    def _rate_key(event_type: str, payload: Mapping[str, Any]) -> tuple[str, str, str]:
+        return (
+            event_type,
+            str(payload.get("reason", "")),
+            str(payload.get("runtime_state", payload.get("state", ""))),
+        )
+
+    @staticmethod
+    def _text_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Strip detector/image evidence while retaining action decisions."""
+        excluded = {
+            "frame", "frame_bytes", "image", "image_bytes", "roi_pixels",
+            "prompt_evidence", "specialized_evidence", "detector_evidence",
+            "raw_detector_output", "component_candidates",
+        }
+        return {
+            key: value for key, value in payload.items()
+            if key not in excluded
+        }
+
+    def event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        self._event_counts[event_type] += 1
+        if self._logging_disabled or self._closing:
+            return
+        row = {
+            "event_type": str(event_type),
+            "bundle_version": self.bundle_version,
+            **self._text_payload(payload),
+        }
+        critical = self._is_critical(event_type)
+        try:
+            timestamp = float(payload.get("timestamp", time.monotonic()))
+        except (TypeError, ValueError):
+            timestamp = time.monotonic()
+        if not critical:
+            key = self._rate_key(event_type, payload)
+            previous = self._suppressed.get(key)
+            if previous is not None and timestamp - previous[0] < self._repeat_window:
+                self._suppressed[key] = (previous[0], previous[1] + 1, row)
+                return
+            if previous is not None and previous[1]:
+                row["suppressed_count"] = previous[1]
+            self._suppressed[key] = (timestamp, 0, row)
+        self._enqueue(event_type, row, critical=critical)
+
+    def _enqueue(self, event_type: str, row: dict[str, Any], *, critical: bool) -> None:
+        with self._condition:
+            if critical:
+                self._critical.append((event_type, row))
+            elif len(self._normal) >= self._max_queue_events:
+                self._dropped_events += 1
+                return
+            else:
+                self._normal.append((event_type, row))
+            self._condition.notify()
+
+    def transition(self, **payload: Any) -> None:
+        self.event("runtime_transition", payload)
+
+    def update_cycle(self, cycle_id: int, event_type: str, payload: Mapping[str, Any]) -> None:
+        return
+
+    def save_screenshot(self, frame: Any, frame_index: int, event_type: str) -> str:
+        # Do not copy or encode the frame in Production.
+        return ""
+
+    def _rotate_runtime(self, incoming_bytes: int) -> None:
+        try:
+            current = self.runtime_path.stat().st_size
+        except OSError:
+            current = 0
+        if current + incoming_bytes <= self._max_file_bytes:
+            return
+        if self._backup_count <= 0:
+            self.runtime_path.write_text("", encoding="utf-8")
+            return
+        oldest = self.runtime_path.with_name(
+            f"{self.runtime_path.name}.{self._backup_count}"
+        )
+        if oldest.exists():
+            oldest.unlink()
+        for index in range(self._backup_count - 1, 0, -1):
+            source = self.runtime_path.with_name(f"{self.runtime_path.name}.{index}")
+            if source.exists():
+                source.replace(self.runtime_path.with_name(
+                    f"{self.runtime_path.name}.{index + 1}"
+                ))
+        self.runtime_path.replace(self.runtime_path.with_name(
+            f"{self.runtime_path.name}.1"
+        ))
+        self.runtime_path.touch()
+
+    @staticmethod
+    def _human_line(event_type: str, row: Mapping[str, Any]) -> str:
+        try:
+            timestamp = float(row.get("timestamp", 0.0))
+        except (TypeError, ValueError):
+            timestamp = 0.0
+        if event_type == "runtime_transition":
+            detail = (
+                f"{row.get('previous_state')} -> {row.get('next_state')} "
+                f"reason={row.get('reason')}"
+            )
+        elif event_type in {
+            "press_sequence_frozen", "press_emission_scheduled"
+        }:
+            sequence = "".join(str(item) for item in row.get("sequence", ()))
+            detail = (
+                f"sequence={sequence} "
+                f"initial_delay_ms={row.get('sampled_initial_delay_ms')} "
+                f"hold_ms={row.get('key_hold_ms')} "
+                f"gap_ms={row.get('inter_key_gap_ms')}"
+            )
+        elif event_type == "hook_critical_episode_summary":
+            detail = (
+                f"episode={row.get('episode_index')} "
+                f"fps={float(row.get('hook_detector_actual_fps', 0.0)):.2f} "
+                f"p95_ms={float(row.get('hook_frame_interval_p95_ms', 0.0)):.2f} "
+                f"max_ms={float(row.get('hook_frame_interval_max_ms', 0.0)):.2f}"
+            )
+        else:
+            detail = (
+                row.get("reason")
+                or row.get("intent")
+                or row.get("next_state")
+                or row.get("terminal_outcome")
+                or ""
+            )
+        suppressed = row.get("suppressed_count")
+        suffix = f" suppressed_count={suppressed}" if suppressed else ""
+        return f"{timestamp:10.3f} {event_type} {detail}{suffix}".rstrip()
+
+    def _write(self, event_type: str, row: Mapping[str, Any]) -> None:
+        json_line = json.dumps(
+            row, ensure_ascii=False, sort_keys=True, default=str
+        ) + "\n"
+        human_line = self._human_line(event_type, row) + "\n"
+        self._rotate_runtime(len(human_line.encode("utf-8")))
+        with self.runtime_path.open("a", encoding="utf-8") as handle:
+            handle.write(human_line)
+        with self.events_path.open("a", encoding="utf-8") as handle:
+            handle.write(json_line)
+
+    def _disable_logging(self, operation: str, exc: BaseException) -> None:
+        if self._logging_disabled:
+            return
+        self._logging_disabled = True
+        self._logging_failure_reason = f"{operation}: {type(exc).__name__}: {exc}"
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while not self._critical and not self._normal and not self._closing:
+                    self._condition.wait()
+                if not self._critical and not self._normal and self._closing:
+                    return
+                event_type, row = (
+                    self._critical.popleft()
+                    if self._critical else self._normal.popleft()
+                )
+            if self._logging_disabled:
+                continue
+            try:
+                self._write(event_type, row)
+            except (OSError, RuntimeError) as exc:
+                self._disable_logging("event", exc)
+
+    def finalize(self, summary: Mapping[str, Any]) -> None:
+        self.event("shutdown", {
+            "timestamp": summary.get("duration_seconds", 0.0),
+            "reason": summary.get("shutdown_reason", summary.get("result")),
+            "runtime_state": summary.get("final_state"),
+        })
+        with self._condition:
+            self._closing = True
+            self._condition.notify_all()
+        self._thread.join(timeout=5.0)
+        complete = {
+            **dict(summary),
+            "bundle_version": self.bundle_version,
+            "session_path": str(self.path),
+            "events_path": str(self.events_path),
+            "runtime_log_path": str(self.runtime_path),
+            "event_counts": dict(self._event_counts),
+            "logging_disabled": self._logging_disabled,
+            "logging_failure_reason": self._logging_failure_reason,
+            "logging_dropped_events": self._dropped_events,
+            "warnings": list(self._warnings),
+        }
+        try:
+            self.summary_path.write_text(
+                json.dumps(
+                    complete, ensure_ascii=False, indent=2, default=str
+                ) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            self._disable_logging("summary", exc)
 
 
 class LiveSessionLogger:

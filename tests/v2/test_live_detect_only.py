@@ -29,7 +29,11 @@ from src.fishing_v2.live.live_detect_only import (
     WouldFireDeduplicator,
     validate_emit_actions,
 )
-from src.fishing_v2.live.session_logger import LiveSessionLogger, create_live_session_directory
+from src.fishing_v2.live.session_logger import (
+    LiveSessionLogger,
+    ProductionSessionLogger,
+    create_live_session_directory,
+)
 from src.fishing_v2.live.windows_action_sink import ActionIntegrityPreflightError
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle
@@ -127,12 +131,18 @@ def _runtime(
     press_initial_delay_max_ms: int = 500,
     press_inter_key_gap_min_ms: int = 90,
     press_inter_key_gap_max_ms: int = 170,
+    runtime_profile: str = "diagnostic",
+    session_logger=None,
 ) -> LiveDetectOnlyRuntime:
     return LiveDetectOnlyRuntime(
         config_path=CONFIG,
         prompt_bundle=load_prompt_bundle(BUNDLE),
         capture=capture,
-        logger=LiveSessionLogger(tmp_path, bundle_version="test-bundle"),
+        logger=(
+            session_logger
+            if session_logger is not None
+            else LiveSessionLogger(tmp_path, bundle_version="test-bundle")
+        ),
         live_config=LiveDetectOnlyConfig(
             duration_seconds=duration_seconds,
             max_fps=25.0,
@@ -143,6 +153,7 @@ def _runtime(
             press_initial_delay_max_ms=press_initial_delay_max_ms,
             press_inter_key_gap_min_ms=press_inter_key_gap_min_ms,
             press_inter_key_gap_max_ms=press_inter_key_gap_max_ms,
+            runtime_profile=runtime_profile,
         ),
         emit_actions=emit_actions,
         action_sink_name=action_sink_name,
@@ -2472,3 +2483,155 @@ def test_live_runtime_logs_startup_and_sync_required_recovery_transitions(
     )
     assert summary["actions_applied"] == 0
     assert runtime.controller.action_sink is None
+
+
+def test_production_profile_is_text_only_and_never_initializes_video_writer(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_video_writer(*_args, **_kwargs):
+        raise AssertionError("Production must not initialize cv2.VideoWriter")
+
+    monkeypatch.setattr(
+        "src.fishing_v2.live.live_detect_only.cv2.VideoWriter",
+        forbidden_video_writer,
+    )
+    logger = ProductionSessionLogger(
+        tmp_path,
+        bundle_version="test-bundle",
+    )
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        runtime_profile="production",
+        session_logger=logger,
+    )
+
+    summary = runtime.run(max_frames=2)
+
+    assert summary["runtime_profile"] == "production"
+    assert summary["visual_evidence_enabled"] is False
+    assert "video_path" not in summary
+    assert "hook_roi_clip_path" not in summary
+    assert "press_roi_clip_path" not in summary
+    assert sorted(item.name for item in logger.path.iterdir()) == [
+        "events.jsonl",
+        "runtime.log",
+        "session_summary.json",
+    ]
+    assert not (logger.path / "diagnostic_evidence").exists()
+    assert not list(logger.path.rglob("*.mp4"))
+    assert not list(logger.path.rglob("*.png"))
+    assert not list(logger.path.rglob("*.jpg"))
+    assert not list(logger.path.rglob("*_frames.csv"))
+
+
+def test_zero_runtime_limits_are_unbounded_until_an_explicit_test_stop(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    clock = FakeClock()
+    logger = ProductionSessionLogger(
+        tmp_path,
+        bundle_version="test-bundle",
+    )
+    runtime = LiveDetectOnlyRuntime(
+        config_path=CONFIG,
+        prompt_bundle=load_prompt_bundle(BUNDLE),
+        capture=MockCapture(supported_frame),
+        logger=logger,
+        live_config=LiveDetectOnlyConfig(
+            duration_seconds=0,
+            max_completed_cycles=0,
+            max_fps=25.0,
+            show_overlay=False,
+            save_transition_frames=False,
+            runtime_profile="production",
+        ),
+        hook_detector=NullHookDetector(),
+        press_detector=NullPressDetector(),
+        get_detector=NullGetDetector(),
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    summary = runtime.run(max_frames=3)
+
+    assert summary["captured_frames"] == 3
+    assert summary["result"] == "completed"
+
+
+def test_production_panic_cancels_pending_press_and_exits_without_input(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class PanicSink:
+        def __init__(self, _kwargs) -> None:
+            self.apply_calls = 0
+
+        def poll_panic(self) -> bool:
+            return True
+
+        def apply(self, _request, _context):
+            self.apply_calls += 1
+            raise AssertionError("No action may be applied after panic")
+
+        def summary(self):
+            return {
+                "attempted_action_counts": {},
+                "applied_action_counts": {},
+                "rejected_action_counts": {},
+                "partial_action_counts": {},
+                "failed_action_counts": {},
+                "os_input_emitted_counts": {},
+                "rejection_counts_by_reason": {},
+                "panic_triggered": True,
+                "focus_loss_count": 0,
+            }
+
+    clock = FakeClock()
+    logger = ProductionSessionLogger(tmp_path, bundle_version="test-bundle")
+    holder: dict[str, PanicSink] = {}
+
+    def factory(**kwargs):
+        sink = PanicSink(kwargs)
+        holder["sink"] = sink
+        return sink
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(
+            supported_frame,
+            diagnostics={
+                "hwnd": 101,
+                "window_title": "black desert test",
+                "process": "BlackDesert64",
+                "process_id": 202,
+                "client_size": [2560, 1440],
+            },
+        ),
+        clock,
+        runtime_profile="production",
+        session_logger=logger,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="CAST",
+        action_sink_factory=factory,
+    )
+    pending, _ = runtime._press_live_emission.schedule(
+        episode_index=1,
+        timestamp=0.0,
+        sequence=("W", "A"),
+        slot_capacity=2,
+    )
+    assert pending is not None
+
+    summary = runtime.run(max_frames=4)
+
+    assert summary["result"] == "panic_shutdown"
+    assert summary["shutdown_reason"] == "panic_key"
+    assert summary["panic_triggered"] is True
+    assert summary["press_live_emission_cancelled_count"] == 1
+    assert holder["sink"].apply_calls == 0

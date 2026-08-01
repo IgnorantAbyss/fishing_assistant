@@ -70,6 +70,7 @@ class PressShadowVerifier:
         stability_history_frames: int = 5,
         roi_pre_roll_seconds: float = 1.0,
         roi_post_roll_seconds: float = 0.5,
+        diagnostics_enabled: bool = True,
     ) -> None:
         if max_trace_entries_per_episode < 1:
             raise ValueError("max_trace_entries_per_episode must be positive")
@@ -81,12 +82,17 @@ class PressShadowVerifier:
             raise ValueError("PRESS ROI roll durations must be non-negative")
         self._max_trace_entries = max_trace_entries_per_episode
         self._completed_trace: deque[dict[str, Any]] = deque(
-            maxlen=max_session_trace_entries
+            maxlen=max_session_trace_entries if diagnostics_enabled else 1
         )
-        self._roi_samples: deque[_PressROISample] = deque(maxlen=max_roi_frames)
-        self._roi_pre_roll: deque[_PressROISample] = deque(maxlen=256)
+        self._roi_samples: deque[_PressROISample] | None = (
+            deque(maxlen=max_roi_frames) if diagnostics_enabled else None
+        )
+        self._roi_pre_roll: deque[_PressROISample] | None = (
+            deque(maxlen=256) if diagnostics_enabled else None
+        )
         self._roi_pre_roll_seconds = float(roi_pre_roll_seconds)
         self._roi_post_roll_seconds = float(roi_post_roll_seconds)
+        self._diagnostics_enabled = bool(diagnostics_enabled)
         self._roi_capture_episode: int | None = None
         self._roi_waiting_for_disappearance = False
         self._roi_post_roll_until: float | None = None
@@ -219,6 +225,8 @@ class PressShadowVerifier:
         return len(slots) if isinstance(slots, (list, tuple)) else 0
 
     def _append_roi_sample(self, sample: _PressROISample) -> None:
+        if self._roi_samples is None:
+            return
         if len(self._roi_samples) == self._roi_samples.maxlen:
             self._dropped_roi_frames += 1
         self._roi_samples.append(sample)
@@ -240,14 +248,15 @@ class PressShadowVerifier:
         self._roi_capture_episode = self._episode_index
         self._roi_waiting_for_disappearance = True
         self._roi_post_roll_until = None
-        for sample in self._roi_pre_roll:
-            self._append_roi_sample(_PressROISample(
-                self._episode_index,
-                sample.frame_index,
-                sample.timestamp,
-                sample.pixels,
-            ))
-        self._roi_pre_roll.clear()
+        if self._roi_pre_roll is not None:
+            for sample in self._roi_pre_roll:
+                self._append_roi_sample(_PressROISample(
+                    self._episode_index,
+                    sample.frame_index,
+                    sample.timestamp,
+                    sample.pixels,
+                ))
+            self._roi_pre_roll.clear()
 
     def capture_roi_frame(
         self,
@@ -260,7 +269,7 @@ class PressShadowVerifier:
         panel_disappeared: bool = False,
     ) -> None:
         """Retain real-timestamp pre/post-roll in memory without disk I/O."""
-        if roi_pixels is None:
+        if not self._diagnostics_enabled or roi_pixels is None:
             return
         pixels = roi_pixels.copy()
         if self._roi_capture_episode is None:
@@ -268,6 +277,7 @@ class PressShadowVerifier:
                 fsm_state == RuntimeState.RESULT_PENDING
                 and activation_mode == DetectorActivationMode.ARMED
             ):
+                assert self._roi_pre_roll is not None
                 self._roi_pre_roll.append(_PressROISample(
                     0,
                     int(frame_index),
@@ -304,11 +314,12 @@ class PressShadowVerifier:
     def _finish_episode(self, reason: str) -> None:
         if not self._active:
             return
-        for row in self._trace:
-            self._completed_trace.append({
-                **row,
-                "episode_end_reason": reason,
-            })
+        if self._diagnostics_enabled:
+            for row in self._trace:
+                self._completed_trace.append({
+                    **row,
+                    "episode_end_reason": reason,
+                })
         duration = (
             self._detector_timestamps[-1] - self._detector_timestamps[0]
             if len(self._detector_timestamps) > 1 else 0.0
@@ -448,32 +459,33 @@ class PressShadowVerifier:
         else:
             self._rejections[rejection] += 1
 
-        self._trace.append({
-            "timestamp": float(timestamp),
-            "capture_frame_index": int(frame_index),
-            "fsm_state": fsm_state.value,
-            "press_episode_active": self._active,
-            "activation_mode": activation_mode.value,
-            "raw_detected": bool(raw.detected),
-            "raw_detected_symbols": raw_symbols,
-            "left_to_right_sequence": list(sorted_sequence),
-            "normalized_sequence": list(normalized),
-            "sequence_length": len(normalized),
-            "stability_history": list(self._stability_history),
-            "candidate_accepted": proposal is not None,
-            "candidate_rejected_reason": rejection,
-            "qualification_reason": qualification_reason,
-            "frozen_sequence": list(self._frozen_sequence),
-            "proposal_created": proposal is not None,
-            "one_shot_blocked": one_shot_blocked,
-            "safety_reason": safety_reason,
-            "allowlist_rejection_reason": (
-                None
-                if live_emission_enabled
-                else "press_sequence_shadow_only_not_live_allowlisted"
-            ),
-            "action_sink_called": False,
-        })
+        if self._diagnostics_enabled:
+            self._trace.append({
+                "timestamp": float(timestamp),
+                "capture_frame_index": int(frame_index),
+                "fsm_state": fsm_state.value,
+                "press_episode_active": self._active,
+                "activation_mode": activation_mode.value,
+                "raw_detected": bool(raw.detected),
+                "raw_detected_symbols": raw_symbols,
+                "left_to_right_sequence": list(sorted_sequence),
+                "normalized_sequence": list(normalized),
+                "sequence_length": len(normalized),
+                "stability_history": list(self._stability_history),
+                "candidate_accepted": proposal is not None,
+                "candidate_rejected_reason": rejection,
+                "qualification_reason": qualification_reason,
+                "frozen_sequence": list(self._frozen_sequence),
+                "proposal_created": proposal is not None,
+                "one_shot_blocked": one_shot_blocked,
+                "safety_reason": safety_reason,
+                "allowlist_rejection_reason": (
+                    None
+                    if live_emission_enabled
+                    else "press_sequence_shadow_only_not_live_allowlisted"
+                ),
+                "action_sink_called": False,
+            })
 
         if bool(
             qualified
@@ -567,7 +579,7 @@ class PressShadowVerifier:
             writer.writeheader()
             writer.writerows(self._review_items)
 
-        samples = list(self._roi_samples)
+        samples = list(self._roi_samples or ())
         index_path = destination / CLIP_INDEX_NAME
         with index_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=(

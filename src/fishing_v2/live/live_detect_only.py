@@ -6,6 +6,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import csv
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import time
@@ -108,6 +109,7 @@ from src.config_loader import load_roi_config
 
 
 EXPECTED_RESOLUTION = (2560, 1440)
+RUNTIME_PROFILES = ("production", "diagnostic")
 WOULD_FIRE_NAMES = {
     ActionIntent.CAST: "WOULD_CAST",
     ActionIntent.START_HOOK: "WOULD_START_HOOK",
@@ -146,10 +148,14 @@ class LiveDetectOnlyConfig:
     press_initial_delay_max_ms: int = 500
     press_inter_key_gap_min_ms: int = 90
     press_inter_key_gap_max_ms: int = 170
+    press_key_hold_ms: int = 40
+    # Programmatic callers retain the historical diagnostic behavior; the
+    # public CLI explicitly defaults to Production.
+    runtime_profile: str = "diagnostic"
 
     def __post_init__(self) -> None:
-        if self.duration_seconds <= 0:
-            raise ValueError("duration_seconds must be positive")
+        if self.duration_seconds < 0:
+            raise ValueError("duration_seconds must be non-negative")
         if self.max_fps <= 0:
             raise ValueError("max_fps must be positive")
         if self.unknown_screenshot_seconds <= 0:
@@ -160,8 +166,12 @@ class LiveDetectOnlyConfig:
             raise ValueError("evidence_video_fps must be positive")
         if self.hook_critical_target_fps < 30.0:
             raise ValueError("hook_critical_target_fps must be at least 30")
-        if self.max_completed_cycles is not None and self.max_completed_cycles <= 0:
-            raise ValueError("max_completed_cycles must be positive when provided")
+        if self.max_completed_cycles is not None and self.max_completed_cycles < 0:
+            raise ValueError("max_completed_cycles must be non-negative when provided")
+        if self.runtime_profile not in RUNTIME_PROFILES:
+            raise ValueError(
+                f"runtime_profile must be one of {RUNTIME_PROFILES}"
+            )
         if self.press_initial_delay_min_ms < 0:
             raise ValueError("press_initial_delay_min_ms must be non-negative")
         if self.press_initial_delay_min_ms > self.press_initial_delay_max_ms:
@@ -170,6 +180,8 @@ class LiveDetectOnlyConfig:
             raise ValueError("press_inter_key_gap_min_ms must be non-negative")
         if self.press_inter_key_gap_min_ms > self.press_inter_key_gap_max_ms:
             raise ValueError("PRESS inter-key gap range is inverted")
+        if self.press_key_hold_ms <= 0:
+            raise ValueError("press_key_hold_ms must be positive")
 
 
 class WouldFireDeduplicator:
@@ -489,7 +501,10 @@ class LiveDetectOnlyRuntime:
         self._opened = False
         self._capture_diagnostics: dict[str, Any] = {}
         self.evidence_recorder = evidence_recorder
-        if self.live_config.evidence_mode == "diagnostic":
+        if (
+            self.live_config.runtime_profile == "diagnostic"
+            and self.live_config.evidence_mode == "diagnostic"
+        ):
             self.evidence_recorder = self.evidence_recorder or DiagnosticEvidenceRecorder(
                 self.logger.path,
                 config=DiagnosticEvidenceConfig(video_fps=self.live_config.evidence_video_fps),
@@ -502,13 +517,18 @@ class LiveDetectOnlyRuntime:
         self._hook_frame_assembler: HookCriticalFrameAssembler | None = None
         self._latest_hook_frame = LatestHookFrameSlot()
         self._hook_episode_telemetry = HookEpisodeTelemetry()
-        self._hook_roi_clip_samples: list[HookROIFrame] = []
-        self._hook_decision_trace = HookDecisionTraceBuffer(
-            max_entries=512
+        self._hook_roi_clip_samples: list[HookROIFrame] | None = (
+            [] if self.evidence_recorder is not None else None
+        )
+        self._hook_decision_trace = (
+            HookDecisionTraceBuffer(max_entries=512)
+            if self.evidence_recorder is not None else None
         )
         self._hook_decision_trace_path: Path | None = None
         self._hook_decision_trace_rows_written = 0
-        self._press_shadow = PressShadowVerifier()
+        self._press_shadow = PressShadowVerifier(
+            diagnostics_enabled=self.evidence_recorder is not None
+        )
         self._press_live_emission = PressLiveEmissionTracker(
             PressLiveEmissionConfig(
                 visual_ack_timeout_seconds=float(
@@ -530,7 +550,7 @@ class LiveDetectOnlyRuntime:
                     self.live_config.press_inter_key_gap_max_ms
                 ),
                 key_hold_ms=int(
-                    self._raw_config["action"].get("key_hold_ms", 40)
+                    self.live_config.press_key_hold_ms
                 ),
             ),
             rng=press_timing_rng,
@@ -616,6 +636,29 @@ class LiveDetectOnlyRuntime:
                 "action_applied": False,
                 **dict(event.payload),
             })
+
+    def _log_transition(
+        self,
+        *,
+        timestamp: float,
+        frame_index: int,
+        previous_state: str,
+        next_state: str,
+        reason: str,
+        screenshot_reference: str | None,
+    ) -> None:
+        self.logger.transition(
+            timestamp=timestamp,
+            frame_index=frame_index,
+            previous_state=previous_state,
+            next_state=next_state,
+            reason=reason,
+            screenshot_reference=screenshot_reference,
+        )
+        if self.live_config.runtime_profile == "production":
+            self.console.emit(
+                f"state: {previous_state} -> {next_state} ({reason})"
+            )
 
     def _cast_blockers(
         self,
@@ -818,6 +861,7 @@ class LiveDetectOnlyRuntime:
                 "press_inter_key_gap_max_ms": (
                     self.live_config.press_inter_key_gap_max_ms
                 ),
+                "key_hold_ms": self.live_config.press_key_hold_ms,
             }
             action_config = WindowsActionConfig.from_mapping(
                 action_values, panic_key=self.panic_key
@@ -1131,6 +1175,7 @@ class LiveDetectOnlyRuntime:
         root.mkdir(parents=True, exist_ok=True)
         video_path = root / "hook_roi_clip.mp4"
         index_path = root / "hook_roi_frames.csv"
+        assert self._hook_roi_clip_samples is not None
         first = self._hook_roi_clip_samples[0].pixels
         height, width = first.shape[:2]
         selected: list[HookROIFrame] = []
@@ -1229,7 +1274,7 @@ class LiveDetectOnlyRuntime:
         end = max(start, float(timestamp))
         samples = [
             item
-            for item in self._hook_roi_clip_samples
+            for item in (self._hook_roi_clip_samples or ())
             if start - 1e-9 <= item.timestamp <= end + 1e-9
         ]
         first_roi_timestamp = samples[0].timestamp if samples else None
@@ -1257,6 +1302,8 @@ class LiveDetectOnlyRuntime:
         self._hook_video_suspension_active = None
 
     def _flush_hook_decision_trace(self, reason: str) -> None:
+        if self._hook_decision_trace is None:
+            return
         rows = self._hook_decision_trace.drain(reason)
         if not rows or self.evidence_recorder is None:
             return
@@ -1278,6 +1325,24 @@ class LiveDetectOnlyRuntime:
                 )
         self._hook_decision_trace_path = path
         self._hook_decision_trace_rows_written += len(rows)
+
+    def _finish_hook_episode_telemetry(
+        self,
+        *,
+        timestamp: float,
+    ) -> None:
+        before = len(self._hook_episode_telemetry.summaries())
+        self._hook_episode_telemetry.finish(
+            timestamp,
+            self._latest_hook_frame.stale_frames_dropped,
+        )
+        summaries = self._hook_episode_telemetry.summaries()
+        if len(summaries) > before:
+            self.logger.event("hook_critical_episode_summary", {
+                "timestamp": timestamp,
+                "runtime_state": self.fsm.state.value,
+                **summaries[-1],
+            })
 
     def _overlay_lines(
         self,
@@ -1316,6 +1381,8 @@ class LiveDetectOnlyRuntime:
         latencies: list[float] = []
         detector_runs: Counter[str] = Counter()
         result_name = "completed"
+        shutdown_reason = "duration_limit"
+        started_at_utc = datetime.now(timezone.utc).isoformat()
         last_prompt: PromptObservation | None = None
         last_prompt_kind: str | None = None
         last_result: Any | None = None
@@ -1330,6 +1397,7 @@ class LiveDetectOnlyRuntime:
         conflict_active = False
         sync_required_active = False
         last_terminal = 0.0
+        last_production_heartbeat = 0.0
         started = self.clock()
         next_prompt_due = 0.0
         next_detector_due = 0.0
@@ -1339,9 +1407,19 @@ class LiveDetectOnlyRuntime:
             RuntimeState.SYNCING, initial_bundle, recorded_observation=True
         )
         try:
+            if self.live_config.runtime_profile == "production":
+                self.console.emit("startup: production fishing runtime")
+            self.logger.event("startup", {
+                "timestamp": 0.0,
+                "runtime_profile": self.live_config.runtime_profile,
+                "duration_seconds": self.live_config.duration_seconds,
+                "max_completed_cycles": self.live_config.max_completed_cycles,
+            })
             self.preflight()
             self._initialize_action_sink(session_started_at=started)
             self._preflight_passed = True
+            if self.live_config.runtime_profile == "production":
+                self.console.emit("preflight: passed")
             self.logger.event("preflight_passed", {
                 "timestamp": 0.0,
                 "resolution": list(EXPECTED_RESOLUTION),
@@ -1371,7 +1449,10 @@ class LiveDetectOnlyRuntime:
                     "reason": "mss-region may capture the diagnostic overlay or other covering windows",
                     "backend": self._capture_diagnostics.get("backend"),
                 })
-            while self.clock() - started < self.live_config.duration_seconds:
+            while (
+                self.live_config.duration_seconds == 0
+                or self.clock() - started < self.live_config.duration_seconds
+            ):
                 if max_frames is not None and captured >= max_frames:
                     break
                 frame_loop_started = self.clock()
@@ -1391,21 +1472,26 @@ class LiveDetectOnlyRuntime:
                     and callable(getattr(self.capture, "capture_roi", None))
                 )
                 if hook_critical_mode:
-                    if self._hook_video_suspension_active is None:
+                    if not self._hook_episode_telemetry.active:
+                        self.console.emit(
+                            "HOOK critical active fps=0.0"
+                        )
+                    if (
+                        self.evidence_recorder is not None
+                        and self._hook_video_suspension_active is None
+                    ):
                         self._start_hook_video_suspension(
                             timestamp=elapsed,
                             frame_index=captured + 1,
-                        )
-                        self.console.emit(
-                            "HOOK critical active fps=0.0"
                         )
                     self._hook_episode_telemetry.start(
                         elapsed,
                         self._latest_hook_frame.stale_frames_dropped,
                     )
-                    self._hook_decision_trace.start(
-                        str(self.deduplicator.cycle_id)
-                    )
+                    if self._hook_decision_trace is not None:
+                        self._hook_decision_trace.start(
+                            str(self.deduplicator.cycle_id)
+                        )
                 elif self._hook_video_suspension_active is not None:
                     self._finish_hook_video_suspension(
                         timestamp=elapsed,
@@ -1433,11 +1519,13 @@ class LiveDetectOnlyRuntime:
                             latest_hook_frame.pixels
                         )
                         elapsed = latest_hook_frame.timestamp
-                        self._hook_roi_clip_samples.append(HookROIFrame(
-                            latest_hook_frame.frame_index,
-                            latest_hook_frame.timestamp,
-                            latest_hook_frame.pixels.copy(),
-                        ))
+                        if self.evidence_recorder is not None:
+                            assert self._hook_roi_clip_samples is not None
+                            self._hook_roi_clip_samples.append(HookROIFrame(
+                                latest_hook_frame.frame_index,
+                                latest_hook_frame.timestamp,
+                                latest_hook_frame.pixels.copy(),
+                            ))
                     else:
                         frame = validate_bgr_frame(
                             self.capture.capture()
@@ -1448,6 +1536,7 @@ class LiveDetectOnlyRuntime:
                             )
                 except KeyboardInterrupt:
                     result_name = "interrupted_by_user"
+                    shutdown_reason = "ctrl_c"
                     break
                 except Exception as exc:
                     result_name = "safe_stop_capture_failure"
@@ -1464,6 +1553,32 @@ class LiveDetectOnlyRuntime:
                     poll_panic = getattr(self.action_sink, "poll_panic", None)
                     if callable(poll_panic):
                         panic_triggered_this_frame = bool(poll_panic())
+                if (
+                    panic_triggered_this_frame
+                    and self.live_config.runtime_profile == "production"
+                ):
+                    for press_event in self._press_live_emission.cancel_pending(
+                        timestamp=elapsed,
+                        reason="panic_triggered",
+                    ):
+                        self.logger.event(press_event.event_type, {
+                            **dict(press_event.payload),
+                            "frame_index": captured,
+                            "runtime_state": self.fsm.state.value,
+                        })
+                    self.logger.event("panic_stop", {
+                        "timestamp": elapsed,
+                        "frame_index": captured,
+                        "runtime_state": self.fsm.state.value,
+                        "reason": "panic_key_pressed",
+                        "action_applied": False,
+                    })
+                    self.console.emit(
+                        "PANIC: input disabled, shutting down"
+                    )
+                    result_name = "panic_shutdown"
+                    shutdown_reason = "panic_key"
+                    break
                 height, width = frame.shape[:2]
                 if (width, height) != EXPECTED_RESOLUTION:
                     result_name = "safe_stop_resolution_changed"
@@ -2163,7 +2278,10 @@ class LiveDetectOnlyRuntime:
                                 "runtime_state": self.fsm.state.value,
                             },
                         )
-                    if hook_critical_mode:
+                    if (
+                        hook_critical_mode
+                        and self._hook_decision_trace is not None
+                    ):
                         raw_hook_evidence = (
                             hook.evidence if hook is not None else {}
                         )
@@ -2797,7 +2915,7 @@ class LiveDetectOnlyRuntime:
                             self.logger.save_screenshot(frame, captured, "runtime_transition")
                             if self.live_config.save_transition_frames else None
                         )
-                        self.logger.transition(
+                        self._log_transition(
                             timestamp=elapsed,
                             frame_index=captured,
                             previous_state=transition_result.previous_state.value,
@@ -2842,6 +2960,7 @@ class LiveDetectOnlyRuntime:
                             evidence_episode_id += 1
                             stop_after_completed_cycle = bool(
                                 self.live_config.max_completed_cycles is not None
+                                and self.live_config.max_completed_cycles > 0
                                 and completed_cycles >= self.live_config.max_completed_cycles
                             )
 
@@ -3239,7 +3358,7 @@ class LiveDetectOnlyRuntime:
                                     commit.previous_state
                                     != commit.next_state
                                 ):
-                                    self.logger.transition(
+                                    self._log_transition(
                                         timestamp=elapsed,
                                         frame_index=captured,
                                         previous_state=(
@@ -3280,7 +3399,7 @@ class LiveDetectOnlyRuntime:
                                     press_fast_commit.previous_state
                                     != press_fast_commit.next_state
                                 ):
-                                    self.logger.transition(
+                                    self._log_transition(
                                         timestamp=elapsed,
                                         frame_index=captured,
                                         previous_state=(
@@ -3389,7 +3508,7 @@ class LiveDetectOnlyRuntime:
                                     stop_after_action_commit_failure = True
                                 else:
                                     if commit.previous_state != commit.next_state:
-                                        self.logger.transition(
+                                        self._log_transition(
                                             timestamp=elapsed,
                                             frame_index=captured,
                                             previous_state=commit.previous_state.value,
@@ -3450,7 +3569,38 @@ class LiveDetectOnlyRuntime:
                         actions_applied=actions_applied,
                     ))
                 if (
-                    not hook_critical_mode
+                    self.live_config.runtime_profile == "production"
+                    and elapsed - last_production_heartbeat >= 30.0
+                ):
+                    sink_summary = (
+                        self.action_sink.summary()
+                        if self.action_sink is not None
+                        and callable(getattr(self.action_sink, "summary", None))
+                        else {}
+                    )
+                    hook_episodes = self._hook_episode_telemetry.summaries()
+                    hook_fps = (
+                        float(hook_episodes[-1].get(
+                            "hook_detector_actual_fps", 0.0
+                        ))
+                        if hook_episodes else 0.0
+                    )
+                    self.console.heartbeat(
+                        "production_runtime",
+                        (
+                            f"state={self.fsm.state.value} cycles={completed_cycles} "
+                            f"capture_fps={capture_fps:.1f} hook_fps={hook_fps:.1f} "
+                            f"actions_failed={sum(sink_summary.get('failed_action_counts', {}).values())} "
+                            f"focus={not self._foreground_unavailable_event_active} "
+                            f"logging={'degraded' if self.logger.logging_disabled else 'healthy'}"
+                        ),
+                        timestamp=elapsed,
+                        minimum_interval_seconds=30.0,
+                    )
+                    last_production_heartbeat = elapsed
+                elif (
+                    self.live_config.runtime_profile == "diagnostic"
+                    and not hook_critical_mode
                     and elapsed - last_terminal >= 1.0
                 ):
                     print(
@@ -3469,9 +3619,8 @@ class LiveDetectOnlyRuntime:
                         RuntimeState.HOOK,
                     }
                 ):
-                    self._hook_episode_telemetry.finish(
-                        self.clock() - started,
-                        self._latest_hook_frame.stale_frames_dropped,
+                    self._finish_hook_episode_telemetry(
+                        timestamp=self.clock() - started,
                     )
                     self._flush_hook_decision_trace("episode_ended")
                 if stop_after_completed_cycle:
@@ -3492,6 +3641,7 @@ class LiveDetectOnlyRuntime:
                     self.sleep(remaining)
         except KeyboardInterrupt:
             result_name = "interrupted_by_user"
+            shutdown_reason = "ctrl_c"
         except LivePreflightError as exc:
             result_name = "preflight_failed"
             self._preflight_failure_reason = (
@@ -3519,10 +3669,19 @@ class LiveDetectOnlyRuntime:
             })
         finally:
             elapsed_total = max(0.0, self.clock() - started)
+            if result_name == "interrupted_by_user":
+                for press_event in self._press_live_emission.cancel_pending(
+                    timestamp=elapsed_total,
+                    reason="ctrl_c",
+                ):
+                    self.logger.event(press_event.event_type, {
+                        **dict(press_event.payload),
+                        "frame_index": captured,
+                        "runtime_state": self.fsm.state.value,
+                    })
             if self._hook_episode_telemetry.active:
-                self._hook_episode_telemetry.finish(
-                    elapsed_total,
-                    self._latest_hook_frame.stale_frames_dropped,
+                self._finish_hook_episode_telemetry(
+                    timestamp=elapsed_total,
                 )
             if self._hook_video_suspension_active is not None:
                 self._finish_hook_video_suspension(
@@ -3544,25 +3703,23 @@ class LiveDetectOnlyRuntime:
                 "press_episode_review_items": [],
                 "press_shadow_proposal_count": 0,
             }
-            with ThreadPoolExecutor(
-                max_workers=2,
-                thread_name_prefix="live-artifact-writer",
-            ) as artifact_executor:
-                hook_future = artifact_executor.submit(
-                    self._write_hook_roi_clip
-                )
-                press_future = (
-                    artifact_executor.submit(
+            if self.evidence_recorder is not None:
+                with ThreadPoolExecutor(
+                    max_workers=2,
+                    thread_name_prefix="live-artifact-writer",
+                ) as artifact_executor:
+                    hook_future = artifact_executor.submit(
+                        self._write_hook_roi_clip
+                    )
+                    press_future = artifact_executor.submit(
                         self._press_shadow.write_artifacts,
                         self.logger.path / "diagnostic_evidence",
                     )
-                    if self.evidence_recorder is not None else None
-                )
-                if press_future is None:
-                    self._press_shadow.finish_session()
-                hook_roi_clip_summary = hook_future.result()
-                if press_future is not None:
+                    hook_roi_clip_summary = hook_future.result()
                     press_shadow_summary = press_future.result()
+            else:
+                self._press_shadow.finish_session()
+                hook_roi_clip_summary = self._write_hook_roi_clip()
             evidence_summary: dict[str, Any] = {
                 "evidence_mode": "minimal",
                 "video_path": None,
@@ -3608,6 +3765,10 @@ class LiveDetectOnlyRuntime:
                         {"reason": evidence_failure_reason},
                     ],
                 }
+            if self.live_config.runtime_profile == "production":
+                self.console.emit(
+                    f"shutdown: result={result_name} cycles={completed_cycles}"
+                )
             self.overlay.close()
             self.console.close()
             if self._opened:
@@ -3633,8 +3794,20 @@ class LiveDetectOnlyRuntime:
                 sink_summary = getattr(self.action_sink, "summary", None)
                 if callable(sink_summary):
                     action_summary.update(sink_summary())
+            if shutdown_reason == "duration_limit" and result_name != "completed":
+                shutdown_reason = {
+                    "completed_target_cycles": "completed_cycle_limit",
+                    "preflight_failed": "fatal_preflight_failure",
+                    "interrupted_by_user": "ctrl_c",
+                }.get(result_name, result_name)
+            hook_episode_summaries = self._hook_episode_telemetry.summaries()
             summary = {
                 "result": result_name,
+                "started_at": started_at_utc,
+                "ended_at": datetime.now(timezone.utc).isoformat(),
+                "shutdown_reason": shutdown_reason,
+                "runtime_profile": self.live_config.runtime_profile,
+                "visual_evidence_enabled": self.evidence_recorder is not None,
                 "duration_seconds": elapsed_total,
                 "captured_frames": captured,
                 "processed_frames": processed,
@@ -3673,13 +3846,19 @@ class LiveDetectOnlyRuntime:
                     self.live_config.press_inter_key_gap_max_ms,
                 ],
                 "press_key_hold_ms": int(
-                    self._raw_config["action"].get("key_hold_ms", 40)
+                    self.live_config.press_key_hold_ms
                 ),
                 "hook_critical_target_fps": (
                     self.live_config.hook_critical_target_fps
                 ),
                 "hook_critical_episodes": (
-                    self._hook_episode_telemetry.summaries()
+                    hook_episode_summaries
+                ),
+                "hook_critical_fps_aggregate": (
+                    float(np.mean([
+                        float(item.get("hook_detector_actual_fps", 0.0))
+                        for item in hook_episode_summaries
+                    ])) if hook_episode_summaries else 0.0
                 ),
                 "full_video_suspended_during_hook_critical": bool(
                     self._hook_video_suspensions
@@ -3734,5 +3913,34 @@ class LiveDetectOnlyRuntime:
                     )),
                 ),
             }
+            summary["action_attempted_count"] = sum(
+                action_summary.get("attempted_action_counts", {}).values()
+            )
+            summary["action_applied_count"] = sum(
+                action_summary.get("applied_action_counts", {}).values()
+            )
+            summary["action_rejected_count"] = sum(
+                action_summary.get("rejected_action_counts", {}).values()
+            )
+            summary["action_partial_count"] = sum(
+                action_summary.get("partial_action_counts", {}).values()
+            )
+            summary["action_failed_count"] = sum(
+                action_summary.get("failed_action_counts", {}).values()
+            )
+            summary["logging_disabled"] = self.logger.logging_disabled
+            summary["logging_failure_reason"] = (
+                self.logger.logging_failure_reason
+            )
+            if self.live_config.runtime_profile == "production":
+                for diagnostic_key in (
+                    "video_path", "actual_video_path",
+                    "detector_evidence_path", "event_windows_path",
+                    "hook_roi_clip_path", "hook_roi_clip_index_path",
+                    "press_roi_clip_path", "press_roi_frames_path",
+                    "press_decision_trace_path", "press_review_items_path",
+                    "hook_decision_trace_path",
+                ):
+                    summary.pop(diagnostic_key, None)
             self.logger.finalize(summary)
         return summary

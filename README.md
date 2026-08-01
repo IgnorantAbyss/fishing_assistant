@@ -103,6 +103,20 @@ Each replay session contains a `manifest.json`, `frames/`, `replay_results.csv`,
 
 ## Live window targeting
 
+For long-running use, the Production launcher keeps only `runtime.log`,
+`events.jsonl`, and `session_summary.json`; `0` means no duration or cycle
+limit. It enables the existing five guarded actions and still requires the
+same foreground, target, integrity, allowlist, and F12 panic checks:
+
+```powershell
+.\.venv\Scripts\python.exe tools\run_fishing_production.py `
+  --process-name BlackDesert64 `
+  --window-title-prefix "黑色沙漠"
+```
+
+Use `tools\run_live_detect_only.py --runtime-profile diagnostic
+--evidence-mode diagnostic` when full visual evidence is intentionally needed.
+
 The Live runtime can resolve the supported borderless game window by executable
 basename and an optional title prefix. Resolution succeeds only when exactly one
 visible, non-minimized top-level window has a non-empty title and non-zero client

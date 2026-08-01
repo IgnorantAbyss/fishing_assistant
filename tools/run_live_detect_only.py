@@ -15,6 +15,7 @@ from src.fishing_v2.live.live_detect_only import (  # noqa: E402
     LiveDetectOnlyConfig,
     LiveDetectOnlyRuntime,
     LivePreflightError,
+    RUNTIME_PROFILES,
     validate_emit_actions,
 )
 from src.fishing_v2.live.capture_backends import (  # noqa: E402
@@ -33,7 +34,10 @@ from src.fishing_v2.live.window_resolver import (  # noqa: E402
     format_window_candidates,
     resolve_window_target,
 )
-from src.fishing_v2.live.session_logger import LiveSessionLogger  # noqa: E402
+from src.fishing_v2.live.session_logger import (  # noqa: E402
+    LiveSessionLogger,
+    ProductionSessionLogger,
+)
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle  # noqa: E402
 from src.screen_capture import normalize_process_name  # noqa: E402
 
@@ -75,6 +79,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--duration-seconds", type=float, default=180.0)
     parser.add_argument(
+        "--runtime-profile",
+        choices=RUNTIME_PROFILES,
+        default="production",
+        help="Lightweight text-only production or full diagnostic runtime",
+    )
+    parser.add_argument(
         "--evidence-mode", choices=EVIDENCE_MODES, default="minimal",
         help="minimal keeps event-only screenshots; diagnostic adds video and dense ROI evidence",
     )
@@ -84,8 +94,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-completed-cycles", type=int,
-        help="Stop after this many complete Runtime cycles (for the next review use 3)",
+        help="Stop after this many complete Runtime cycles; 0 means unlimited",
     )
+    parser.add_argument("--log-repeat-window-seconds", type=float, default=10.0)
+    parser.add_argument("--log-max-file-mb", type=float, default=10.0)
+    parser.add_argument("--log-backup-count", type=int, default=5)
+    parser.add_argument("--log-retention-days", type=int, default=14)
+    parser.add_argument("--log-max-total-mb", type=float, default=100.0)
     parser.add_argument(
         "--output-dir", type=Path,
         default=PROJECT_ROOT / "reports" / "fishing_v2" / "live_detect_only",
@@ -156,6 +171,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Maximum key-up to next key-down gap (default: 170)",
     )
     parser.add_argument(
+        "--press-key-hold-ms",
+        type=int,
+        default=40,
+        help="Key-down hold duration for each PRESS key (default: 40)",
+    )
+    parser.add_argument(
         "--panic-key", choices=("F12",), default="F12",
         help="Polling-only permanent session stop key for the action sink (default: F12)",
     )
@@ -175,11 +196,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         > args.press_inter_key_gap_max_ms
     ):
         parser.error("invalid PRESS inter-key gap range")
+    if args.duration_seconds < 0:
+        parser.error("--duration-seconds must be non-negative")
+    if args.max_completed_cycles is not None and args.max_completed_cycles < 0:
+        parser.error("--max-completed-cycles must be non-negative")
+    if args.log_repeat_window_seconds < 0 or args.log_max_file_mb <= 0:
+        parser.error("invalid production log timing or size limit")
+    if args.log_backup_count < 0 or args.log_retention_days < 0:
+        parser.error("invalid production log retention count")
+    if args.log_max_total_mb < 0:
+        parser.error("--log-max-total-mb must be non-negative")
+    if args.press_key_hold_ms <= 0:
+        parser.error("--press-key-hold-ms must be positive")
     return args
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
     if (
         args.process_name
         and normalize_process_name(args.process_name)
@@ -223,7 +256,21 @@ def main() -> int:
     except Exception as exc:
         print(f"PREFLIGHT FAILED: final Prompt bundle could not be loaded: {exc}", file=sys.stderr)
         return 2
-    logger = LiveSessionLogger(args.output_dir, bundle_version=bundle.bundle_version)
+    if args.runtime_profile == "production":
+        logger = ProductionSessionLogger(
+            args.output_dir,
+            bundle_version=bundle.bundle_version,
+            repeat_window_seconds=args.log_repeat_window_seconds,
+            max_file_mb=args.log_max_file_mb,
+            backup_count=args.log_backup_count,
+            retention_days=args.log_retention_days,
+            max_total_mb=args.log_max_total_mb,
+        )
+    else:
+        logger = LiveSessionLogger(
+            args.output_dir,
+            bundle_version=bundle.bundle_version,
+        )
     capture = create_live_capture_session(
         backend=args.capture_backend,
         window_title=target.window_title,
@@ -254,8 +301,14 @@ def main() -> int:
         live_config=LiveDetectOnlyConfig(
             duration_seconds=args.duration_seconds,
             max_fps=args.max_fps,
-            show_overlay=args.show_overlay,
-            save_transition_frames=args.save_transition_frames,
+            show_overlay=(
+                args.show_overlay
+                if args.runtime_profile == "diagnostic" else False
+            ),
+            save_transition_frames=(
+                args.save_transition_frames
+                if args.runtime_profile == "diagnostic" else False
+            ),
             evidence_mode=args.evidence_mode,
             evidence_video_fps=args.evidence_video_fps,
             hook_critical_target_fps=args.hook_critical_fps,
@@ -272,6 +325,8 @@ def main() -> int:
             press_inter_key_gap_max_ms=(
                 args.press_inter_key_gap_max_ms
             ),
+            press_key_hold_ms=args.press_key_hold_ms,
+            runtime_profile=args.runtime_profile,
         ),
         emit_actions=args.emit_actions,
         action_sink_name=args.action_sink,
@@ -285,6 +340,7 @@ def main() -> int:
     print(f"capture_backend: {summary.get('capture_backend')}")
     print(f"capture_fallback_used: {summary.get('capture_fallback_used', False)}")
     print(f"evidence_mode: {summary.get('evidence_mode')}")
+    print(f"runtime_profile: {summary.get('runtime_profile')}")
     print(f"video_path: {summary.get('video_path')}")
     print(f"completed_cycles: {summary.get('completed_cycles')}")
     print(f"actions_applied: {summary['actions_applied']}")
@@ -299,6 +355,7 @@ def main() -> int:
             print("\n".join(lines), file=sys.stderr)
     return 0 if summary["result"] in {
         "completed", "completed_target_cycles", "interrupted_by_user",
+        "panic_shutdown",
     } else 2
 
 
