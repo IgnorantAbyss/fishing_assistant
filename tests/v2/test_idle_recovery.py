@@ -120,7 +120,7 @@ def test_cast_arming_unifies_sources_and_deduplicates_physical_idle() -> None:
     )
     assert duplicate is None
     assert events[0].event_type == "cast_opportunity_deduplicated"
-    assert events[0].payload["dedupe_reason"] == "physical_idle_already_armed"
+    assert events[0].payload["dedupe_reason"] == "physical_idle_source_merged"
 
 
 def test_same_cast_source_id_is_exactly_once() -> None:
@@ -241,3 +241,56 @@ def test_cast_proposal_does_not_consume_before_emission() -> None:
     assert lifecycle.active is not None
     assert lifecycle.active.cast_started is True
     assert lifecycle.active.consumed is False
+
+
+def test_cast_sources_for_same_physical_idle_are_merged_not_dropped() -> None:
+    lifecycle = CastArmingLifecycle()
+    recovery, _ = lifecycle.request_cast_opportunity(
+        source_type=CAST_SOURCE_RECOVERY,
+        source_id="recovery:1",
+        physical_idle_id="idle:1",
+        cycle_id=1,
+        timestamp=0.0,
+        cooldown_seconds=0.5,
+    )
+    assert recovery is not None
+
+    duplicate, events = lifecycle.request_cast_opportunity(
+        source_type=CAST_SOURCE_POST_CYCLE,
+        source_id="clearance:1",
+        physical_idle_id="idle:1",
+        cycle_id=1,
+        timestamp=0.2,
+        cooldown_seconds=0.0,
+    )
+
+    assert duplicate is None
+    assert lifecycle.active is recovery
+    assert events[0].payload["dedupe_reason"] == "physical_idle_source_merged"
+    assert "clearance:1" in lifecycle.active.merged_source_ids
+
+
+def test_unstarted_cast_arm_can_expire_instead_of_hanging_forever() -> None:
+    lifecycle = CastArmingLifecycle()
+    record, _ = lifecycle.request_cast_opportunity(
+        source_type=CAST_SOURCE_RECOVERY,
+        source_id="recovery:1",
+        physical_idle_id="idle:1",
+        cycle_id=1,
+        timestamp=0.0,
+        cooldown_seconds=0.5,
+    )
+    assert record is not None
+
+    assert lifecycle.expire_if_overdue(
+        timestamp=3.49,
+        service_timeout_seconds=3.0,
+    ) is None
+    expired = lifecycle.expire_if_overdue(
+        timestamp=3.5,
+        service_timeout_seconds=3.0,
+    )
+
+    assert expired is record
+    assert expired.terminal_outcome == "expired:cast_arm_service_timeout"
+    assert lifecycle.active is None

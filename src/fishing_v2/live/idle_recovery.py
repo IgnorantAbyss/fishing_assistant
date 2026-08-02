@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 
 from src.fishing_v2.domain.observations import (
@@ -30,6 +30,7 @@ class IdleRecoveryConfig:
     freshness_ms: float = 250.0
     cast_cooldown_seconds: float = 0.5
     cast_retry_min_interval_seconds: float = 3.0
+    cast_liveness_timeout_seconds: float = 3.0
 
     def __post_init__(self) -> None:
         if self.window_size < 1:
@@ -44,6 +45,8 @@ class IdleRecoveryConfig:
             raise ValueError("idle CAST cooldown must be non-negative")
         if self.cast_retry_min_interval_seconds <= 0:
             raise ValueError("idle CAST retry interval must be positive")
+        if self.cast_liveness_timeout_seconds <= 0:
+            raise ValueError("idle CAST liveness timeout must be positive")
 
 
 @dataclass(frozen=True)
@@ -291,6 +294,7 @@ class CastArmingRecord:
     terminal_outcome: str | None = None
     consumed: bool = False
     opportunity_id: str | None = None
+    merged_source_ids: list[str] = field(default_factory=list)
 
     def payload(self, timestamp: float) -> dict[str, Any]:
         return {
@@ -344,7 +348,15 @@ class CastArmingLifecycle:
         if source_id in self._seen_source_ids:
             dedupe_reason = "source_id_already_seen"
         elif self._active is not None:
-            dedupe_reason = "physical_idle_already_armed"
+            if (
+                self._active.physical_idle_id == physical_idle_id
+                and not self._active.cast_started
+            ):
+                self._seen_source_ids.add(source_id)
+                self._active.merged_source_ids.append(source_id)
+                dedupe_reason = "physical_idle_source_merged"
+            else:
+                dedupe_reason = "physical_idle_already_armed"
         else:
             attempts = self._attempts_by_physical_idle.get(
                 physical_idle_id, 0
@@ -427,6 +439,36 @@ class CastArmingLifecycle:
         if record is None or record.cast_started:
             return None
         record.terminal_outcome = f"cancelled:{reason}"
+        self._active = None
+        return record
+
+    def supersede(self, reason: str) -> CastArmingRecord | None:
+        record = self._active
+        if record is None or record.cast_started:
+            return None
+        record.terminal_outcome = f"superseded:{reason}"
+        self._last_record = record
+        self._active = None
+        return record
+
+    def expire_if_overdue(
+        self,
+        *,
+        timestamp: float,
+        service_timeout_seconds: float,
+    ) -> CastArmingRecord | None:
+        if service_timeout_seconds <= 0:
+            raise ValueError("CAST arm service timeout must be positive")
+        record = self._active
+        if (
+            record is None
+            or record.cast_started
+            or float(timestamp)
+            < record.eligible_at + float(service_timeout_seconds)
+        ):
+            return None
+        record.terminal_outcome = "expired:cast_arm_service_timeout"
+        self._last_record = record
         self._active = None
         return record
 

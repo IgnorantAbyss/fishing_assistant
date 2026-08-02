@@ -140,6 +140,7 @@ def _runtime(
     idle_recovery_freshness_ms: float = 250.0,
     idle_recovery_cast_cooldown_seconds: float = 0.5,
     idle_cast_retry_min_interval_seconds: float = 3.0,
+    idle_cast_liveness_timeout_seconds: float = 3.0,
     runtime_profile: str = "diagnostic",
     session_logger=None,
 ) -> LiveDetectOnlyRuntime:
@@ -176,6 +177,9 @@ def _runtime(
             ),
             idle_cast_retry_min_interval_seconds=(
                 idle_cast_retry_min_interval_seconds
+            ),
+            idle_cast_liveness_timeout_seconds=(
+                idle_cast_liveness_timeout_seconds
             ),
             runtime_profile=runtime_profile,
         ),
@@ -3116,6 +3120,87 @@ def test_authoritative_idle_recovers_stuck_state_then_casts_once(
     assert recovery["previous_state"] != RuntimeState.IDLE.value
     assert cast["cast_source_type"] == "authoritative_idle_recovery"
     assert cast["timestamp"] - recovery["timestamp"] >= 0.5
+
+
+def test_armed_recovery_cast_is_serviced_after_cooldown_without_new_fsm_cast(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    """Regression for session_20260802_145338 at 545.565-549.782."""
+    runtime, created = _idle_action_runtime(
+        tmp_path,
+        supported_frame,
+        initial_state=RuntimeState.RESULT_PENDING,
+    )
+    original_process = runtime.controller.process
+
+    def suppress_fsm_cast(*args, **kwargs):
+        result = original_process(*args, **kwargs)
+        if result.fsm.action_request.intent == ActionIntent.CAST:
+            runtime.controller.discard_external_proposal()
+            result = replace(
+                result,
+                fsm=replace(
+                    result.fsm,
+                    action_request=ActionRequest(
+                        ActionIntent.NONE,
+                        0.0,
+                        "session_regression_missing_raw_cast",
+                    ),
+                ),
+            )
+        return result
+
+    runtime.controller.process = suppress_fsm_cast
+    summary = runtime.run(max_frames=70)
+
+    assert [item[0].intent for item in created[0].calls] == [
+        ActionIntent.CAST
+    ]
+    assert summary["actions_applied"] == 1
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    recovery = next(
+        item for item in events
+        if item["event_type"] == "authoritative_idle_recovery_applied"
+    )
+    cast = next(item for item in events if item["event_type"] == "WOULD_CAST")
+    assert cast["timestamp"] - recovery["timestamp"] >= 0.5
+    assert cast["cast_source_type"] == "authoritative_idle_recovery"
+
+
+def test_existing_idle_runtime_arms_liveness_cast_once(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    runtime._startup_idle_handled = True
+    runtime._runtime_cycle_started = True
+    runtime.fsm.force_state(RuntimeState.IDLE, 0.0, "already_idle")
+    runtime.live_config = replace(
+        runtime.live_config, duration_seconds=5.0
+    )
+
+    summary = runtime.run(max_frames=125)
+
+    assert [item[0].intent for item in created[0].calls] == [
+        ActionIntent.CAST
+    ]
+    assert summary["actions_applied"] == 1
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    armed = [
+        item for item in events
+        if item["event_type"] == "idle_recovery_cast_rearmed"
+        and str(item.get("source_id", "")).startswith("idle_liveness:")
+    ]
+    assert len(armed) == 1
 
 
 def test_startup_single_idle_observation_never_casts(

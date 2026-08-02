@@ -23,6 +23,7 @@ PRODUCTION_DEFAULTS = (
     "--idle-recovery-freshness-ms", "250",
     "--idle-recovery-cast-cooldown-seconds", "0.5",
     "--idle-cast-retry-min-interval-seconds", "3.0",
+    "--idle-cast-liveness-timeout-seconds", "3.0",
     "--press-initial-delay-min-ms", "300",
     "--press-initial-delay-max-ms", "500",
     "--press-inter-key-gap-min-ms", "90",

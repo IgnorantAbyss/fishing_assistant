@@ -389,6 +389,20 @@ class FishingFSM:
         self._press_intent_proposed = True
         return True
 
+    def stage_external_cast(self, request: ActionRequest) -> bool:
+        """Stage a certified IDLE lifecycle CAST for the normal commit path."""
+        if (
+            self.state != RuntimeState.IDLE
+            or request.intent != ActionIntent.CAST
+            or (
+                self._pending_request is not None
+                and self._pending_request.intent != ActionIntent.CAST
+            )
+        ):
+            return False
+        self._pending_request = request
+        return True
+
     def commit_action(self, request: ActionRequest, timestamp: float) -> ActionCommitResult:
         previous = self.state
         if request.intent == ActionIntent.NONE or self._pending_request != request:

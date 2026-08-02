@@ -211,6 +211,9 @@ class RuntimeController:
     ) -> bool:
         return self.fsm.stage_external_press_sequence(request)
 
+    def stage_external_cast(self, request: ActionRequest) -> bool:
+        return self.fsm.stage_external_cast(request)
+
     def evaluate_external_action_safety(
         self,
         request: ActionRequest,
@@ -220,6 +223,7 @@ class RuntimeController:
         state: RuntimeState,
         foreground: bool | None,
         runtime_environment_supported: bool,
+        get_panel_present: bool | None = None,
     ) -> SafetyResult:
         return self.safety.evaluate(
             request,
@@ -235,5 +239,5 @@ class RuntimeController:
             runtime_environment_supported=(
                 runtime_environment_supported
             ),
-            get_panel_present=None,
+            get_panel_present=get_panel_present,
         )

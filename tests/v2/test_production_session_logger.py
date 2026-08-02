@@ -123,6 +123,7 @@ def test_cli_and_launcher_define_bounded_production_defaults() -> None:
     assert args.idle_recovery_freshness_ms == 250.0
     assert args.idle_recovery_cast_cooldown_seconds == 0.5
     assert args.idle_cast_retry_min_interval_seconds == 3.0
+    assert args.idle_cast_liveness_timeout_seconds == 3.0
     defaults = list(PRODUCTION_DEFAULTS)
     assert defaults[defaults.index("--hook-critical-fps") + 1] == "40"
     assert defaults[
@@ -141,6 +142,9 @@ def test_cli_and_launcher_define_bounded_production_defaults() -> None:
     ] == "0.5"
     assert defaults[
         defaults.index("--idle-cast-retry-min-interval-seconds") + 1
+    ] == "3.0"
+    assert defaults[
+        defaults.index("--idle-cast-liveness-timeout-seconds") + 1
     ] == "3.0"
     assert defaults[defaults.index("--press-key-hold-ms") + 1] == "40"
     assert defaults[defaults.index("--duration-seconds") + 1] == "0"

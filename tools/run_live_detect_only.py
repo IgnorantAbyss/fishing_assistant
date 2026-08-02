@@ -151,6 +151,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--idle-cast-retry-min-interval-seconds", type=float, default=3.0,
     )
+    parser.add_argument(
+        "--idle-cast-liveness-timeout-seconds", type=float, default=3.0,
+        help=(
+            "Arm one CAST when stable IDLE has no executable source for "
+            "this duration (default: 3.0)"
+        ),
+    )
     parser.add_argument("--emit-actions", type=_strict_bool, default=False)
     parser.add_argument(
         "--action-sink", choices=ACTION_SINKS, default=ACTION_SINK_NONE,
@@ -259,6 +266,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--idle-recovery-cast-cooldown-seconds must be non-negative")
     if args.idle_cast_retry_min_interval_seconds <= 0:
         parser.error("--idle-cast-retry-min-interval-seconds must be positive")
+    if args.idle_cast_liveness_timeout_seconds <= 0:
+        parser.error("--idle-cast-liveness-timeout-seconds must be positive")
     if args.max_completed_cycles is not None and args.max_completed_cycles < 0:
         parser.error("--max-completed-cycles must be non-negative")
     if args.log_repeat_window_seconds < 0 or args.log_max_file_mb <= 0:
@@ -395,6 +404,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             idle_cast_retry_min_interval_seconds=(
                 args.idle_cast_retry_min_interval_seconds
+            ),
+            idle_cast_liveness_timeout_seconds=(
+                args.idle_cast_liveness_timeout_seconds
             ),
             max_completed_cycles=args.max_completed_cycles,
             press_initial_delay_min_ms=(
