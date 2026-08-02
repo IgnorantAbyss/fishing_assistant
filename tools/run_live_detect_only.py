@@ -204,6 +204,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Key-down hold duration for each PRESS key (default: 40)",
     )
     parser.add_argument(
+        "--press-anomaly-evidence",
+        action="store_true",
+        help=(
+            "Save bounded PRESS ROI evidence only after an incomplete/timeout "
+            "anomaly (default: disabled)"
+        ),
+    )
+    parser.add_argument(
+        "--press-anomaly-buffer-frames",
+        type=int,
+        default=12,
+        help="Maximum in-memory PRESS ROI frames (default: 12)",
+    )
+    parser.add_argument(
+        "--press-anomaly-max-episodes",
+        type=int,
+        default=20,
+        help="Maximum anomaly episode directories per session (default: 20)",
+    )
+    parser.add_argument(
         "--panic-key", choices=("F12",), default="F12",
         help="Polling-only permanent session stop key for the action sink (default: F12)",
     )
@@ -249,6 +269,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--log-max-total-mb must be non-negative")
     if args.press_key_hold_ms <= 0:
         parser.error("--press-key-hold-ms must be positive")
+    if args.press_anomaly_buffer_frames < 6:
+        parser.error("--press-anomaly-buffer-frames must be at least 6")
+    if args.press_anomaly_max_episodes < 1:
+        parser.error("--press-anomaly-max-episodes must be positive")
     return args
 
 
@@ -386,6 +410,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.press_inter_key_gap_max_ms
             ),
             press_key_hold_ms=args.press_key_hold_ms,
+            press_anomaly_evidence=args.press_anomaly_evidence,
+            press_anomaly_buffer_frames=(
+                args.press_anomaly_buffer_frames
+            ),
+            press_anomaly_max_episodes=(
+                args.press_anomaly_max_episodes
+            ),
             runtime_profile=args.runtime_profile,
         ),
         emit_actions=args.emit_actions,

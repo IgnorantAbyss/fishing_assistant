@@ -151,6 +151,30 @@ def test_shadow_requires_press_state_and_active_activation() -> None:
     assert verifier.proposal_count == 1
 
 
+def test_high_confidence_incomplete_certificate_never_proposes_input() -> None:
+    verifier = PressShadowVerifier()
+    ready = _press(1, "D", ready=True, slot_capacity=10)
+    ready = PressObservation(
+        **{
+            **ready.__dict__,
+            "sequence_confidence": 0.9931,
+            "evidence": {
+                **ready.evidence,
+                "press_completeness_certificate": {
+                    "complete": False,
+                    "occupied_count": 7,
+                    "decoded_count": 1,
+                    "rejection_reasons": [
+                        "occupied_slots_not_fully_decoded"
+                    ],
+                },
+            },
+        }
+    )
+    assert _observe(verifier, ready) is None
+    assert verifier.proposal_count == 0
+
+
 def test_next_press_episode_can_propose_a_different_length_sequence() -> None:
     verifier = PressShadowVerifier()
     first = _press(1, "WWAA", ready=True)

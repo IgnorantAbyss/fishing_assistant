@@ -214,9 +214,15 @@ def test_two_matching_clean_frames_freeze_across_one_missing_glyph_frame() -> No
         clean=True,
         input_effect=False,
     )
+    confirmed = _with_arrow_phase(
+        _press(4, panel=True, sequence="WASD"),
+        clean=True,
+        input_effect=False,
+    )
     qualifier.qualify(_bundle(first), _activation())
     qualifier.qualify(_bundle(missing), _activation())
-    result = qualifier.qualify(_bundle(recovered), _activation())
+    qualifier.qualify(_bundle(recovered), _activation())
+    result = qualifier.qualify(_bundle(confirmed), _activation())
     assert result.bundle.press is not None
     assert result.bundle.press.sequence_ready is True
     assert result.bundle.press.sequence == tuple("WASD")

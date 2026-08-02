@@ -72,6 +72,10 @@ from src.fishing_v2.live.idle_recovery import (
     IdleRecoveryTracker,
 )
 from src.fishing_v2.live.press_shadow_verification import PressShadowVerifier
+from src.fishing_v2.live.press_anomaly_evidence import (
+    PressAnomalyEvidenceConfig,
+    PressAnomalyEvidenceRecorder,
+)
 from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionConfig,
     PressLiveEmissionTracker,
@@ -166,6 +170,9 @@ class LiveDetectOnlyConfig:
     idle_recovery_freshness_ms: float = 250.0
     idle_recovery_cast_cooldown_seconds: float = 0.5
     idle_cast_retry_min_interval_seconds: float = 3.0
+    press_anomaly_evidence: bool = False
+    press_anomaly_buffer_frames: int = 12
+    press_anomaly_max_episodes: int = 20
     # Programmatic callers retain the historical diagnostic behavior; the
     # public CLI explicitly defaults to Production.
     runtime_profile: str = "diagnostic"
@@ -199,6 +206,11 @@ class LiveDetectOnlyConfig:
             raise ValueError("PRESS inter-key gap range is inverted")
         if self.press_key_hold_ms <= 0:
             raise ValueError("press_key_hold_ms must be positive")
+        PressAnomalyEvidenceConfig(
+            enabled=self.press_anomaly_evidence,
+            buffer_frames=self.press_anomaly_buffer_frames,
+            max_episodes=self.press_anomaly_max_episodes,
+        )
         if self.hook_action_stall_timeout_seconds <= 0:
             raise ValueError(
                 "hook_action_stall_timeout_seconds must be positive"
@@ -606,6 +618,16 @@ class LiveDetectOnlyRuntime:
         self._press_shadow = PressShadowVerifier(
             diagnostics_enabled=self.evidence_recorder is not None
         )
+        self._press_anomaly_evidence = PressAnomalyEvidenceRecorder(
+            self.logger.path,
+            PressAnomalyEvidenceConfig(
+                enabled=self.live_config.press_anomaly_evidence,
+                buffer_frames=self.live_config.press_anomaly_buffer_frames,
+                max_episodes=self.live_config.press_anomaly_max_episodes,
+            ),
+        )
+        self._last_press_completeness_log_at = float("-inf")
+        self._press_abstained_episodes: set[int] = set()
         self._press_live_emission = PressLiveEmissionTracker(
             PressLiveEmissionConfig(
                 visual_ack_timeout_seconds=float(
@@ -1033,7 +1055,10 @@ class LiveDetectOnlyRuntime:
             hook_prompt_bounds,
         )
         self._hook_frame_assembler.update_prompt_context(frame)
-        if self.evidence_recorder is not None:
+        if (
+            self.evidence_recorder is not None
+            or self._press_anomaly_evidence.enabled
+        ):
             self._diagnostic_roi_bounds = {
                 "prompt": self.prompt_bundle.roi.pixel_bounds(width, height),
                 "hook": roi_config.pixel_roi("hook_bar", width, height),
@@ -1044,6 +1069,7 @@ class LiveDetectOnlyRuntime:
                     height,
                 ),
             }
+        if self.evidence_recorder is not None:
             prepare_video = getattr(self.evidence_recorder, "prepare_video", None)
             if callable(prepare_video):
                 try:
@@ -2574,13 +2600,35 @@ class LiveDetectOnlyRuntime:
                     )
                     press_roi_pixels = None
                     if (
-                        self.evidence_recorder is not None
+                        (
+                            self.evidence_recorder is not None
+                            or self._press_anomaly_evidence.enabled
+                        )
                         and not hook_critical_mode
                     ):
                         x1, y1, x2, y2 = (
                             self._diagnostic_roi_bounds["press"]
                         )
                         press_roi_pixels = frame[y1:y2, x1:x2]
+                    press_completeness = (
+                        qualified_press_for_shadow.evidence.get(
+                            "press_completeness_certificate"
+                        )
+                        if qualified_press_for_shadow is not None else None
+                    )
+                    if (
+                        isinstance(press_completeness, Mapping)
+                        and not bool(press_completeness.get("complete"))
+                        and self.fsm.state == RuntimeState.PRESS
+                        and elapsed - self._last_press_completeness_log_at >= 1.0
+                    ):
+                        self._last_press_completeness_log_at = elapsed
+                        self.logger.event("press_completeness_pending", {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "runtime_state": self.fsm.state.value,
+                            **dict(press_completeness),
+                        })
                     press_shadow_proposal = self._press_shadow.observe(
                         timestamp=elapsed,
                         frame_index=captured,
@@ -2611,6 +2659,18 @@ class LiveDetectOnlyRuntime:
                             and qualified_press_for_shadow.evidence.get(
                                 "panel_disappeared"
                             ) is True
+                        ),
+                    )
+                    self._press_anomaly_evidence.record(
+                        episode_index=max(1, self._press_shadow.episode_index),
+                        frame_index=captured,
+                        timestamp=elapsed,
+                        roi_pixels=press_roi_pixels,
+                        observation=press,
+                        certificate=(
+                            press_completeness
+                            if isinstance(press_completeness, Mapping)
+                            else None
                         ),
                     )
                     press_candidate_request = (
@@ -2694,6 +2754,11 @@ class LiveDetectOnlyRuntime:
                                         "selected_clean_frame"
                                     )
                                 ),
+                                **(
+                                    dict(press_completeness)
+                                    if isinstance(press_completeness, Mapping)
+                                    else {}
+                                ),
                                 "action_applied": False,
                             })
                             self.console.emit(
@@ -2719,6 +2784,32 @@ class LiveDetectOnlyRuntime:
                             "panel_disappeared"
                         ) is True
                     )
+                    press_episode_index = self._press_shadow.episode_index
+                    if (
+                        panel_disappeared
+                        and isinstance(press_completeness, Mapping)
+                        and not bool(press_completeness.get("complete"))
+                        and press_episode_index not in self._press_abstained_episodes
+                    ):
+                        self._press_abstained_episodes.add(press_episode_index)
+                        abstain_payload = {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "runtime_state": self.fsm.state.value,
+                            "episode_index": press_episode_index,
+                            "reason": "panel_disappeared_before_complete_certificate",
+                            **dict(press_completeness),
+                        }
+                        self.logger.event(
+                            "press_completeness_rejected", abstain_payload
+                        )
+                        self.logger.event(
+                            "press_sequence_abstained_incomplete", abstain_payload
+                        )
+                        self._press_anomaly_evidence.trigger(
+                            episode_index=press_episode_index,
+                            reason="press_sequence_abstained_incomplete",
+                        )
                     if pending_press is not None:
                         pending_cancel_reason = (
                             pending_press_cancellation_reason(
@@ -2961,6 +3052,19 @@ class LiveDetectOnlyRuntime:
                             self._press_shadow.record_visual_ack(
                                 timestamp=elapsed,
                                 frame_index=captured,
+                            )
+                        elif (
+                            press_event.event_type
+                            == "press_visual_ack_timeout"
+                        ):
+                            self._press_anomaly_evidence.trigger(
+                                episode_index=int(
+                                    press_event.payload.get(
+                                        "episode_index",
+                                        self._press_shadow.episode_index,
+                                    )
+                                ),
+                                reason="press_visual_ack_timeout",
                             )
                         self.logger.event(
                             press_event.event_type,
@@ -3609,11 +3713,19 @@ class LiveDetectOnlyRuntime:
                     if isinstance(selected_clean, int) and selected_clean != press_frozen_frame:
                         press_frozen_frame = selected_clean
                         if not self.enable_live_press_sequence:
+                            completeness_payload = qualified_press.evidence.get(
+                                "press_completeness_certificate", {}
+                            )
                             self.logger.event("press_sequence_frozen", {
                                 "timestamp": elapsed,
                                 "frame_index": captured,
                                 "selected_clean_frame": selected_clean,
                                 "sequence": list(qualified_press.sequence_candidate),
+                                **(
+                                    dict(completeness_payload)
+                                    if isinstance(completeness_payload, Mapping)
+                                    else {}
+                                ),
                             })
 
                     get_now = bool(qualified_get and qualified_get.detected)
@@ -4689,6 +4801,7 @@ class LiveDetectOnlyRuntime:
                         {"reason": evidence_failure_reason},
                     ],
                 }
+            press_anomaly_summary = self._press_anomaly_evidence.close()
             if self.live_config.runtime_profile == "production":
                 self.console.emit(
                     f"shutdown: result={result_name} cycles={completed_cycles}"
@@ -4814,6 +4927,7 @@ class LiveDetectOnlyRuntime:
                 **evidence_summary,
                 **hook_roi_clip_summary,
                 **press_shadow_summary,
+                **press_anomaly_summary,
                 "preflight_passed": self._preflight_passed,
                 "preflight_failure_reason": self._preflight_failure_reason,
                 "preflight_failure_message": self._preflight_failure_message,

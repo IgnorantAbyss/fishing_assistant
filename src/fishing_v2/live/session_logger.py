@@ -53,6 +53,8 @@ PRODUCTION_CRITICAL_EVENTS = frozenset({
     "action_partial",
     "action_failed",
     "press_emission_cancelled",
+    "press_completeness_rejected",
+    "press_sequence_abstained_incomplete",
     "panic_stop",
     "integrity_failure",
     "focus_lost",

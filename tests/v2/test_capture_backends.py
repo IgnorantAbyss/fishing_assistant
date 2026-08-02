@@ -145,6 +145,9 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert default.idle_recovery_freshness_ms == 250.0
     assert default.idle_recovery_cast_cooldown_seconds == 0.5
     assert default.idle_cast_retry_min_interval_seconds == 3.0
+    assert default.press_anomaly_evidence is False
+    assert default.press_anomaly_buffer_frames == 12
+    assert default.press_anomaly_max_episodes == 20
     selected = parse_args([
         "--window-title", "exact-title",
         "--capture-backend", WINDOWS_GRAPHICS_CAPTURE_BACKEND,
@@ -160,6 +163,9 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
         "--idle-recovery-cast-cooldown-seconds", "0.8",
         "--idle-cast-retry-min-interval-seconds", "4.0",
         "--max-completed-cycles", "3",
+        "--press-anomaly-evidence",
+        "--press-anomaly-buffer-frames", "18",
+        "--press-anomaly-max-episodes", "7",
     ])
     assert selected.capture_backend == WINDOWS_GRAPHICS_CAPTURE_BACKEND
     assert selected.allow_mss_fallback is True
@@ -174,6 +180,9 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert selected.idle_recovery_cast_cooldown_seconds == 0.8
     assert selected.idle_cast_retry_min_interval_seconds == 4.0
     assert selected.max_completed_cycles == 3
+    assert selected.press_anomaly_evidence is True
+    assert selected.press_anomaly_buffer_frames == 18
+    assert selected.press_anomaly_max_episodes == 7
     assert CAPTURE_BACKENDS == ("mss-region", "windows-graphics-capture")
     with pytest.raises(SystemExit):
         parse_args(["--window-title", "exact-title", "--capture-backend", "monitor"])

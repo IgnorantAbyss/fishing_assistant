@@ -407,6 +407,10 @@ class PressShadowVerifier:
         if not frozen and qualified is not None and qualified.sequence_ready:
             frozen = tuple(qualified.sequence_candidate)
         slot_capacity = self._slot_capacity(raw)
+        certificate = (
+            qualified.evidence.get("press_completeness_certificate")
+            if qualified is not None else None
+        )
         if frozen and not self._frozen_sequence:
             self._frozen_sequence = frozen
             self._frozen_timestamp = float(timestamp)
@@ -422,6 +426,11 @@ class PressShadowVerifier:
             rejection = "qualified_press_panel_absent"
         elif not qualified.sequence_ready or not frozen:
             rejection = qualification_reason or "stable_sequence_not_ready"
+        elif (
+            isinstance(certificate, Mapping)
+            and certificate.get("complete") is not True
+        ):
+            rejection = "press_completeness_certificate_incomplete"
         else:
             try:
                 validate_frozen_press_payload({
@@ -489,6 +498,10 @@ class PressShadowVerifier:
                     else "press_sequence_shadow_only_not_live_allowlisted"
                 ),
                 "action_sink_called": False,
+                "press_completeness_certificate": (
+                    dict(certificate)
+                    if isinstance(certificate, Mapping) else None
+                ),
             })
 
         if bool(

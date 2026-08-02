@@ -1725,8 +1725,8 @@ def test_live_press_deadline_emits_original_snapshot_after_detector_drift(
 
         def observe(self, _frame, context):
             self.calls += 1
-            sequence = "WSSAA" if self.calls <= 2 else "DASWW"
-            if self.calls == 3 and self.runtime is not None:
+            sequence = "WSSAA" if self.calls <= 3 else "DASWW"
+            if self.calls == 4 and self.runtime is not None:
                 # Reproduce the Live session's post-schedule lifecycle drift.
                 self.runtime._press_shadow._frozen_sequence = tuple("DASWW")
             boxes = [

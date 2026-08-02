@@ -290,6 +290,10 @@ class DetectorEvidenceQualifier:
                 "selected_clean_frame": aggregation.selected_clean_frame,
                 "panel_absent_frames": aggregation.absent_panel_frames,
                 "panel_disappeared": aggregation.panel_disappeared,
+                "press_completeness_certificate": (
+                    aggregation.completeness.payload()
+                    if aggregation.completeness is not None else None
+                ),
             },
         )
         return sanitized, EvidenceQualification(
