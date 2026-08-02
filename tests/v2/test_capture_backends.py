@@ -138,6 +138,7 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert default.evidence_mode == "minimal"
     assert default.evidence_video_fps == 10.0
     assert default.hook_critical_fps == 40.0
+    assert default.hook_action_stall_timeout_seconds == 3.0
     selected = parse_args([
         "--window-title", "exact-title",
         "--capture-backend", WINDOWS_GRAPHICS_CAPTURE_BACKEND,
@@ -145,6 +146,7 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
         "--evidence-mode", "diagnostic",
         "--evidence-video-fps", "12",
         "--hook-critical-fps", "36",
+        "--hook-action-stall-timeout-seconds", "4.5",
         "--max-completed-cycles", "3",
     ])
     assert selected.capture_backend == WINDOWS_GRAPHICS_CAPTURE_BACKEND
@@ -152,6 +154,7 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert selected.evidence_mode == "diagnostic"
     assert selected.evidence_video_fps == 12.0
     assert selected.hook_critical_fps == 36.0
+    assert selected.hook_action_stall_timeout_seconds == 4.5
     assert selected.max_completed_cycles == 3
     assert CAPTURE_BACKENDS == ("mss-region", "windows-graphics-capture")
     with pytest.raises(SystemExit):

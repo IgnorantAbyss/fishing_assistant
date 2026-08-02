@@ -196,6 +196,31 @@ class FishingFSM:
             raise ValueError("Recovery target must be a concrete runtime state")
         return self.force_state(state, timestamp, reason)
 
+    def rearm_hook_action_opportunity(self, timestamp: float) -> bool:
+        """Reopen only the current HOOK proposal latch before any emission."""
+        if self.state != RuntimeState.HOOK:
+            return False
+        if (RuntimeState.HOOK, ActionIntent.HOOK_ACTION) in self._actions_applied:
+            return False
+        self._pending_request = None
+        self._hook_intent_proposed = False
+        self._hook_episode_active = True
+        self._hook_episode_started_at = float(timestamp)
+        self._hook_absent_frames = 0
+        return True
+
+    def return_hook_stall_to_sync_required(
+        self,
+        timestamp: float,
+    ) -> FSMResult:
+        if self.state != RuntimeState.HOOK:
+            raise RuntimeError("Hook stall recovery requires HOOK state")
+        return self._transition(
+            RuntimeState.SYNC_REQUIRED,
+            timestamp,
+            "hook_action_stall_without_current_hook_evidence",
+        )
+
     def recover_missed_ready(
         self,
         timestamp: float,

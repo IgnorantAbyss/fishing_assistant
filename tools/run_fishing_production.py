@@ -16,6 +16,7 @@ PRODUCTION_DEFAULTS = (
     "--runtime-profile", "production",
     "--capture-backend", "mss-region",
     "--hook-critical-fps", "40",
+    "--hook-action-stall-timeout-seconds", "3.0",
     "--press-initial-delay-min-ms", "300",
     "--press-initial-delay-max-ms", "500",
     "--press-inter-key-gap-min-ms", "90",

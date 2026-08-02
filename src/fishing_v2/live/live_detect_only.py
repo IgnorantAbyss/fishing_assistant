@@ -61,6 +61,7 @@ from src.fishing_v2.live.hook_critical_loop import (
     HookROIFrame,
     LatestHookFrameSlot,
 )
+from src.fishing_v2.live.hook_action_lifecycle import HookActionLifecycle
 from src.fishing_v2.live.press_shadow_verification import PressShadowVerifier
 from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionConfig,
@@ -149,6 +150,7 @@ class LiveDetectOnlyConfig:
     press_inter_key_gap_min_ms: int = 90
     press_inter_key_gap_max_ms: int = 170
     press_key_hold_ms: int = 40
+    hook_action_stall_timeout_seconds: float = 3.0
     # Programmatic callers retain the historical diagnostic behavior; the
     # public CLI explicitly defaults to Production.
     runtime_profile: str = "diagnostic"
@@ -182,6 +184,10 @@ class LiveDetectOnlyConfig:
             raise ValueError("PRESS inter-key gap range is inverted")
         if self.press_key_hold_ms <= 0:
             raise ValueError("press_key_hold_ms must be positive")
+        if self.hook_action_stall_timeout_seconds <= 0:
+            raise ValueError(
+                "hook_action_stall_timeout_seconds must be positive"
+            )
 
 
 class WouldFireDeduplicator:
@@ -209,11 +215,23 @@ class WouldFireDeduplicator:
         self._recovered_cycles.add(self.cycle_id)
         return self.cycle_id
 
-    def reset_for_sync_recovery(self) -> None:
+    def reset_for_sync_recovery(self, *, preserve_cycle: bool = False) -> None:
         """Prevent pre-loss proposals from suppressing the recovered cycle."""
-        if self.has_cycle_activity or self.cycle_id in self._recovered_cycles:
+        if (
+            not preserve_cycle
+            and (self.has_cycle_activity or self.cycle_id in self._recovered_cycles)
+        ):
             self.cycle_id += 1
-        self._seen.clear()
+        if not preserve_cycle:
+            self._seen.clear()
+
+    def release(
+        self,
+        intent: ActionIntent,
+        identity_suffix: str | None = None,
+    ) -> None:
+        """Release a proposal that never reached action emission."""
+        self._seen.discard((self.cycle_id, intent, identity_suffix))
 
     def opportunity_id(
         self,
@@ -517,6 +535,9 @@ class LiveDetectOnlyRuntime:
         self._hook_frame_assembler: HookCriticalFrameAssembler | None = None
         self._latest_hook_frame = LatestHookFrameSlot()
         self._hook_episode_telemetry = HookEpisodeTelemetry()
+        self._hook_action_lifecycle = HookActionLifecycle(
+            self.live_config.hook_action_stall_timeout_seconds
+        )
         self._hook_roi_clip_samples: list[HookROIFrame] | None = (
             [] if self.evidence_recorder is not None else None
         )
@@ -1344,6 +1365,51 @@ class LiveDetectOnlyRuntime:
                 **summaries[-1],
             })
 
+    def _hook_recovery_safety_blockers(
+        self,
+        *,
+        foreground: bool | None,
+    ) -> tuple[str, ...]:
+        blockers: list[str] = []
+        sink_summary: Mapping[str, Any] = {}
+        if self.action_sink is not None:
+            summary = getattr(self.action_sink, "summary", None)
+            if callable(summary):
+                sink_summary = summary()
+        if sink_summary.get("panic_triggered"):
+            blockers.append("panic_triggered")
+        if foreground is not True:
+            blockers.append("foreground_not_confirmed")
+        integrity = sink_summary.get(
+            "integrity_diagnostics", self._action_preflight_diagnostics
+        )
+        if isinstance(integrity, Mapping) and integrity.get(
+            "suspected_integrity_mismatch"
+        ):
+            blockers.append("integrity_mismatch")
+        if (
+            self.action_sink is not None
+            and ActionIntent.HOOK_ACTION not in self.action_allowlist
+        ):
+            blockers.append("action_not_allowlisted")
+        return tuple(blockers)
+
+    def _hook_lifecycle_event_payload(
+        self,
+        *,
+        state_age_seconds: float,
+        hook_confidence: float | None,
+        hook_age_seconds: float | None,
+        recovery_reason: str,
+    ) -> dict[str, Any]:
+        return {
+            **self._hook_action_lifecycle.payload(),
+            "state_age_seconds": float(state_age_seconds),
+            "hook_evidence_confidence": hook_confidence,
+            "hook_evidence_age_seconds": hook_age_seconds,
+            "recovery_reason": recovery_reason,
+        }
+
     def _overlay_lines(
         self,
         *,
@@ -1742,6 +1808,11 @@ class LiveDetectOnlyRuntime:
                         recovered_cycle_id = (
                             self.deduplicator.begin_recovered_cycle()
                         )
+                        self._hook_action_lifecycle.begin_episode(
+                            cycle_id=recovered_cycle_id,
+                            timestamp=elapsed,
+                            start_hook_applied=False,
+                        )
                         recovered = self.fsm.recover_missed_ready(
                             elapsed,
                             reason=missed_ready_update.reason,
@@ -1877,6 +1948,110 @@ class LiveDetectOnlyRuntime:
                         )
                     processed += 1
                     request = last_result.fsm.action_request
+                    if (
+                        self.fsm.state == RuntimeState.HOOK
+                        and self._hook_action_lifecycle.episode is None
+                    ):
+                        self._hook_action_lifecycle.begin_episode(
+                            cycle_id=self.deduplicator.cycle_id,
+                            timestamp=self.fsm.state_since,
+                            start_hook_applied=False,
+                        )
+                    current_qualified_hook = (
+                        last_result.qualified.bundle.hook
+                    )
+                    current_hook_age_seconds = (
+                        max(
+                            0.0,
+                            elapsed - current_qualified_hook.timestamp,
+                        )
+                        if current_qualified_hook is not None else None
+                    )
+                    hook_stall = None
+                    if request.intent != ActionIntent.HOOK_ACTION:
+                        hook_stall = (
+                            self._hook_action_lifecycle.evaluate_stall(
+                                runtime_state=self.fsm.state,
+                                state_age_seconds=max(
+                                    0.0,
+                                    elapsed - self.fsm.state_since,
+                                ),
+                                qualified_hook_current=bool(
+                                    current_qualified_hook is not None
+                                    and current_qualified_hook.detected
+                                    and last_result.qualified.hook
+                                    .qualified_detected
+                                    and current_hook_age_seconds is not None
+                                    and current_hook_age_seconds
+                                    <= max(
+                                        0.25,
+                                        2.0
+                                        / self.live_config
+                                        .hook_critical_target_fps,
+                                    )
+                                ),
+                                hook_evidence_confidence=(
+                                    current_qualified_hook.confidence
+                                    if current_qualified_hook is not None
+                                    else None
+                                ),
+                                hook_evidence_age_seconds=(
+                                    current_hook_age_seconds
+                                ),
+                                safety_blockers=(
+                                    self._hook_recovery_safety_blockers(
+                                        foreground=foreground
+                                    )
+                                ),
+                            )
+                        )
+                    if (
+                        hook_stall is not None
+                        and hook_stall.action != "blocked"
+                    ):
+                        stall_payload = {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            **self._hook_lifecycle_event_payload(
+                                state_age_seconds=(
+                                    hook_stall.state_age_seconds
+                                ),
+                                hook_confidence=(
+                                    hook_stall.hook_evidence_confidence
+                                ),
+                                hook_age_seconds=(
+                                    hook_stall.hook_evidence_age_seconds
+                                ),
+                                recovery_reason=hook_stall.reason,
+                            ),
+                        }
+                        self.logger.event(
+                            "hook_action_stall_watchdog_triggered",
+                            stall_payload,
+                        )
+                        if hook_stall.action == "rearm":
+                            if self.fsm.rearm_hook_action_opportunity(
+                                elapsed
+                            ):
+                                self.deduplicator.release(
+                                    ActionIntent.HOOK_ACTION
+                                )
+                                self.logger.event(
+                                    "hook_action_rearmed_by_watchdog",
+                                    stall_payload,
+                                )
+                        elif hook_stall.action == "sync_required":
+                            stalled = (
+                                self.fsm
+                                .return_hook_stall_to_sync_required(
+                                    elapsed
+                                )
+                            )
+                            transition_results.append(stalled)
+                            self.logger.event(
+                                "hook_stall_returned_to_sync_required",
+                                stall_payload,
+                            )
                     qualified_press_for_shadow = (
                         last_result.qualified.bundle.press
                     )
@@ -2385,6 +2560,12 @@ class LiveDetectOnlyRuntime:
                     hook_geometry_ready_at: float | None = None
                     safety_completed_at: float | None = None
                     if request.intent == ActionIntent.HOOK_ACTION:
+                        self._hook_action_lifecycle.begin_episode(
+                            cycle_id=self.deduplicator.cycle_id,
+                            timestamp=self.fsm.state_since,
+                            start_hook_applied=False,
+                        )
+                        self._hook_action_lifecycle.mark_opportunity_created()
                         hook_geometry_ready_at = self.clock() - started
                         safety_completed_at = self.clock() - started
                         self.deduplicator.record_raw_proposal(request)
@@ -2441,6 +2622,7 @@ class LiveDetectOnlyRuntime:
                             hook_fast_would_fire is not None
                             and self.action_sink is not None
                         ):
+                            self._hook_action_lifecycle.mark_action_started()
                             action_id = str(
                                 hook_fast_would_fire[
                                     "deduplication_key"
@@ -2467,6 +2649,12 @@ class LiveDetectOnlyRuntime:
                                         )
                                     ),
                                 ),
+                            )
+                            self._hook_action_lifecycle.mark_emission_result(
+                                emission_started=(
+                                    hook_fast_execution.started_at is not None
+                                ),
+                                applied=hook_fast_execution.applied,
                             )
                             if hook_fast_execution.applied:
                                 self.console.emit("HOOK_ACTION applied")
@@ -2686,9 +2874,18 @@ class LiveDetectOnlyRuntime:
                         and not processing_from_sync_required
                     )
                     if entered_sync_required:
+                        preserve_hook_cycle = (
+                            self._hook_action_lifecycle.can_rearm_after_sync()
+                        )
                         self.controller.reset_for_sync_recovery(elapsed)
                         self.recovery_synchronizer.reset(started_at=elapsed)
-                        self.deduplicator.reset_for_sync_recovery()
+                        self.deduplicator.reset_for_sync_recovery(
+                            preserve_cycle=preserve_hook_cycle
+                        )
+                        if preserve_hook_cycle:
+                            self.deduplicator.release(
+                                ActionIntent.HOOK_ACTION
+                            )
                         self.logger.event("sync_recovery_started", {
                             "timestamp": elapsed,
                             "frame_index": captured,
@@ -2731,6 +2928,58 @@ class LiveDetectOnlyRuntime:
                                 "action_intent": ActionIntent.NONE.value,
                                 "action_applied": False,
                             })
+                            if (
+                                recovered.previous_state
+                                == RuntimeState.SYNC_REQUIRED
+                                and recovered.next_state == RuntimeState.HOOK
+                                and recovery.reason
+                                == "qualified_hook_sync_recovery"
+                            ):
+                                recovery_blockers = (
+                                    self._hook_recovery_safety_blockers(
+                                        foreground=foreground
+                                    )
+                                )
+                                if (
+                                    not recovery_blockers
+                                    and self._hook_action_lifecycle.rearm_after_sync()
+                                    and self.fsm.rearm_hook_action_opportunity(
+                                        elapsed
+                                    )
+                                ):
+                                    self.deduplicator.release(
+                                        ActionIntent.HOOK_ACTION
+                                    )
+                                    recovered_hook = (
+                                        last_result.qualified.bundle.hook
+                                    )
+                                    hook_age = (
+                                        max(
+                                            0.0,
+                                            elapsed
+                                            - recovered_hook.timestamp,
+                                        )
+                                        if recovered_hook is not None else None
+                                    )
+                                    self.logger.event(
+                                        "hook_action_rearmed_after_sync_recovery",
+                                        {
+                                            "timestamp": elapsed,
+                                            "frame_index": captured,
+                                            **self._hook_lifecycle_event_payload(
+                                                state_age_seconds=0.0,
+                                                hook_confidence=(
+                                                    recovered_hook.confidence
+                                                    if recovered_hook is not None
+                                                    else recovery.confidence
+                                                ),
+                                                hook_age_seconds=hook_age,
+                                                recovery_reason=(
+                                                    recovery.reason
+                                                ),
+                                            ),
+                                        },
+                                    )
 
                     activation = last_result.next_activation
                     if self.fsm.state != last_result.fsm.next_state:
@@ -2948,6 +3197,7 @@ class LiveDetectOnlyRuntime:
                             }
                         ):
                             self.deduplicator.finish_cycle()
+                            self._hook_action_lifecycle.finish_episode()
                             completed_cycles += 1
                             if self.evidence_recorder is not None:
                                 self.logger.event("diagnostic_cycle_completed", {
@@ -3507,6 +3757,12 @@ class LiveDetectOnlyRuntime:
                                     result_name = "safe_stop_action_commit_failure"
                                     stop_after_action_commit_failure = True
                                 else:
+                                    if request.intent == ActionIntent.START_HOOK:
+                                        self._hook_action_lifecycle.begin_episode(
+                                            cycle_id=self.deduplicator.cycle_id,
+                                            timestamp=elapsed,
+                                            start_hook_applied=True,
+                                        )
                                     if commit.previous_state != commit.next_state:
                                         self._log_transition(
                                             timestamp=elapsed,

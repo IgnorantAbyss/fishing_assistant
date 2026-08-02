@@ -36,12 +36,14 @@ from src.fishing_v2.live.session_logger import (
 )
 from src.fishing_v2.live.windows_action_sink import ActionIntegrityPreflightError
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
+from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle
 from src.fishing_v2.perception.prototype_prompt_observer import (
     PrototypePromptModel,
     extract_prompt_feature,
     validate_prompt_input,
 )
+from src.fishing_v2.runtime.runtime_controller import ActionExecutionMode
 from src.screen_capture import mss_bgra_to_bgr
 
 
@@ -131,6 +133,7 @@ def _runtime(
     press_initial_delay_max_ms: int = 500,
     press_inter_key_gap_min_ms: int = 90,
     press_inter_key_gap_max_ms: int = 170,
+    hook_action_stall_timeout_seconds: float = 3.0,
     runtime_profile: str = "diagnostic",
     session_logger=None,
 ) -> LiveDetectOnlyRuntime:
@@ -153,6 +156,9 @@ def _runtime(
             press_initial_delay_max_ms=press_initial_delay_max_ms,
             press_inter_key_gap_min_ms=press_inter_key_gap_min_ms,
             press_inter_key_gap_max_ms=press_inter_key_gap_max_ms,
+            hook_action_stall_timeout_seconds=(
+                hook_action_stall_timeout_seconds
+            ),
             runtime_profile=runtime_profile,
         ),
         emit_actions=emit_actions,
@@ -1078,6 +1084,297 @@ def test_live_explicit_hook_geometry_gap_emits_and_commits_once(
     assert summary["raw_action_proposals"] == {"HOOK_ACTION": 1}
     assert summary["unique_would_fire"] == {"WOULD_HOOK_ACTION": 1}
     assert summary["actions_applied"] == 1
+
+
+def test_live_sync_required_hook_recovery_dispatches_one_hook_action(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class PersistentQualifiedHookDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                True,
+                0.90,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.75,
+                evidence={
+                    "matched_features": ["hook_bar_rect", "bar_fill"],
+                    "fallback_ratio_trustworthy": True,
+                },
+            )
+
+    class CompleteHookSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            count = len(self.calls)
+            return {
+                "panic_triggered": False,
+                "attempted_action_counts": {"HOOK_ACTION": count},
+                "applied_action_counts": {"HOOK_ACTION": count},
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteHookSink(kwargs)
+        created.append(sink)
+        return sink
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(
+            supported_frame,
+            diagnostics={
+                "hwnd": 4242,
+                "window_title": "test-window",
+                "process": "BlackDesert64",
+                "process_id": 99,
+                "client_size": [2560, 1440],
+            },
+        ),
+        FakeClock(),
+        duration_seconds=0.5,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="HOOK_ACTION",
+        action_sink_factory=factory,
+    )
+    runtime.hook_detector = PersistentQualifiedHookDetector()
+    runtime.fsm.force_state(
+        RuntimeState.SYNC_REQUIRED,
+        0.0,
+        "persistent_conflicting_or_illegal_evidence",
+    )
+    runtime._hook_action_lifecycle.begin_episode(
+        cycle_id=runtime.deduplicator.cycle_id,
+        timestamp=0.0,
+        start_hook_applied=True,
+    )
+
+    summary = runtime.run(max_frames=8)
+
+    assert len(created) == 1
+    assert [
+        request.intent for request, _ in created[0].calls
+    ] == [ActionIntent.HOOK_ACTION]
+    assert runtime.fsm.state == RuntimeState.RESULT_PENDING
+    assert summary["unique_would_fire"] == {"WOULD_HOOK_ACTION": 1}
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert sum(
+        row["event_type"]
+        == "hook_action_rearmed_after_sync_recovery"
+        for row in events
+    ) == 1
+    assert sum(
+        row["event_type"] == "WOULD_HOOK_ACTION"
+        for row in events
+    ) == 1
+    assert summary["raw_action_proposals"] == {"HOOK_ACTION": 1}
+    assert summary["actions_applied"] == 1
+
+
+def test_live_hook_stall_watchdog_rearms_once_with_current_evidence(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class PersistentQualifiedHookDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                True,
+                0.90,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.75,
+                evidence={
+                    "matched_features": ["hook_bar_rect", "bar_fill"],
+                    "fallback_ratio_trustworthy": True,
+                },
+            )
+
+    class CompleteHookSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            return {
+                "panic_triggered": False,
+                "attempted_action_counts": {
+                    "HOOK_ACTION": len(self.calls),
+                },
+                "applied_action_counts": {
+                    "HOOK_ACTION": len(self.calls),
+                },
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteHookSink(kwargs)
+        created.append(sink)
+        return sink
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(
+            supported_frame,
+            diagnostics={
+                "hwnd": 4242,
+                "window_title": "test-window",
+                "process": "BlackDesert64",
+                "process_id": 99,
+                "client_size": [2560, 1440],
+            },
+        ),
+        FakeClock(),
+        duration_seconds=0.5,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="HOOK_ACTION",
+        action_sink_factory=factory,
+        hook_action_stall_timeout_seconds=3.0,
+    )
+    runtime.hook_detector = PersistentQualifiedHookDetector()
+    runtime.fsm.force_state(RuntimeState.HOOK, -3.1, "stalled_hook")
+    stale_proposal = runtime.controller.process(
+        ObservationBundle(
+            1,
+            -3.0,
+            hook=HookObservation(
+                True,
+                0.90,
+                1,
+                -3.0,
+                fill_ratio=0.75,
+                evidence={
+                    "matched_features": ["hook_bar_rect", "bar_fill"],
+                    "fallback_ratio_trustworthy": True,
+                },
+            ),
+        ),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert stale_proposal.fsm.action_request.intent == (
+        ActionIntent.HOOK_ACTION
+    )
+    runtime.controller.discard_external_proposal()
+    runtime._hook_action_lifecycle.begin_episode(
+        cycle_id=runtime.deduplicator.cycle_id,
+        timestamp=-3.1,
+        start_hook_applied=True,
+    )
+    runtime._hook_action_lifecycle.mark_opportunity_created()
+
+    summary = runtime.run(max_frames=8)
+
+    assert len(created) == 1
+    assert len(created[0].calls) == 1
+    assert created[0].calls[0][0].intent == ActionIntent.HOOK_ACTION
+    assert summary["actions_applied"] == 1
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert sum(
+        row["event_type"]
+        == "hook_action_stall_watchdog_triggered"
+        for row in events
+    ) == 1
+    assert sum(
+        row["event_type"] == "hook_action_rearmed_by_watchdog"
+        for row in events
+    ) == 1
+
+
+def test_live_hook_stall_without_current_evidence_returns_to_sync_required(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        duration_seconds=0.2,
+        hook_action_stall_timeout_seconds=3.0,
+    )
+    runtime.fsm.force_state(RuntimeState.HOOK, -3.1, "stalled_hook")
+    runtime._hook_action_lifecycle.begin_episode(
+        cycle_id=runtime.deduplicator.cycle_id,
+        timestamp=-3.1,
+        start_hook_applied=True,
+    )
+
+    summary = runtime.run(max_frames=3)
+
+    assert runtime.fsm.state == RuntimeState.SYNC_REQUIRED
+    assert summary["actions_applied"] == 0
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    returned = [
+        row for row in events
+        if row["event_type"]
+        == "hook_stall_returned_to_sync_required"
+    ]
+    assert len(returned) == 1
+    assert returned[0]["recovery_reason"] == (
+        "hook_action_stall_without_current_hook_evidence"
+    )
 
 
 def test_live_press_shadow_proposes_once_without_calling_action_sink(

@@ -116,8 +116,12 @@ def test_cli_and_launcher_define_bounded_production_defaults() -> None:
     assert args.log_backup_count == 5
     assert args.log_retention_days == 14
     assert args.log_max_total_mb == 100.0
+    assert args.hook_action_stall_timeout_seconds == 3.0
     defaults = list(PRODUCTION_DEFAULTS)
     assert defaults[defaults.index("--hook-critical-fps") + 1] == "40"
+    assert defaults[
+        defaults.index("--hook-action-stall-timeout-seconds") + 1
+    ] == "3.0"
     assert defaults[defaults.index("--press-key-hold-ms") + 1] == "40"
     assert defaults[defaults.index("--duration-seconds") + 1] == "0"
     assert defaults[defaults.index("--max-completed-cycles") + 1] == "0"

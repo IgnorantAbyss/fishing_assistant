@@ -124,6 +124,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "(minimum 30, default: 40)"
         ),
     )
+    parser.add_argument(
+        "--hook-action-stall-timeout-seconds",
+        type=float,
+        default=3.0,
+        help=(
+            "Re-evaluate or resynchronize an unconsumed HOOK action "
+            "opportunity after this state age (default: 3.0)"
+        ),
+    )
     parser.add_argument("--emit-actions", type=_strict_bool, default=False)
     parser.add_argument(
         "--action-sink", choices=ACTION_SINKS, default=ACTION_SINK_NONE,
@@ -198,6 +207,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("invalid PRESS inter-key gap range")
     if args.duration_seconds < 0:
         parser.error("--duration-seconds must be non-negative")
+    if args.hook_action_stall_timeout_seconds <= 0:
+        parser.error("--hook-action-stall-timeout-seconds must be positive")
     if args.max_completed_cycles is not None and args.max_completed_cycles < 0:
         parser.error("--max-completed-cycles must be non-negative")
     if args.log_repeat_window_seconds < 0 or args.log_max_file_mb <= 0:
@@ -312,6 +323,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             evidence_mode=args.evidence_mode,
             evidence_video_fps=args.evidence_video_fps,
             hook_critical_target_fps=args.hook_critical_fps,
+            hook_action_stall_timeout_seconds=(
+                args.hook_action_stall_timeout_seconds
+            ),
             max_completed_cycles=args.max_completed_cycles,
             press_initial_delay_min_ms=(
                 args.press_initial_delay_min_ms
