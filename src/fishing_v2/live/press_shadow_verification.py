@@ -137,6 +137,10 @@ class PressShadowVerifier:
     def frozen_sequence(self) -> tuple[str, ...]:
         return self._frozen_sequence
 
+    def cancel_for_authoritative_idle_recovery(self) -> None:
+        if self._active:
+            self._finish_episode("authoritative_idle_recovery")
+
     @staticmethod
     def _normalize(sequence: Any) -> tuple[str, ...]:
         if not isinstance(sequence, (list, tuple)):

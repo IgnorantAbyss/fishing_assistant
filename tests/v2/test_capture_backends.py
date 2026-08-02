@@ -139,6 +139,12 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert default.evidence_video_fps == 10.0
     assert default.hook_critical_fps == 40.0
     assert default.hook_action_stall_timeout_seconds == 3.0
+    assert default.idle_recovery_window_size == 5
+    assert default.idle_recovery_required_count == 4
+    assert default.idle_recovery_min_window_seconds == 0.5
+    assert default.idle_recovery_freshness_ms == 250.0
+    assert default.idle_recovery_cast_cooldown_seconds == 0.5
+    assert default.idle_cast_retry_min_interval_seconds == 3.0
     selected = parse_args([
         "--window-title", "exact-title",
         "--capture-backend", WINDOWS_GRAPHICS_CAPTURE_BACKEND,
@@ -147,6 +153,12 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
         "--evidence-video-fps", "12",
         "--hook-critical-fps", "36",
         "--hook-action-stall-timeout-seconds", "4.5",
+        "--idle-recovery-window-size", "7",
+        "--idle-recovery-required-count", "6",
+        "--idle-recovery-min-window-seconds", "0.75",
+        "--idle-recovery-freshness-ms", "300",
+        "--idle-recovery-cast-cooldown-seconds", "0.8",
+        "--idle-cast-retry-min-interval-seconds", "4.0",
         "--max-completed-cycles", "3",
     ])
     assert selected.capture_backend == WINDOWS_GRAPHICS_CAPTURE_BACKEND
@@ -155,6 +167,12 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert selected.evidence_video_fps == 12.0
     assert selected.hook_critical_fps == 36.0
     assert selected.hook_action_stall_timeout_seconds == 4.5
+    assert selected.idle_recovery_window_size == 7
+    assert selected.idle_recovery_required_count == 6
+    assert selected.idle_recovery_min_window_seconds == 0.75
+    assert selected.idle_recovery_freshness_ms == 300.0
+    assert selected.idle_recovery_cast_cooldown_seconds == 0.8
+    assert selected.idle_cast_retry_min_interval_seconds == 4.0
     assert selected.max_completed_cycles == 3
     assert CAPTURE_BACKENDS == ("mss-region", "windows-graphics-capture")
     with pytest.raises(SystemExit):

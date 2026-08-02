@@ -62,6 +62,15 @@ from src.fishing_v2.live.hook_critical_loop import (
     LatestHookFrameSlot,
 )
 from src.fishing_v2.live.hook_action_lifecycle import HookActionLifecycle
+from src.fishing_v2.live.idle_recovery import (
+    CAST_SOURCE_POST_CYCLE,
+    CAST_SOURCE_RECOVERY,
+    CAST_SOURCE_STARTUP,
+    CastArmingLifecycle,
+    IdleRecoveryCertificate,
+    IdleRecoveryConfig,
+    IdleRecoveryTracker,
+)
 from src.fishing_v2.live.press_shadow_verification import PressShadowVerifier
 from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionConfig,
@@ -151,6 +160,12 @@ class LiveDetectOnlyConfig:
     press_inter_key_gap_max_ms: int = 170
     press_key_hold_ms: int = 40
     hook_action_stall_timeout_seconds: float = 3.0
+    idle_recovery_window_size: int = 5
+    idle_recovery_required_count: int = 4
+    idle_recovery_min_window_seconds: float = 0.5
+    idle_recovery_freshness_ms: float = 250.0
+    idle_recovery_cast_cooldown_seconds: float = 0.5
+    idle_cast_retry_min_interval_seconds: float = 3.0
     # Programmatic callers retain the historical diagnostic behavior; the
     # public CLI explicitly defaults to Production.
     runtime_profile: str = "diagnostic"
@@ -188,6 +203,20 @@ class LiveDetectOnlyConfig:
             raise ValueError(
                 "hook_action_stall_timeout_seconds must be positive"
             )
+        IdleRecoveryConfig(
+            window_size=self.idle_recovery_window_size,
+            required_count=self.idle_recovery_required_count,
+            min_window_seconds=(
+                self.idle_recovery_min_window_seconds
+            ),
+            freshness_ms=self.idle_recovery_freshness_ms,
+            cast_cooldown_seconds=(
+                self.idle_recovery_cast_cooldown_seconds
+            ),
+            cast_retry_min_interval_seconds=(
+                self.idle_cast_retry_min_interval_seconds
+            ),
+        )
 
 
 class WouldFireDeduplicator:
@@ -538,6 +567,33 @@ class LiveDetectOnlyRuntime:
         self._hook_action_lifecycle = HookActionLifecycle(
             self.live_config.hook_action_stall_timeout_seconds
         )
+        idle_recovery_config = IdleRecoveryConfig(
+            window_size=self.live_config.idle_recovery_window_size,
+            required_count=(
+                self.live_config.idle_recovery_required_count
+            ),
+            min_window_seconds=(
+                self.live_config.idle_recovery_min_window_seconds
+            ),
+            freshness_ms=self.live_config.idle_recovery_freshness_ms,
+            cast_cooldown_seconds=(
+                self.live_config.idle_recovery_cast_cooldown_seconds
+            ),
+            cast_retry_min_interval_seconds=(
+                self.live_config.idle_cast_retry_min_interval_seconds
+            ),
+        )
+        self._idle_recovery = IdleRecoveryTracker(idle_recovery_config)
+        self._cast_arming = CastArmingLifecycle(
+            retry_min_interval_seconds=(
+                idle_recovery_config.cast_retry_min_interval_seconds
+            )
+        )
+        self._startup_idle_handled = False
+        self._runtime_cycle_started = False
+        self._idle_recovery_sequence = 0
+        self._idle_candidate_origin_state: RuntimeState | None = None
+        self._action_emission_in_progress = False
         self._hook_roi_clip_samples: list[HookROIFrame] | None = (
             [] if self.evidence_recorder is not None else None
         )
@@ -690,6 +746,9 @@ class LiveDetectOnlyRuntime:
         foreground: bool | None,
         raw_intent: ActionIntent,
         safety_reason: str,
+        source_type: str | None = None,
+        idle_certificate_valid: bool = False,
+        cast_arm_ready: bool = False,
     ) -> tuple[str, ...]:
         blockers: list[CastBlocker] = []
         if runtime_state != RuntimeState.IDLE:
@@ -699,6 +758,8 @@ class LiveDetectOnlyRuntime:
         if (
             runtime_state == RuntimeState.IDLE
             and prompt_kind == PromptObservationKind.IDLE_CAST
+            and source_type
+            not in {CAST_SOURCE_STARTUP, CAST_SOURCE_RECOVERY}
             and status.stable_idle_frames
             < self.cast_clearance.config.stable_idle_frames_required
         ):
@@ -713,7 +774,11 @@ class LiveDetectOnlyRuntime:
         ):
             blockers.append(CastBlocker.OPPORTUNITY_ALREADY_CONSUMED)
 
-        if not status.clearance_available:
+        requires_post_cycle_clearance = source_type not in {
+            CAST_SOURCE_STARTUP,
+            CAST_SOURCE_RECOVERY,
+        }
+        if requires_post_cycle_clearance and not status.clearance_available:
             freshness_ms = (
                 self.cast_clearance.config.clearance_freshness_seconds * 1000.0
             )
@@ -756,6 +821,14 @@ class LiveDetectOnlyRuntime:
                 blockers.append(CastBlocker.RESULT_BANNER_ABSENCE_STALE)
             if not status.clearance_consumed and not status.clearance_expired:
                 blockers.append(CastBlocker.POST_CYCLE_CLEARANCE_MISSING)
+        if source_type in {
+            CAST_SOURCE_STARTUP,
+            CAST_SOURCE_RECOVERY,
+        }:
+            if not idle_certificate_valid:
+                blockers.append(CastBlocker.IDLE_CERTIFICATE_MISSING)
+            elif not cast_arm_ready:
+                blockers.append(CastBlocker.CAST_COOLDOWN_ACTIVE)
 
         sink_summary = getattr(self.action_sink, "summary", None)
         panic_latched = bool(
@@ -1410,6 +1483,179 @@ class LiveDetectOnlyRuntime:
             "recovery_reason": recovery_reason,
         }
 
+    def _panic_latched(self) -> bool:
+        if self.action_sink is None:
+            return False
+        summary = getattr(self.action_sink, "summary", None)
+        return bool(
+            callable(summary)
+            and summary().get("panic_triggered", False)
+        )
+
+    def _idle_conflicting_evidence(
+        self,
+        result: Any,
+        *,
+        timestamp: float,
+    ) -> bool:
+        freshness_seconds = (
+            self.live_config.idle_recovery_freshness_ms / 1000.0
+        )
+        if result.fsm.action_request.intent in {
+            ActionIntent.HOOK_ACTION,
+            ActionIntent.PRESS_SEQUENCE,
+            ActionIntent.COLLECT,
+        }:
+            return True
+        bundle = result.qualified.bundle
+        for name in ("hook", "press", "get"):
+            observation = getattr(bundle, name)
+            qualification = getattr(result.qualified, name)
+            if (
+                observation is not None
+                and observation.detected
+                and qualification.qualified_detected
+                and max(0.0, timestamp - observation.timestamp)
+                <= freshness_seconds
+            ):
+                return True
+        banner = bundle.result_banner
+        return bool(
+            banner is not None
+            and banner.detected
+            and max(0.0, timestamp - banner.timestamp)
+            <= freshness_seconds
+        )
+
+    def _idle_certificate_payload(
+        self,
+        certificate: IdleRecoveryCertificate,
+        *,
+        timestamp: float,
+    ) -> dict[str, Any]:
+        return {
+            "prompt_certificate": certificate.payload(),
+            "prompt_certificate_summary": (
+                self._idle_recovery.summary(timestamp)
+            ),
+        }
+
+    def _request_idle_cast_arm(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        certificate: IdleRecoveryCertificate,
+        timestamp: float,
+        frame_index: int,
+        cooldown_seconds: float,
+        previous_state: RuntimeState,
+    ) -> None:
+        record, events = self._cast_arming.request_cast_opportunity(
+            source_type=source_type,
+            source_id=source_id,
+            physical_idle_id=(
+                self._cast_arming.recovery_physical_idle_id(
+                    certificate.physical_idle_id
+                )
+                if source_type == CAST_SOURCE_RECOVERY
+                else certificate.physical_idle_id
+            ),
+            cycle_id=self.deduplicator.cycle_id,
+            timestamp=timestamp,
+            cooldown_seconds=cooldown_seconds,
+        )
+        for event in events:
+            self.logger.event(event.event_type, {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "previous_state": previous_state.value,
+                **self._idle_certificate_payload(
+                    certificate, timestamp=timestamp
+                ),
+                **dict(event.payload),
+            })
+        if record is not None and cooldown_seconds > 0:
+            self.logger.event(
+                "idle_recovery_cast_cooldown_started",
+                {
+                    "timestamp": timestamp,
+                    "frame_index": frame_index,
+                    "previous_state": previous_state.value,
+                    **record.payload(timestamp),
+                    **self._idle_certificate_payload(
+                        certificate, timestamp=timestamp
+                    ),
+                },
+            )
+        if record is not None:
+            event_type = (
+                "startup_idle_cast_armed"
+                if source_type == CAST_SOURCE_STARTUP
+                else "idle_recovery_cast_rearmed"
+            )
+            self.logger.event(event_type, {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "previous_state": previous_state.value,
+                **record.payload(timestamp),
+                **self._idle_certificate_payload(
+                    certificate, timestamp=timestamp
+                ),
+            })
+
+    def _clear_stale_cycle_for_idle_recovery(
+        self,
+        *,
+        timestamp: float,
+        frame_index: int,
+    ) -> None:
+        cancelled_cast_arm = self._cast_arming.cancel(
+            "authoritative_idle_prompt_recovery"
+        )
+        if cancelled_cast_arm is not None:
+            self.logger.event("cast_arming_cancelled", {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "runtime_state": self.fsm.state.value,
+                **cancelled_cast_arm.payload(timestamp),
+            })
+        self._hook_action_lifecycle.finish_episode()
+        for event in self._press_live_emission.cancel_pending(
+            timestamp=timestamp,
+            reason="authoritative_idle_prompt_recovery",
+        ):
+            self.logger.event(event.event_type, {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "runtime_state": self.fsm.state.value,
+                **dict(event.payload),
+            })
+        self._press_shadow.cancel_for_authoritative_idle_recovery()
+        self._log_collect_events(
+            self.collect_retry.terminate_for_authoritative_idle_recovery(
+                timestamp
+            ),
+            timestamp=timestamp,
+            frame_index=frame_index,
+            runtime_state=self.fsm.state.value,
+        )
+        self.cast_clearance.reset_for_authoritative_idle_recovery()
+        self._log_cast_events(
+            self.cast_opportunity.cancel(
+                timestamp=timestamp,
+                reason="authoritative_idle_prompt_recovery",
+            ),
+            timestamp=timestamp,
+            frame_index=frame_index,
+            runtime_state=self.fsm.state.value,
+        )
+        self.schedule.reset()
+        self.missed_ready_recovery.reset()
+        self.recovery_synchronizer.reset(started_at=timestamp)
+        self.controller.reset_action_history_for_authoritative_idle()
+        self.deduplicator.begin_recovered_cycle()
+
     def _overlay_lines(
         self,
         *,
@@ -1772,6 +2018,52 @@ class LiveDetectOnlyRuntime:
                         self.result_banner_observer.observe(frame, context)
                         if run_result_banner else None
                     )
+                    active_idle_arm = self._cast_arming.active
+                    raw_idle_conflict = bool(
+                        (hook is not None and hook.detected)
+                        or (press is not None and press.detected)
+                        or (get is not None and get.detected)
+                        or (
+                            result_banner is not None
+                            and result_banner.detected
+                        )
+                    )
+                    certified_idle = self._idle_recovery.current(
+                        timestamp=elapsed,
+                        conflicting_evidence=raw_idle_conflict,
+                        action_emission_in_progress=(
+                            self._action_emission_in_progress
+                        ),
+                        key_currently_down=False,
+                        panic_triggered=self._panic_latched(),
+                    )
+                    if (
+                        get is None
+                        and self.fsm.state == RuntimeState.IDLE
+                        and certified_idle is not None
+                        and active_idle_arm is not None
+                        and active_idle_arm.source_type
+                        in {CAST_SOURCE_STARTUP, CAST_SOURCE_RECOVERY}
+                    ):
+                        # This explicit absence is certified by stable, fresh
+                        # IDLE_CAST observations. It is never inferred merely
+                        # because the GET detector is OFF.
+                        get = GetObservation(
+                            detected=False,
+                            confidence=1.0,
+                            frame_index=captured,
+                            timestamp=elapsed,
+                            source="idle_recovery_certificate",
+                            evidence={
+                                "certified_absence": True,
+                                "certificate_id": (
+                                    certified_idle.certificate_id
+                                ),
+                                "physical_idle_id": (
+                                    certified_idle.physical_idle_id
+                                ),
+                            },
+                        )
                     if post_collect_banner_due:
                         next_result_banner_due = (
                             elapsed + 1.0 / self._post_collect_banner_fps
@@ -1801,6 +2093,7 @@ class LiveDetectOnlyRuntime:
                     sync_reason = None
                     processing_from_sync_required = self.fsm.state == RuntimeState.SYNC_REQUIRED
                     transition_results: list[Any] = []
+                    authoritative_idle_applied_this_frame = False
                     if (
                         missed_ready_update is not None
                         and missed_ready_update.recovered
@@ -1817,6 +2110,7 @@ class LiveDetectOnlyRuntime:
                             elapsed,
                             reason=missed_ready_update.reason,
                         )
+                        self._runtime_cycle_started = True
                         transition_results.append(recovered)
                         missed_ready_recovery_count += 1
                         next_prompt_due = min(
@@ -1852,6 +2146,8 @@ class LiveDetectOnlyRuntime:
                             transition_results.append(
                                 self.fsm.force_state(sync.state, elapsed, sync.reason)
                             )
+                            if sync.state != RuntimeState.IDLE:
+                                self._runtime_cycle_started = True
                         elif sync.state == RuntimeState.SYNC_REQUIRED:
                             transition_results.append(self.fsm.force_state(
                                 RuntimeState.SYNC_REQUIRED, elapsed, sync.reason
@@ -1946,6 +2242,8 @@ class LiveDetectOnlyRuntime:
                         raise RuntimeError(
                             "Recorded-observation controller invariant violated: action_applied=true"
                         )
+                        if timed_out:
+                            self._cast_arming.authorize_retry_after_visual_timeout()
                     processed += 1
                     request = last_result.fsm.action_request
                     if (
@@ -2051,6 +2349,225 @@ class LiveDetectOnlyRuntime:
                             self.logger.event(
                                 "hook_stall_returned_to_sync_required",
                                 stall_payload,
+                            )
+                    idle_conflict = self._idle_conflicting_evidence(
+                        last_result,
+                        timestamp=elapsed,
+                    )
+                    panic_latched = bool(
+                        panic_triggered_this_frame
+                        or self._panic_latched()
+                    )
+                    idle_certificate, idle_events = (
+                        self._idle_recovery.observe(
+                            prompt,
+                            timestamp=elapsed,
+                            conflicting_evidence=idle_conflict,
+                            action_emission_in_progress=(
+                                self._action_emission_in_progress
+                            ),
+                            key_currently_down=False,
+                            panic_triggered=panic_latched,
+                        )
+                    )
+                    for idle_event in idle_events:
+                        if idle_event.event_type == "idle_recovery_candidate_started":
+                            self._idle_candidate_origin_state = self.fsm.state
+                        elif (
+                            idle_event.event_type
+                            == "idle_recovery_candidate_cancelled"
+                        ):
+                            self._idle_candidate_origin_state = None
+                        self.logger.event(idle_event.event_type, {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "runtime_state": self.fsm.state.value,
+                            **dict(idle_event.payload),
+                            "prompt_certificate_summary": (
+                                self._idle_recovery.summary(elapsed)
+                            ),
+                        })
+                    if self._idle_recovery.candidate_active:
+                        observation_interval = max(
+                            0.02,
+                            min(
+                                self.live_config
+                                .idle_recovery_freshness_ms
+                                / 2000.0,
+                                self.live_config
+                                .idle_recovery_min_window_seconds
+                                / max(
+                                    1,
+                                    self.live_config
+                                    .idle_recovery_window_size - 1,
+                                ),
+                            ),
+                        )
+                        next_prompt_due = min(
+                            next_prompt_due,
+                            elapsed + observation_interval,
+                        )
+
+                    cast_pending_protected = bool(
+                        self.fsm.state == RuntimeState.CAST_PENDING
+                        and self.cast_opportunity
+                        .waiting_for_acknowledgement
+                        and self.cast_opportunity.visual_ack_deadline
+                        is not None
+                        and elapsed
+                        < self.cast_opportunity.visual_ack_deadline
+                    )
+                    startup_idle = bool(
+                        idle_certificate is not None
+                        and not self._startup_idle_handled
+                        and not self._runtime_cycle_started
+                        and self.fsm.state
+                        in {RuntimeState.SYNCING, RuntimeState.IDLE}
+                    )
+                    idle_arrived_before_certificate = bool(
+                        idle_certificate is not None
+                        and self.fsm.state == RuntimeState.IDLE
+                        and self._runtime_cycle_started
+                        and self._idle_candidate_origin_state is not None
+                        and self._idle_candidate_origin_state
+                        != RuntimeState.IDLE
+                        and self._cast_arming.active is None
+                        and self.cast_clearance.current(elapsed) is None
+                    )
+                    if startup_idle:
+                        previous_idle_state = self.fsm.state
+                        if self.fsm.state != RuntimeState.IDLE:
+                            transition_results.append(
+                                self.fsm.force_state(
+                                    RuntimeState.IDLE,
+                                    elapsed,
+                                    "startup_idle_confirmation",
+                                )
+                            )
+                            self.controller.reset_action_history_for_authoritative_idle()
+                            self.synchronizer.reset(started_at=elapsed)
+                        self._startup_idle_handled = True
+                        self._idle_candidate_origin_state = None
+                        self.logger.event("startup_idle_confirmed", {
+                            "timestamp": elapsed,
+                            "frame_index": captured,
+                            "previous_state": previous_idle_state.value,
+                            "cycle_id": self.deduplicator.cycle_id,
+                            **self._idle_certificate_payload(
+                                idle_certificate,
+                                timestamp=elapsed,
+                            ),
+                        })
+                        self._request_idle_cast_arm(
+                            source_type=CAST_SOURCE_STARTUP,
+                            source_id=(
+                                "startup:"
+                                + idle_certificate.certificate_id
+                            ),
+                            certificate=idle_certificate,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            cooldown_seconds=(
+                                self.live_config
+                                .idle_recovery_cast_cooldown_seconds
+                            ),
+                            previous_state=previous_idle_state,
+                        )
+                    elif (
+                        idle_certificate is not None
+                        and (
+                            self.fsm.state != RuntimeState.IDLE
+                            or idle_arrived_before_certificate
+                        )
+                        and not cast_pending_protected
+                        and not self._action_emission_in_progress
+                        and not panic_latched
+                    ):
+                        previous_idle_state = (
+                            self._idle_candidate_origin_state
+                            if idle_arrived_before_certificate
+                            and self._idle_candidate_origin_state is not None
+                            else self.fsm.state
+                        )
+                        self._clear_stale_cycle_for_idle_recovery(
+                            timestamp=elapsed,
+                            frame_index=captured,
+                        )
+                        authoritative = self.fsm.force_state(
+                            RuntimeState.IDLE,
+                            elapsed,
+                            "authoritative_idle_prompt_recovery",
+                        )
+                        transition_results.append(authoritative)
+                        authoritative_idle_applied_this_frame = True
+                        self.controller.discard_external_proposal()
+                        request = ActionRequest(
+                            ActionIntent.NONE,
+                            0.0,
+                            "authoritative_idle_recovery_frame_blocks_actions",
+                        )
+                        self._idle_candidate_origin_state = None
+                        self._idle_recovery_sequence += 1
+                        recovery_source_id = (
+                            f"idle_recovery:{idle_certificate.certificate_id}:"
+                            f"{self._idle_recovery_sequence}"
+                        )
+                        self.logger.event(
+                            "authoritative_idle_recovery_applied",
+                            {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                "previous_state": (
+                                    previous_idle_state.value
+                                ),
+                                "next_state": RuntimeState.IDLE.value,
+                                "reason": (
+                                    "authoritative_idle_prompt_recovery"
+                                ),
+                                "cycle_id": self.deduplicator.cycle_id,
+                                **self._idle_certificate_payload(
+                                    idle_certificate,
+                                    timestamp=elapsed,
+                                ),
+                            },
+                        )
+                        self._request_idle_cast_arm(
+                            source_type=CAST_SOURCE_RECOVERY,
+                            source_id=recovery_source_id,
+                            certificate=idle_certificate,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            cooldown_seconds=(
+                                self.live_config
+                                .idle_recovery_cast_cooldown_seconds
+                            ),
+                            previous_state=previous_idle_state,
+                        )
+                    active_cast_arm = self._cast_arming.active
+                    if (
+                        active_cast_arm is not None
+                        and active_cast_arm.source_type
+                        in {
+                            CAST_SOURCE_STARTUP,
+                            CAST_SOURCE_RECOVERY,
+                        }
+                        and idle_certificate is None
+                    ):
+                        cancelled_arm = self._cast_arming.cancel(
+                            "idle_certificate_no_longer_valid"
+                        )
+                        if cancelled_arm is not None:
+                            self.logger.event(
+                                "idle_recovery_candidate_cancelled",
+                                {
+                                    "timestamp": elapsed,
+                                    "frame_index": captured,
+                                    "runtime_state": self.fsm.state.value,
+                                    "reason": (
+                                        "idle_certificate_no_longer_valid"
+                                    ),
+                                    **cancelled_arm.payload(elapsed),
+                                },
                             )
                     qualified_press_for_shadow = (
                         last_result.qualified.bundle.press
@@ -3236,12 +3753,86 @@ class LiveDetectOnlyRuntime:
                     sync_required_active = self.fsm.state == RuntimeState.SYNC_REQUIRED
 
                     specialized = self._specialized_payload(last_result)
-                    request = last_result.fsm.action_request
+                    request = (
+                        ActionRequest(
+                            ActionIntent.NONE,
+                            0.0,
+                            "authoritative_idle_recovery_frame_blocks_actions",
+                        )
+                        if authoritative_idle_applied_this_frame
+                        else last_result.fsm.action_request
+                    )
                     collect_attempt: CollectAttempt | None = None
                     cast_attempt: CastAttempt | None = None
                     cast_blockers: tuple[str, ...] = ()
                     if cast_opportunity_enabled:
                         clearance_status = self.cast_clearance.status(elapsed)
+                        post_clearance = self.cast_clearance.current(
+                            elapsed
+                        )
+                        if (
+                            self.fsm.state == RuntimeState.IDLE
+                            and post_clearance is not None
+                        ):
+                            _, arming_events = (
+                                self._cast_arming
+                                .request_cast_opportunity(
+                                    source_type=(
+                                        CAST_SOURCE_POST_CYCLE
+                                    ),
+                                    source_id=(
+                                        "post_cycle:"
+                                        + post_clearance.clearance_id
+                                    ),
+                                    physical_idle_id=(
+                                        idle_certificate.physical_idle_id
+                                        if idle_certificate is not None
+                                        else (
+                                            "post_idle:"
+                                            + post_clearance.clearance_id
+                                        )
+                                    ),
+                                    cycle_id=(
+                                        self.deduplicator.cycle_id
+                                    ),
+                                    timestamp=elapsed,
+                                    cooldown_seconds=0.0,
+                                )
+                            )
+                            for arming_event in arming_events:
+                                self.logger.event(
+                                    arming_event.event_type,
+                                    {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "previous_state": (
+                                            self.fsm.state.value
+                                        ),
+                                        "clearance_id": (
+                                            post_clearance.clearance_id
+                                        ),
+                                        **dict(arming_event.payload),
+                                    },
+                                )
+                        active_cast_arm = self._cast_arming.active
+                        arm_uses_idle_certificate = bool(
+                            active_cast_arm is not None
+                            and active_cast_arm.source_type
+                            in {
+                                CAST_SOURCE_STARTUP,
+                                CAST_SOURCE_RECOVERY,
+                            }
+                        )
+                        cast_arm_ready = self._cast_arming.ready(
+                            timestamp=elapsed,
+                            runtime_idle=(
+                                self.fsm.state == RuntimeState.IDLE
+                            ),
+                            idle_certificate_valid=(
+                                idle_certificate is not None
+                                if arm_uses_idle_certificate else True
+                            ),
+                        )
                         cast_blockers = self._cast_blockers(
                             status=clearance_status,
                             runtime_state=self.fsm.state,
@@ -3251,6 +3842,14 @@ class LiveDetectOnlyRuntime:
                             foreground=foreground,
                             raw_intent=request.intent,
                             safety_reason=last_result.safety.reason,
+                            source_type=(
+                                active_cast_arm.source_type
+                                if active_cast_arm is not None else None
+                            ),
+                            idle_certificate_valid=(
+                                idle_certificate is not None
+                            ),
+                            cast_arm_ready=cast_arm_ready,
                         )
                         self._log_cast_blockers(
                             cast_blockers,
@@ -3340,6 +3939,7 @@ class LiveDetectOnlyRuntime:
                         if (
                             last_result.safety.reason == "action_emission_disabled"
                             and not cast_blockers
+                            and active_cast_arm is not None
                         ):
                             clearance = self.cast_clearance.current(elapsed)
                             cast_attempt, cast_schedule_events = (
@@ -3347,7 +3947,12 @@ class LiveDetectOnlyRuntime:
                                     timestamp=elapsed,
                                     clearance_id=(
                                         clearance.clearance_id
-                                        if clearance is not None else None
+                                        if (
+                                            clearance is not None
+                                            and active_cast_arm.source_type
+                                            == CAST_SOURCE_POST_CYCLE
+                                        )
+                                        else None
                                     ),
                                     runtime_state=self.fsm.state,
                                     prompt_kind=(
@@ -3356,24 +3961,36 @@ class LiveDetectOnlyRuntime:
                                     physical_get_episode_open=(
                                         self.collect_retry.episode_open
                                     ),
+                                    source_type=(
+                                        active_cast_arm.source_type
+                                    ),
+                                    source_id=active_cast_arm.source_id,
+                                    cycle_id=active_cast_arm.cycle_id,
                                 )
                             )
                             if cast_attempt is not None:
-                                consumed, consume_events = (
-                                    self.cast_clearance.consume_with_events(
-                                        cast_attempt.clearance_id
-                                    )
+                                self._cast_arming.mark_cast_started(
+                                    cast_attempt.opportunity_id
                                 )
-                                if not consumed:
-                                    raise RuntimeError(
-                                        "CAST opportunity consumed an invalid clearance"
+                                if (
+                                    active_cast_arm.source_type
+                                    == CAST_SOURCE_POST_CYCLE
+                                ):
+                                    consumed, consume_events = (
+                                        self.cast_clearance.consume_with_events(
+                                            cast_attempt.clearance_id
+                                        )
                                     )
-                                self._log_cast_events(
-                                    consume_events,
-                                    timestamp=elapsed,
-                                    frame_index=captured,
-                                    runtime_state=self.fsm.state.value,
-                                )
+                                    if not consumed:
+                                        raise RuntimeError(
+                                            "CAST opportunity consumed an invalid clearance"
+                                        )
+                                    self._log_cast_events(
+                                        consume_events,
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        runtime_state=self.fsm.state.value,
+                                    )
                             self._log_cast_events(
                                 cast_schedule_events,
                                 timestamp=elapsed,
@@ -3401,6 +4018,12 @@ class LiveDetectOnlyRuntime:
                             would_fire["deduplication_key"] = cast_attempt.action_id
                             would_fire["cast_opportunity_id"] = (
                                 cast_attempt.opportunity_id
+                            )
+                            would_fire["cast_source_type"] = (
+                                cast_attempt.source_type
+                            )
+                            would_fire["cast_source_id"] = (
+                                cast_attempt.source_id
                             )
                     elif collect_retry_enabled and request.intent == ActionIntent.COLLECT:
                         self.deduplicator.record_raw_proposal(request)
@@ -3679,6 +4302,28 @@ class LiveDetectOnlyRuntime:
                                     runtime_state=self.fsm.state.value,
                                 )
                             if cast_attempt is not None:
+                                if (
+                                    cast_attempt.source_type
+                                    == CAST_SOURCE_STARTUP
+                                ):
+                                    self.logger.event(
+                                        "startup_idle_cast_started",
+                                        {
+                                            "timestamp": elapsed,
+                                            "frame_index": captured,
+                                            "previous_state": (
+                                                self.fsm.state.value
+                                            ),
+                                            "source_type": (
+                                                cast_attempt.source_type
+                                            ),
+                                            "source_id": cast_attempt.source_id,
+                                            "cycle_id": cast_attempt.cycle_id,
+                                            "opportunity_id": (
+                                                cast_attempt.opportunity_id
+                                            ),
+                                        },
+                                    )
                                 self._log_cast_events(
                                     (CastOpportunityEvent(
                                         "cast_attempt_started",
@@ -3692,17 +4337,21 @@ class LiveDetectOnlyRuntime:
                                     frame_index=captured,
                                     runtime_state=self.fsm.state.value,
                                 )
-                            execution = self.action_sink.apply(
-                                request,
-                                ActionExecutionContext(
-                                    action_id=action_id,
-                                    episode_id=str(would_fire["episode_id"]),
-                                    requested_at=elapsed,
-                                    capture_frame_index=captured,
-                                    runtime_state=self.fsm.state.value,
-                                    target_hwnd=self._capture_diagnostics.get("hwnd"),
-                                ),
-                            )
+                            self._action_emission_in_progress = True
+                            try:
+                                execution = self.action_sink.apply(
+                                    request,
+                                    ActionExecutionContext(
+                                        action_id=action_id,
+                                        episode_id=str(would_fire["episode_id"]),
+                                        requested_at=elapsed,
+                                        capture_frame_index=captured,
+                                        runtime_state=self.fsm.state.value,
+                                        target_hwnd=self._capture_diagnostics.get("hwnd"),
+                                    ),
+                                )
+                            finally:
+                                self._action_emission_in_progress = False
                             if collect_attempt is not None:
                                 self._log_collect_events(
                                     self.collect_retry.record_execution(
@@ -3725,10 +4374,28 @@ class LiveDetectOnlyRuntime:
                                     frame_index=captured,
                                     runtime_state=self.fsm.state.value,
                                 )
+                                self._cast_arming.record_execution(
+                                    timestamp=execution.completed_at,
+                                    emission_started=(
+                                        execution.started_at is not None
+                                    ),
+                                    applied=execution.applied,
+                                    terminal_outcome=(
+                                        "applied"
+                                        if execution.applied
+                                        else (
+                                            "partial"
+                                            if execution.partial_execution
+                                            else "failed"
+                                        )
+                                    ),
+                                )
                             if execution.applied:
                                 if request.intent == ActionIntent.START_HOOK:
                                     self.console.emit("START_HOOK applied")
                                 actions_applied += 1
+                                if request.intent == ActionIntent.CAST:
+                                    self._runtime_cycle_started = True
                                 commit = self.controller.commit_external_action(
                                     request,
                                     elapsed,
@@ -3758,6 +4425,7 @@ class LiveDetectOnlyRuntime:
                                     stop_after_action_commit_failure = True
                                 else:
                                     if request.intent == ActionIntent.START_HOOK:
+                                        self._runtime_cycle_started = True
                                         self._hook_action_lifecycle.begin_episode(
                                             cycle_id=self.deduplicator.cycle_id,
                                             timestamp=elapsed,

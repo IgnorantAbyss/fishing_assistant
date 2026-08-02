@@ -358,6 +358,26 @@ class CollectRetryController:
         payload.update({"cancellation_reason": reason, "outcome": "cancelled"})
         return CollectRetryEvent("collect_retry_cancelled", payload)
 
+    def terminate_for_authoritative_idle_recovery(
+        self, timestamp: float
+    ) -> tuple[CollectRetryEvent, ...]:
+        if not self._episode_open:
+            return ()
+        cancelled = self.cancel(
+            timestamp, "authoritative_idle_prompt_recovery"
+        )
+        self._episode_open = False
+        self._panel_visible = False
+        self._absence_frames = 0
+        return (cancelled, CollectRetryEvent(
+            "get_episode_completed",
+            {
+                **self._base_payload(timestamp),
+                "terminal_reason": self._terminal_reason,
+                "outcome": self._outcome,
+            },
+        ))
+
     def _exhaust(self, timestamp: float, reason: str) -> CollectRetryEvent:
         self._terminal = True
         self._terminal_reason = reason

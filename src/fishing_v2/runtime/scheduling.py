@@ -163,6 +163,9 @@ class RuntimeSchedulePolicy:
     def ready_candidate_active(self) -> bool:
         return self._ready_candidate_started_at is not None
 
+    def reset(self) -> None:
+        self._clear_ready_candidate()
+
     def _clear_ready_candidate(self) -> None:
         self._ready_candidate_started_at = None
         self._ready_support_frames = 0

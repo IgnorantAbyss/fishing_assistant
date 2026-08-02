@@ -134,6 +134,12 @@ def _runtime(
     press_inter_key_gap_min_ms: int = 90,
     press_inter_key_gap_max_ms: int = 170,
     hook_action_stall_timeout_seconds: float = 3.0,
+    idle_recovery_window_size: int = 5,
+    idle_recovery_required_count: int = 4,
+    idle_recovery_min_window_seconds: float = 0.5,
+    idle_recovery_freshness_ms: float = 250.0,
+    idle_recovery_cast_cooldown_seconds: float = 0.5,
+    idle_cast_retry_min_interval_seconds: float = 3.0,
     runtime_profile: str = "diagnostic",
     session_logger=None,
 ) -> LiveDetectOnlyRuntime:
@@ -158,6 +164,18 @@ def _runtime(
             press_inter_key_gap_max_ms=press_inter_key_gap_max_ms,
             hook_action_stall_timeout_seconds=(
                 hook_action_stall_timeout_seconds
+            ),
+            idle_recovery_window_size=idle_recovery_window_size,
+            idle_recovery_required_count=idle_recovery_required_count,
+            idle_recovery_min_window_seconds=(
+                idle_recovery_min_window_seconds
+            ),
+            idle_recovery_freshness_ms=idle_recovery_freshness_ms,
+            idle_recovery_cast_cooldown_seconds=(
+                idle_recovery_cast_cooldown_seconds
+            ),
+            idle_cast_retry_min_interval_seconds=(
+                idle_cast_retry_min_interval_seconds
             ),
             runtime_profile=runtime_profile,
         ),
@@ -2932,3 +2950,219 @@ def test_production_panic_cancels_pending_press_and_exits_without_input(
     assert summary["panic_triggered"] is True
     assert summary["press_live_emission_cancelled_count"] == 1
     assert holder["sink"].apply_calls == 0
+
+
+class PersistentIdleObserver:
+    def observe(self, _frame, context):
+        kind = PromptObservationKind.IDLE_CAST
+        return PromptObservation(
+            kind,
+            0.99,
+            {kind.value: 0.99},
+            "stable_idle_test",
+            context.frame_index,
+            context.timestamp,
+            evidence={"rejection_reason": None},
+        )
+
+
+class CompleteCastSink:
+    def __init__(self, _kwargs):
+        self.calls = []
+
+    def poll_panic(self):
+        return False
+
+    def apply(self, request, context):
+        self.calls.append((request, context))
+        return ActionExecutionResult(
+            context.action_id,
+            request.intent.value,
+            context.requested_at,
+            context.requested_at,
+            context.requested_at,
+            True,
+            True,
+            2,
+            2,
+            context.target_hwnd,
+            context.target_hwnd,
+            os_input_emitted=True,
+        )
+
+    def summary(self):
+        count = len(self.calls)
+        return {
+            "action_sink_type": "sendinput",
+            "action_allowlist": ["CAST"],
+            "panic_triggered": False,
+            "attempted_action_counts": {"CAST": count},
+            "applied_action_counts": {"CAST": count},
+        }
+
+
+def _idle_action_runtime(tmp_path, supported_frame, *, initial_state=None):
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteCastSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(
+        supported_frame,
+        diagnostics={
+            "hwnd": 4242,
+            "window_title": "test-window",
+            "process": "BlackDesert64",
+            "process_id": 99,
+            "client_size": [2560, 1440],
+        },
+    )
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=3.0,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="CAST",
+        action_sink_factory=factory,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle, observer=PersistentIdleObserver()
+    )
+    if initial_state is not None:
+        runtime.fsm.force_state(initial_state, 0.0, "regression_setup")
+        runtime._runtime_cycle_started = True
+    return runtime, created
+
+
+def test_stable_idle_startup_resolves_and_casts_exactly_once(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    summary = runtime.run(max_frames=70)
+
+    assert len(created) == 1
+    assert [item[0].intent for item in created[0].calls] == [
+        ActionIntent.CAST
+    ]
+    assert summary["actions_applied"] == 1
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    names = [item["event_type"] for item in events]
+    assert names.count("startup_idle_confirmed") == 1
+    assert names.count("startup_idle_cast_armed") == 1
+    assert names.count("startup_idle_cast_started") == 1
+    assert names.index("startup_idle_confirmed") < names.index(
+        "startup_idle_cast_started"
+    )
+    confirmed = next(
+        item for item in events
+        if item["event_type"] == "startup_idle_confirmed"
+    )
+    started = next(
+        item for item in events
+        if item["event_type"] == "startup_idle_cast_started"
+    )
+    assert started["timestamp"] - confirmed["timestamp"] >= 0.5
+
+
+@pytest.mark.parametrize(
+    "stuck_state",
+    (
+        RuntimeState.HOOK,
+        RuntimeState.PRESS,
+        RuntimeState.GET,
+        RuntimeState.COLLECT_PENDING,
+        RuntimeState.RESULT_PENDING,
+        RuntimeState.SYNC_REQUIRED,
+    ),
+)
+def test_authoritative_idle_recovers_stuck_state_then_casts_once(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+    stuck_state: RuntimeState,
+) -> None:
+    runtime, created = _idle_action_runtime(
+        tmp_path, supported_frame, initial_state=stuck_state
+    )
+    summary = runtime.run(max_frames=70)
+
+    assert len(created) == 1
+    assert [item[0].intent for item in created[0].calls] == [
+        ActionIntent.CAST
+    ]
+    assert summary["actions_applied"] == 1
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    recovery = next(
+        item for item in events
+        if item["event_type"] == "authoritative_idle_recovery_applied"
+    )
+    cast = next(
+        item for item in events
+        if item["event_type"] == "WOULD_CAST"
+    )
+    assert recovery["previous_state"] != RuntimeState.IDLE.value
+    assert cast["cast_source_type"] == "authoritative_idle_recovery"
+    assert cast["timestamp"] - recovery["timestamp"] >= 0.5
+
+
+def test_startup_single_idle_observation_never_casts(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    summary = runtime.run(max_frames=1)
+    assert created[0].calls == []
+    assert summary["actions_applied"] == 0
+
+
+def test_startup_idle_disappearing_during_cooldown_cancels_cast(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    class IdleThenWaitingObserver:
+        def __init__(self):
+            self.calls = 0
+
+        def observe(self, _frame, context):
+            self.calls += 1
+            kind = (
+                PromptObservationKind.IDLE_CAST
+                if self.calls <= 5
+                else PromptObservationKind.WAITING_IN_PROGRESS
+            )
+            return PromptObservation(
+                kind,
+                0.99,
+                {kind.value: 0.99},
+                "idle_then_waiting",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle, observer=IdleThenWaitingObserver()
+    )
+    summary = runtime.run(max_frames=50)
+    assert created[0].calls == []
+    assert summary["actions_applied"] == 0
+
+
+def test_cast_pending_ack_window_blocks_recovery_and_duplicate_cast(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    runtime.run(max_frames=70)
+    assert len(created[0].calls) == 1
+    assert runtime.fsm.state == RuntimeState.CAST_PENDING

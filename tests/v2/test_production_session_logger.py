@@ -117,10 +117,30 @@ def test_cli_and_launcher_define_bounded_production_defaults() -> None:
     assert args.log_retention_days == 14
     assert args.log_max_total_mb == 100.0
     assert args.hook_action_stall_timeout_seconds == 3.0
+    assert args.idle_recovery_window_size == 5
+    assert args.idle_recovery_required_count == 4
+    assert args.idle_recovery_min_window_seconds == 0.5
+    assert args.idle_recovery_freshness_ms == 250.0
+    assert args.idle_recovery_cast_cooldown_seconds == 0.5
+    assert args.idle_cast_retry_min_interval_seconds == 3.0
     defaults = list(PRODUCTION_DEFAULTS)
     assert defaults[defaults.index("--hook-critical-fps") + 1] == "40"
     assert defaults[
         defaults.index("--hook-action-stall-timeout-seconds") + 1
+    ] == "3.0"
+    assert defaults[defaults.index("--idle-recovery-window-size") + 1] == "5"
+    assert defaults[defaults.index("--idle-recovery-required-count") + 1] == "4"
+    assert defaults[
+        defaults.index("--idle-recovery-min-window-seconds") + 1
+    ] == "0.5"
+    assert defaults[
+        defaults.index("--idle-recovery-freshness-ms") + 1
+    ] == "250"
+    assert defaults[
+        defaults.index("--idle-recovery-cast-cooldown-seconds") + 1
+    ] == "0.5"
+    assert defaults[
+        defaults.index("--idle-cast-retry-min-interval-seconds") + 1
     ] == "3.0"
     assert defaults[defaults.index("--press-key-hold-ms") + 1] == "40"
     assert defaults[defaults.index("--duration-seconds") + 1] == "0"

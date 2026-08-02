@@ -73,6 +73,12 @@ class RuntimeController:
         self._sent.clear()
         self._last_action_at = None
 
+    def reset_action_history_for_authoritative_idle(self) -> None:
+        """Drop stale proposals after an external visual IDLE certificate."""
+        self.evidence_qualifier.reset_temporal_state()
+        self._sent.clear()
+        self._last_action_at = None
+
     def qualify_raw_bundle(
         self,
         raw_bundle: ObservationBundle,

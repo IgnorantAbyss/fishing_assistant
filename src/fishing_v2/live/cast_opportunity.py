@@ -14,6 +14,10 @@ from src.fishing_v2.domain.observations import (
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.ports.action_sink import ActionExecutionResult
 from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
+from src.fishing_v2.live.idle_recovery import (
+    CAST_SOURCE_POST_CYCLE,
+    CAST_SOURCE_TYPES,
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,8 @@ class CastBlocker(str, Enum):
     FOREGROUND_UNAVAILABLE = "foreground_unavailable"
     FOREGROUND_NOT_CONFIRMED = "foreground_not_confirmed"
     SAFETY_NOT_READY = "safety_not_ready"
+    IDLE_CERTIFICATE_MISSING = "idle_recovery_certificate_missing"
+    CAST_COOLDOWN_ACTIVE = "idle_recovery_cast_cooldown_active"
 
 
 @dataclass(frozen=True)
@@ -180,6 +186,29 @@ class PostCycleClearanceTracker:
             and self._banner_absence_certificate is None
             and self._clearance is None
         )
+
+    def reset_for_authoritative_idle_recovery(self) -> None:
+        """Discard stale in-flight evidence without resetting telemetry."""
+        self._tracking = False
+        self._stable_idle_frames = 0
+        self._last_prompt_frame_index = None
+        self._get_presence = PresenceState.UNKNOWN
+        self._get_evidence_at = None
+        self._get_absence_source = None
+        self._qualified_get_seen = False
+        self._get_episode_id = None
+        self._collect_visual_acknowledged = False
+        self._collect_acknowledged_at = None
+        self._collect_terminal_reason = None
+        self._get_disappearance_at = None
+        self._runtime_cycle_id = None
+        self._banner_presence = PresenceState.UNKNOWN
+        self._banner_evidence_at = None
+        self._banner_absent_frames = 0
+        self._last_banner_frame_index = None
+        self._banner_absence_certificate = None
+        self._clearance = None
+        self._clearance_expired = False
 
     @staticmethod
     def _age_ms(timestamp: float, observed_at: float | None) -> float | None:
@@ -646,6 +675,9 @@ class CastAttempt:
     action_id: str
     scheduled_at: float
     clearance_id: str
+    source_type: str = CAST_SOURCE_POST_CYCLE
+    source_id: str | None = None
+    cycle_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -681,6 +713,10 @@ class CastOpportunityController:
         self._terminal_outcome_counts: dict[str, int] = {}
         self._source_clearance_id: str | None = None
         self._scheduled_clearance_ids: set[str] = set()
+        self._scheduled_source_ids: set[str] = set()
+        self._source_type = CAST_SOURCE_POST_CYCLE
+        self._source_id: str | None = None
+        self._source_cycle_id: int | None = None
 
     @property
     def opportunity_id(self) -> str | None:
@@ -720,20 +756,42 @@ class CastOpportunityController:
         runtime_state: RuntimeState,
         prompt_kind: PromptObservationKind | None,
         physical_get_episode_open: bool,
+        source_type: str = CAST_SOURCE_POST_CYCLE,
+        source_id: str | None = None,
+        cycle_id: int | None = None,
     ) -> tuple[CastAttempt | None, tuple[CastOpportunityEvent, ...]]:
+        if source_type not in CAST_SOURCE_TYPES:
+            raise ValueError(f"Unsupported CAST source: {source_type}")
+        resolved_source_id = source_id or clearance_id
         if (
-            clearance_id is None
+            resolved_source_id is None
+            or (
+                source_type == CAST_SOURCE_POST_CYCLE
+                and clearance_id is None
+            )
             or runtime_state != RuntimeState.IDLE
             or prompt_kind != PromptObservationKind.IDLE_CAST
             or physical_get_episode_open
         ):
             return None, ()
-        if self._open or clearance_id in self._scheduled_clearance_ids:
+        if (
+            self._open
+            or resolved_source_id in self._scheduled_source_ids
+            or (
+                clearance_id is not None
+                and clearance_id in self._scheduled_clearance_ids
+            )
+        ):
             return None, ()
         self._sequence += 1
         self._opportunity_id = f"cast_opportunity:{self._sequence}"
         self._source_clearance_id = clearance_id
-        self._scheduled_clearance_ids.add(clearance_id)
+        self._source_type = source_type
+        self._source_id = resolved_source_id
+        self._source_cycle_id = cycle_id
+        self._scheduled_source_ids.add(resolved_source_id)
+        if clearance_id is not None:
+            self._scheduled_clearance_ids.add(clearance_id)
         self._open = True
         self._attempted = True
         self._input_completed = False
@@ -750,13 +808,19 @@ class CastOpportunityController:
             opportunity_id=self._opportunity_id,
             action_id=f"{self._opportunity_id}:CAST",
             scheduled_at=float(timestamp),
-            clearance_id=clearance_id,
+            clearance_id=clearance_id or resolved_source_id,
+            source_type=source_type,
+            source_id=resolved_source_id,
+            cycle_id=cycle_id,
         )
         return attempt, (CastOpportunityEvent("cast_opportunity_started", {
             "opportunity_id": self._opportunity_id,
             "action_id": attempt.action_id,
             "clearance_id": clearance_id,
             "source_clearance_id": clearance_id,
+            "source_type": source_type,
+            "source_id": resolved_source_id,
+            "cycle_id": cycle_id,
             "visual_ack_timeout_seconds": self.config.visual_ack_timeout_seconds,
             "os_input_emitted": False,
             "cast_visual_acknowledged": False,

@@ -133,6 +133,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "opportunity after this state age (default: 3.0)"
         ),
     )
+    parser.add_argument(
+        "--idle-recovery-window-size", type=int, default=5,
+    )
+    parser.add_argument(
+        "--idle-recovery-required-count", type=int, default=4,
+    )
+    parser.add_argument(
+        "--idle-recovery-min-window-seconds", type=float, default=0.5,
+    )
+    parser.add_argument(
+        "--idle-recovery-freshness-ms", type=float, default=250.0,
+    )
+    parser.add_argument(
+        "--idle-recovery-cast-cooldown-seconds", type=float, default=0.5,
+    )
+    parser.add_argument(
+        "--idle-cast-retry-min-interval-seconds", type=float, default=3.0,
+    )
     parser.add_argument("--emit-actions", type=_strict_bool, default=False)
     parser.add_argument(
         "--action-sink", choices=ACTION_SINKS, default=ACTION_SINK_NONE,
@@ -209,6 +227,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--duration-seconds must be non-negative")
     if args.hook_action_stall_timeout_seconds <= 0:
         parser.error("--hook-action-stall-timeout-seconds must be positive")
+    if args.idle_recovery_window_size < 1:
+        parser.error("--idle-recovery-window-size must be positive")
+    if not 1 <= args.idle_recovery_required_count <= args.idle_recovery_window_size:
+        parser.error("--idle-recovery-required-count must fit the window")
+    if args.idle_recovery_min_window_seconds < 0:
+        parser.error("--idle-recovery-min-window-seconds must be non-negative")
+    if args.idle_recovery_freshness_ms <= 0:
+        parser.error("--idle-recovery-freshness-ms must be positive")
+    if args.idle_recovery_cast_cooldown_seconds < 0:
+        parser.error("--idle-recovery-cast-cooldown-seconds must be non-negative")
+    if args.idle_cast_retry_min_interval_seconds <= 0:
+        parser.error("--idle-cast-retry-min-interval-seconds must be positive")
     if args.max_completed_cycles is not None and args.max_completed_cycles < 0:
         parser.error("--max-completed-cycles must be non-negative")
     if args.log_repeat_window_seconds < 0 or args.log_max_file_mb <= 0:
@@ -325,6 +355,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             hook_critical_target_fps=args.hook_critical_fps,
             hook_action_stall_timeout_seconds=(
                 args.hook_action_stall_timeout_seconds
+            ),
+            idle_recovery_window_size=args.idle_recovery_window_size,
+            idle_recovery_required_count=(
+                args.idle_recovery_required_count
+            ),
+            idle_recovery_min_window_seconds=(
+                args.idle_recovery_min_window_seconds
+            ),
+            idle_recovery_freshness_ms=(
+                args.idle_recovery_freshness_ms
+            ),
+            idle_recovery_cast_cooldown_seconds=(
+                args.idle_recovery_cast_cooldown_seconds
+            ),
+            idle_cast_retry_min_interval_seconds=(
+                args.idle_cast_retry_min_interval_seconds
             ),
             max_completed_cycles=args.max_completed_cycles,
             press_initial_delay_min_ms=(
