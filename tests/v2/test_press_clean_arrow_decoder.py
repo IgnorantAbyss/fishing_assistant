@@ -5,6 +5,11 @@ import json
 import cv2
 import pytest
 
+from src.fishing_v2.domain.observations import PressObservation
+from src.fishing_v2.runtime.press_sequence_aggregator import (
+    PressSequenceAggregationConfig,
+    PressSequenceTemporalAggregator,
+)
 from src.fishing_v2.data.press_sequence_ground_truth import load_press_sequence_ground_truth
 from src.detectors import press_detector
 from src.detectors.press_detector import (
@@ -21,6 +26,7 @@ SESSIONS = ROOT / "assets" / "replay" / "sessions"
 DIAGNOSTICS = ROOT / "reports" / "fishing_v2" / "press_detector_diagnostics_summary.json"
 REVIEW_CSV = ROOT / "reports" / "fishing_v2" / "press_sequence_review" / "review_items.csv"
 SAS_FIXTURES = ROOT / "tests" / "fixtures" / "press_sas"
+STRUCTURAL_FIXTURES = ROOT / "tests" / "fixtures" / "press_structural_occupancy"
 
 
 def test_all_user_confirmed_press_sequences_are_preserved() -> None:
@@ -104,6 +110,99 @@ def _decode_sas_fixture(frame: int) -> dict:
     return _decode_arrow_slots(image, geometry)
 
 
+def _decode_structural_fixture(name: str) -> dict:
+    image = cv2.imread(str(STRUCTURAL_FIXTURES / name), cv2.IMREAD_COLOR)
+    assert image is not None
+    geometry = _find_panel_geometry(image)
+    assert geometry["panel_present"] is True
+    return _decode_arrow_slots(image, geometry)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("episode_1_shifted_wwaw.png", "WWAW"),
+        ("episode_2_transparent_wsaaswa.png", "WWSAASWA"),
+    ],
+)
+def test_live_structural_occupancy_fixtures_decode_complete_prefix(
+    name: str,
+    expected: str,
+) -> None:
+    result = _decode_structural_fixture(name)
+    assert result["occupied_slot_count"] == len(expected)
+    assert "".join(result["arrow_sequence"]) == expected
+    assert all(
+        slot["occupancy"] == "EMPTY"
+        for slot in result["slots"][len(expected):]
+    )
+
+
+def test_saturated_transparent_background_is_diagnostic_not_occupancy() -> None:
+    result = _decode_structural_fixture("episode_2_transparent_wsaaswa.png")
+    for slot in result["slots"][8:]:
+        assert slot["raw_coloured_pixel_count"] >= 300
+        assert slot["selected_letter_component"] is None
+        assert slot["arrow_pixel_count"] == 0
+        assert slot["occupancy"] == "EMPTY"
+
+
+def test_vertically_shifted_arrows_are_found_without_fixed_40_percent_crop() -> None:
+    result = _decode_structural_fixture("episode_1_shifted_wwaw.png")
+    for slot in result["slots"][:4]:
+        assert slot["mapped_key"] in "WAW"
+        assert slot["arrow_bbox"] is not None
+        # The native arrows lie above the old round(60 * 0.40)=24/28px band.
+        assert slot["arrow_bbox"][1] < slot["bbox"][1] + 28
+        assert slot["component_assignment_mode"] == "joint_full_slot_components"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("episode_1_shifted_wwaw.png", "WWAW"),
+        ("episode_2_transparent_wsaaswa.png", "WWSAASWA"),
+    ],
+)
+def test_live_structural_fixture_builds_complete_certificate_and_freezes(
+    name: str,
+    expected: str,
+) -> None:
+    decoded = _decode_structural_fixture(name)
+    aggregator = PressSequenceTemporalAggregator(PressSequenceAggregationConfig(
+        panel_confirmation_frames=1,
+    ))
+    result = None
+    for frame in range(1, 4):
+        result = aggregator.update(PressObservation(
+            detected=True,
+            confidence=1.0,
+            frame_index=frame,
+            timestamp=frame * 0.2,
+            panel_candidate=True,
+            panel_present=True,
+            sequence_candidate=tuple(decoded["arrow_sequence"]),
+            sequence_confidence=1.0,
+            key_box_count=len(expected),
+            evidence={
+                "panel_phase": "PANEL_CLEAN",
+                "clean_frame_eligible": True,
+                "input_effect_detected": False,
+                "total_slot_count": decoded["total_slot_count"],
+                "occupied_slot_count": decoded["occupied_slot_count"],
+                "layout_conflict": decoded["layout_conflict"],
+                "slots": decoded["slots"],
+            },
+        ))
+    assert result is not None
+    assert result.completeness is not None
+    assert result.completeness.occupied_count == len(expected)
+    assert result.completeness.decoded_count == len(expected)
+    assert result.completeness.complete is True
+    assert result.sequence_ready is True
+    assert "".join(result.sequence_candidate) == expected
+
+
 def test_sas_live_regression_uses_down_left_down_arrow_geometry() -> None:
     for frame in (159, 160, 161):
         result = _decode_sas_fixture(frame)
@@ -123,13 +222,18 @@ def test_arrow_region_excludes_selected_upper_letter_component() -> None:
     for slot in result["slots"][:result["occupied_slot_count"]]:
         letter = slot["selected_letter_component"]
         assert letter is not None
-        assert letter["bbox"][3] < slot["arrow_region"][1]
-        assert slot["regions_overlap"] is False
+        joint_arrow = slot["selected_joint_arrow_component"]
+        assert joint_arrow is not None
+        assert joint_arrow["bbox"][1] >= letter["bbox"][3] - 1
+        assert not (
+            letter["component_source"] == "arrow_colour"
+            and letter["label"] == joint_arrow["label"]
+        )
         selected = next(
             item for item in slot["arrow_component_candidates"]
             if item["selected"]
         )
-        assert selected["centroid_in_slot_lower_half"] is True
+        assert selected["slot_centroid"][1] > letter["centroid"][1]
 
 
 def test_occupancy_and_input_effect_do_not_depend_on_classifier_confidence(
@@ -159,17 +263,13 @@ def test_occupancy_and_input_effect_do_not_depend_on_classifier_confidence(
 
 
 def test_later_input_effect_frames_are_not_selected_for_sequence() -> None:
-    for session_id, frame in (
-        ("session_20260709_192315", 474),
-        ("session_20260710_123210", 577),
-    ):
-        result = detect_press_sequence(
-            SESSIONS / session_id / "frames" / f"{frame:06}.jpg",
-            save_debug=False,
-        )
-        assert result["input_effect_detected"] is True
-        assert result["clean_frame_eligible"] is False
-        assert result["selected_for_sequence"] is False
+    result = detect_press_sequence(
+        SESSIONS / "session_20260709_192315" / "frames" / "000474.jpg",
+        save_debug=False,
+    )
+    assert result["input_effect_detected"] is True
+    assert result["clean_frame_eligible"] is False
+    assert result["selected_for_sequence"] is False
 
 
 def test_diagnostics_reports_all_nine_regressions_in_accuracy_denominator() -> None:

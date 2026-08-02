@@ -193,3 +193,39 @@ def test_panel_disappearance_before_complete_abstains() -> None:
     assert result.sequence_ready is False
     assert result.completeness is not None
     assert result.completeness.complete is False
+
+
+def test_empty_sequence_does_not_accumulate_sequence_stability() -> None:
+    result = _aggregate(*(
+        _press(frame, "", occupied_count=0, decoded_count=0)
+        for frame in range(1, 5)
+    ))
+    assert result.sequence_ready is False
+    assert result.completeness is not None
+    assert result.completeness.sequence_stability_count == 0
+    assert result.completeness.completeness_confidence == 0.0
+
+
+def test_raw_colour_without_structural_components_is_not_possible_occupancy() -> None:
+    observations = []
+    for frame in range(1, 4):
+        observation = _press(frame, "DS")
+        slots = [dict(item) for item in observation.evidence["slots"]]
+        slots[5] = {
+            **slots[5],
+            "occupancy": "EMPTY",
+            "coloured_pixel_count": 416,
+            "raw_coloured_pixel_count": 416,
+            "letter_pixel_count": 0,
+            "arrow_pixel_count": 0,
+            "selected_letter_component": None,
+            "arrow_component_candidates": [],
+        }
+        observations.append(replace(
+            observation,
+            evidence={**observation.evidence, "slots": slots},
+        ))
+    result = _aggregate(*observations)
+    assert result.completeness is not None
+    assert result.completeness.complete is True
+    assert result.completeness.possible_occupied_mask[5] is False

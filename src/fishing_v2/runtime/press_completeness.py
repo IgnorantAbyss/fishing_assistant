@@ -131,17 +131,24 @@ def _snapshot(
         key = str(raw_key).upper()
         confidence = float(slot.get("arrow_confidence", slot.get("confidence", 0.0)) or 0.0)
         is_occupied = occupancy == "OCCUPIED"
+        selected_letter = slot.get("selected_letter_component")
         has_component_evidence = bool(
             slot.get("possible_occupied") is True
-            or int(slot.get("letter_pixel_count", 0) or 0) > 0
+            or (
+                isinstance(selected_letter, Mapping)
+                and selected_letter.get("structural", True) is True
+            )
+            or isinstance(slot.get("combined_input_effect_component"), Mapping)
             or int(slot.get("arrow_pixel_count", 0) or 0) > 0
-            or int(slot.get("coloured_pixel_count", 0) or 0) > 0
             or any(
                 isinstance(item, Mapping) and item.get("eligible") is True
                 for item in slot.get("arrow_component_candidates", ())
             )
         )
-        is_possible = occupancy in {"OCCUPIED", "UNCERTAIN"} or has_component_evidence
+        is_possible = bool(
+            has_component_evidence
+            or (is_occupied and key in VALID_KEYS)
+        )
         is_decoded = bool(
             is_occupied
             and key in VALID_KEYS
@@ -255,7 +262,7 @@ def evaluate_press_completeness(
 ) -> PressCompletenessCertificate:
     """Prove that every occupied slot is decoded and every trailing slot is empty."""
     active = config or PressCompletenessConfig()
-    current = _snapshot(observation, active)
+    observed_current = _snapshot(observation, active)
     clean_observations = [
         item for item in history
         if item.panel_present
@@ -263,24 +270,37 @@ def evaluate_press_completeness(
         and item.evidence.get("clean_frame_eligible", True) is True
     ]
     snapshots = [_snapshot(item, active) for item in clean_observations]
-    same_occupancy: list[dict[str, Any]] = []
-    for item in reversed(snapshots):
-        if item["occupied"] != current["occupied"]:
-            break
-        same_occupancy.append(item)
-    same_occupancy.reverse()
+    # Preserve the earliest frame with the highest decoded coverage.  Later
+    # animation/dropout frames may provide tail-empty support, but may not erase
+    # a better same-episode sequence candidate.  A different sequence only
+    # replaces it after that sequence itself reaches stronger stable support.
+    non_empty_candidates = [item for item in snapshots if item["sequence"]]
+    candidate_support: dict[tuple[tuple[str, ...], tuple[bool, ...]], int] = {}
+    for item in non_empty_candidates:
+        identity = (item["sequence"], item["decoded"])
+        candidate_support[identity] = candidate_support.get(identity, 0) + 1
+    current = max(
+        non_empty_candidates,
+        key=lambda item: (
+            sum(item["decoded"]),
+            candidate_support[(item["sequence"], item["decoded"])],
+            -int(item["observation"].frame_index),
+        ),
+        default=observed_current,
+    )
+    same_occupancy = [
+        item for item in snapshots
+        if item["occupied"] == current["occupied"]
+    ]
     occupancy_support = same_occupancy[-active.occupancy_stability_frames:]
     occupancy_stability_count = len(occupancy_support)
-    same_sequence: list[dict[str, Any]] = []
-    for item in reversed(same_occupancy):
-        if not (
-            item["sequence"] == current["sequence"]
-            and item["decoded"] == current["decoded"]
-        ):
-            break
-        same_sequence.append(item)
-    same_sequence.reverse()
-    sequence_stability_count = len(same_sequence)
+    same_sequence = [
+        item for item in same_occupancy
+        if current["sequence"]
+        and item["sequence"] == current["sequence"]
+        and item["decoded"] == current["decoded"]
+    ]
+    sequence_stability_count = len(same_sequence) if current["sequence"] else 0
     consensus_items = same_sequence
     consensus_frames = tuple(
         int(item["observation"].frame_index) for item in consensus_items
@@ -326,8 +346,16 @@ def evaluate_press_completeness(
         occupancy_stability_count / active.occupancy_stability_frames,
         sequence_stability_count / active.sequence_stability_frames,
     )
+    decoded_coverage = (
+        decoded_count / occupied_count if occupied_count > 0 else 0.0
+    )
+    ambiguity_quality = 0.0 if any(current["ambiguous"]) or trailing_possible else 1.0
     completeness_confidence = min(
-        float(observation.confidence), occupancy_confidence, stability_confidence
+        float(observation.confidence),
+        occupancy_confidence,
+        stability_confidence,
+        decoded_coverage,
+        ambiguity_quality,
     ) if occupied_count else 0.0
     return PressCompletenessCertificate(
         panel_confirmed=panel_confirmed,

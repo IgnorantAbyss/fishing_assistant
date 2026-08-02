@@ -1,0 +1,37 @@
+{
+  "source_session": "session_20260802_102430",
+  "fixtures": [
+    {
+      "image": "episode_1_shifted_wwaw.png",
+      "episode_index": 1,
+      "source_frame": 2557,
+      "expected_sequence": "WWAW",
+      "expected_occupied_count": 4,
+      "notes": "Later vertically shifted native PRESS ROI; arrows occupy approximately slot-local y=16..27."
+    },
+    {
+      "image": "episode_2_transparent_wsaaswa.png",
+      "episode_index": 2,
+      "source_frame": 5275,
+      "expected_sequence": "WWSAASWA",
+      "expected_occupied_count": 8,
+      "notes": "Transparent trailing slots contain about 384 broad HSV pixels but no glyph structure."
+    }
+  ],
+  "event_regressions": [
+    {
+      "source_frame": 2513,
+      "expected_sequence": "WWAW",
+      "decoded_count": 4,
+      "incorrect_occupied_count_before_fix": 10,
+      "trailing_raw_colour_pixels": [403, 416, 416, 416, 416, 416]
+    },
+    {
+      "source_frame": 5231,
+      "expected_sequence": "WWSAASWA",
+      "decoded_count": 8,
+      "incorrect_occupied_count_before_fix": 10,
+      "trailing_raw_colour_pixels": [384, 384]
+    }
+  ]
+}

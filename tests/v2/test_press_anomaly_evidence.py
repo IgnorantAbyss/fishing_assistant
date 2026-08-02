@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import json
 from pathlib import Path
 import threading
 
@@ -127,3 +129,43 @@ def test_anomaly_disk_writer_runs_after_nonblocking_trigger(
     allow_writer_to_finish.set()
     summary = recorder.close()
     assert summary["press_anomaly_evidence_failures"] == []
+
+
+def test_anomaly_preserves_early_best_and_mismatch_categories(tmp_path: Path) -> None:
+    recorder = PressAnomalyEvidenceRecorder(
+        tmp_path,
+        PressAnomalyEvidenceConfig(enabled=True, buffer_frames=12, frames_per_anomaly=6),
+    )
+    for frame in range(1, 21):
+        decoded = 4 if frame == 3 else 0
+        observation = _observation(frame)
+        if decoded == 4:
+            observation = replace(
+                observation,
+                sequence_candidate=tuple("WWAW"),
+            )
+        recorder.record(
+            episode_index=1,
+            frame_index=frame,
+            timestamp=frame / 20.0,
+            roi_pixels=np.zeros((24, 40, 3), dtype=np.uint8),
+            observation=observation,
+            certificate={
+                "complete": False,
+                "occupied_count": 10 if frame <= 3 else 4,
+                "decoded_count": decoded,
+                "sequence_stability_count": 3 if frame == 3 else 0,
+            },
+        )
+    assert recorder.trigger(episode_index=1, reason="timeout") is True
+    recorder.close()
+    anomaly = json.loads(
+        (tmp_path / "press_anomalies" / "episode_1" / "anomaly.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert anomaly["evidence_categories"]["best_decoded_candidate"] == 3
+    assert anomaly["evidence_categories"]["first_incomplete_stable_candidate"] == 3
+    assert anomaly["evidence_categories"]["first_occupancy_decoded_mismatch"] == 1
+    assert anomaly["evidence_categories"]["last_before_panel_disappears"] == 20
+    assert 3 in anomaly["frames"]

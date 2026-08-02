@@ -350,39 +350,155 @@ ARROW_TO_KEY = {"LEFT": "A", "DOWN": "S", "RIGHT": "D", "UP": "W"}
 PRESS_PROGRESS_HUE_SPREAD_MIN = 22.0
 
 
-def _split_letter_arrow_regions(mask: np.ndarray) -> tuple[int, int, dict[str, Any]]:
-    """Find a non-overlapping arrow band immediately below the letter glyph."""
-    height, width = mask.shape[:2]
+def _component_records(mask: np.ndarray) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Return bounded structural components; full-width panel/background is noise."""
     count, _, stats, centroids = cv2.connectedComponentsWithStats(
         mask.astype(np.uint8), connectivity=8
     )
-    letter_candidates: list[dict[str, Any]] = []
+    height, width = mask.shape[:2]
+    components: list[dict[str, Any]] = []
     for label in range(1, count):
         x, y, component_width, component_height, area = (
             int(value) for value in stats[label]
         )
         centroid_x, centroid_y = (float(value) for value in centroids[label])
-        if (
-            area >= 8
-            and component_width >= 2
-            and component_height >= 3
-            and y < height * 0.68
-            and component_width < width * 0.80
-        ):
-            letter_candidates.append({
-                "label": label,
-                "bbox": [x, y, x + component_width, y + component_height],
-                "area": area,
-                "centroid": [round(centroid_x, 3), round(centroid_y, 3)],
-            })
-    letter = max(letter_candidates, key=lambda item: item["area"], default=None)
-    default_start = round(height * 0.40)
-    arrow_start = default_start if letter is None else max(default_start, int(letter["bbox"][3]) + 1)
-    arrow_start = min(height - 1, arrow_start)
-    arrow_end = max(arrow_start + 1, min(height, round(height * 0.98)))
+        reasons: list[str] = []
+        if area < 8:
+            reasons.append("area_too_small")
+        if component_width < 2 or component_height < 3:
+            reasons.append("bbox_too_small")
+        if component_width >= width * 0.85:
+            reasons.append("background_spans_slot_width")
+        if centroid_x < width * 0.08 or centroid_x > width * 0.92:
+            reasons.append("centroid_outside_slot_centre_band")
+        components.append({
+            "label": label,
+            "bbox": [x, y, x + component_width, y + component_height],
+            "area": area,
+            "centroid": [round(centroid_x, 3), round(centroid_y, 3)],
+            "structural": not reasons,
+            "rejection_reasons": reasons,
+        })
+    return mask.astype(np.uint8), components
+
+
+def _split_letter_arrow_regions(
+    colour_mask: np.ndarray,
+    arrow_colour_mask: np.ndarray,
+) -> tuple[int, int, dict[str, Any]]:
+    """Jointly assign letter/arrow components across the complete inner slot.
+
+    The panel moves vertically during animation, so no role is tied to a fixed
+    percentage of slot height.  Wide connected background bands are retained
+    for diagnostics but cannot establish either glyph role.
+    """
+    height, width = colour_mask.shape[:2]
+    _, broad_components = _component_records(colour_mask)
+    _, arrow_components = _component_records(arrow_colour_mask)
+    letter_candidates = [
+        {**item, "component_source": source}
+        for source, components in (
+            ("broad_colour", broad_components),
+            ("arrow_colour", arrow_components),
+        )
+        for item in components
+        if item["structural"] and int(item["bbox"][1]) < height * 0.78
+    ]
+    paired_arrow_candidates: list[dict[str, Any]] = []
+    component_pairs: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+    for letter_candidate in letter_candidates:
+        letter = letter_candidate
+        letter_bottom = int(letter["bbox"][3])
+        for item in arrow_components:
+            arrow_y = float(item["centroid"][1])
+            arrow_width = int(item["bbox"][2]) - int(item["bbox"][0])
+            arrow_height = int(item["bbox"][3]) - int(item["bbox"][1])
+            reasons = list(item["rejection_reasons"])
+            if int(item["area"]) < 25:
+                reasons.append("area_too_small_for_joint_arrow_role")
+            if arrow_y <= letter_bottom - 1:
+                reasons.append("not_below_selected_letter")
+            if (
+                letter.get("component_source") == "arrow_colour"
+                and int(letter["label"]) == int(item["label"])
+            ):
+                reasons.append("same_component_as_letter")
+            if int(item["area"]) > 180:
+                reasons.append("area_too_large_for_arrow")
+            if arrow_width > width * 0.58 or arrow_height > height * 0.36:
+                reasons.append("bbox_too_large_for_arrow")
+            centre_quality = max(
+                0.0,
+                1.0 - abs(float(item["centroid"][0]) - width * 0.5)
+                / max(1.0, width * 0.5),
+            )
+            vertical_gap = max(0.0, float(item["bbox"][1]) - letter_bottom)
+            proximity_quality = max(0.0, 1.0 - vertical_gap / max(1.0, height * 0.32))
+            candidate = {
+                **item,
+                "paired_letter_label": int(letter["label"]),
+                "paired_letter_source": str(letter["component_source"]),
+                "eligible_for_arrow_role": not reasons,
+                "arrow_role_rejection_reasons": reasons,
+                "arrow_role_score": round(
+                    0.55 * centre_quality
+                    + 0.25 * proximity_quality
+                    + 0.20 * min(1.0, int(item["area"]) / 55.0),
+                    4,
+                ),
+            }
+            paired_arrow_candidates.append(candidate)
+            if candidate["eligible_for_arrow_role"]:
+                letter_area_quality = min(1.0, int(letter["area"]) / 140.0)
+                pair_score = (
+                    float(candidate["arrow_role_score"])
+                    + 0.35 * letter_area_quality
+                )
+                component_pairs.append((pair_score, letter, candidate))
+    selected_pair = max(component_pairs, key=lambda item: item[0], default=None)
+    if selected_pair is not None:
+        _, letter, selected_arrow = selected_pair
+    else:
+        # Preserve the previous low-saturation fallback: the strongest
+        # arrow-colour structure is treated as the upper glyph boundary.
+        fallback_letters = [
+            item for item in letter_candidates
+            if item["component_source"] == "arrow_colour"
+        ]
+        letter = max(
+            fallback_letters,
+            key=lambda item: (
+                min(int(item["area"]), 320),
+                -abs(float(item["centroid"][0]) - width * 0.5),
+            ),
+            default=None,
+        )
+        selected_arrow = None
+    if selected_arrow is not None:
+        arrow_start = max(
+            int(letter["bbox"][3]),
+            int(selected_arrow["bbox"][1]) - 2,
+        )
+        arrow_end = min(height, int(selected_arrow["bbox"][3]) + 2)
+        assignment_mode = "joint_full_slot_components"
+    else:
+        # Compatibility for low-saturation frames where letter/arrow pixels
+        # merge in the broad mask.  This fallback is dynamic below the selected
+        # structure and no longer imposes a 40% lower bound.
+        arrow_start = (
+            max(0, int(letter["bbox"][3]) + 1)
+            if letter is not None else max(0, round(height * 0.22))
+        )
+        arrow_start = min(height - 1, arrow_start)
+        arrow_end = max(arrow_start + 1, min(height, round(height * 0.98)))
+        assignment_mode = "dynamic_below_letter_fallback"
     return arrow_start, arrow_end, {
         "letter_component_candidates": letter_candidates,
+        "broad_colour_component_candidates": broad_components,
         "selected_letter_component": letter,
+        "joint_arrow_component_candidates": paired_arrow_candidates,
+        "selected_joint_arrow_component": selected_arrow,
+        "component_assignment_mode": assignment_mode,
         "letter_region": [0, 0, width, arrow_start],
         "arrow_region": [0, arrow_start, width, arrow_end],
         "regions_overlap": False,
@@ -633,8 +749,10 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
         arrow_colour = (cell[:, :, 1] >= 75) & (cell[:, :, 2] >= 70)
         inner_colour = colour[:, 3:max(4, width - 3)]
         inner_arrow_colour = arrow_colour[:, 3:max(4, width - 3)]
-        arrow_start, arrow_end, region_debug = _split_letter_arrow_regions(inner_arrow_colour)
-        letter_mask = inner_colour[2:arrow_start]
+        arrow_start, arrow_end, region_debug = _split_letter_arrow_regions(
+            inner_colour,
+            inner_arrow_colour,
+        )
         arrow_value = cell[arrow_start:arrow_end, 3:max(4, width - 3), 2]
         value_range = int(np.max(arrow_value)) - int(np.min(arrow_value))
         if arrow_value.size and value_range >= 25:
@@ -669,18 +787,40 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
             ),
             None,
         )
-        letter_pixels = int(np.sum(letter_mask))
+        selected_letter = region_debug.get("selected_letter_component")
+        letter_pixels = int(selected_letter["area"]) if selected_letter else 0
         arrow_pixels = int(selected_component["area"]) if selected_component else 0
-        visible_pixels = letter_pixels + arrow_pixels
-        if visible_pixels < 6:
-            occupancy = "EMPTY"
-            occupancy_confidence = max(0.0, min(1.0, 1.0 - visible_pixels / 6.0))
-        elif visible_pixels >= 10 and (letter_pixels >= 6 or arrow_pixels >= 6):
+        raw_coloured_pixels = int(np.sum(inner_colour))
+        structural_pixels = letter_pixels + arrow_pixels
+        combined_effect_candidates = [
+            item for item in region_debug.get(
+                "broad_colour_component_candidates", ()
+            )
+            if (
+                "background_spans_slot_width" in item.get("rejection_reasons", ())
+                and int(item["bbox"][3]) - int(item["bbox"][1]) >= height * 0.45
+            )
+        ]
+        combined_effect_component = max(
+            combined_effect_candidates,
+            key=lambda item: item["area"],
+            default=None,
+        )
+        if selected_letter is not None or selected_component is not None:
             occupancy = "OCCUPIED"
-            occupancy_confidence = min(1.0, 0.5 + visible_pixels / 80.0)
-        else:
+            occupancy_confidence = min(1.0, 0.55 + structural_pixels / 100.0)
+        elif any(
+            item.get("structural") is True
+            for item in region_debug.get("letter_component_candidates", ())
+        ) or any(
+            item.get("eligible") is True
+            for item in arrow.get("arrow_component_candidates", ())
+        ):
             occupancy = "UNCERTAIN"
-            occupancy_confidence = min(1.0, visible_pixels / 10.0)
+            occupancy_confidence = 0.5
+        else:
+            occupancy = "EMPTY"
+            occupancy_confidence = 1.0
         coloured_hues = cell[:, :, 0][colour]
         median_hue = float(np.median(coloured_hues)) if len(coloured_hues) else None
         slot = {
@@ -689,7 +829,10 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
             "recognition_bbox": [x1, y1, x2, extended_y2],
             "occupancy": occupancy,
             "occupancy_confidence": round(float(occupancy_confidence), 4),
-            "coloured_pixel_count": visible_pixels,
+            "coloured_pixel_count": raw_coloured_pixels,
+            "raw_coloured_pixel_count": raw_coloured_pixels,
+            "structural_pixel_count": structural_pixels,
+            "combined_input_effect_component": combined_effect_component,
             "letter_pixel_count": letter_pixels,
             "arrow_pixel_count": arrow_pixels,
             "arrow_shape_segmentation": arrow_shape_segmentation,
@@ -703,6 +846,23 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
             ax1, ay1, ax2, ay2 = arrow["arrow_bbox"]
             slot["arrow_bbox"] = [x1 + 3 + ax1, y1 + arrow_start + ay1, x1 + 3 + ax2, y1 + arrow_start + ay2]
         slots.append(slot)
+
+    structural_indices = [
+        slot["index"] for slot in slots if slot["occupancy"] == "OCCUPIED"
+    ]
+    if structural_indices:
+        first_structural = min(structural_indices)
+        last_structural = max(structural_indices)
+        for slot in slots[first_structural:last_structural + 1]:
+            if (
+                slot["occupancy"] != "OCCUPIED"
+                and slot.get("combined_input_effect_component") is not None
+            ):
+                slot["occupancy"] = "OCCUPIED"
+                slot["occupancy_confidence"] = 0.75
+                slot["occupancy_reason"] = (
+                    "continuous_structural_prefix_with_combined_input_effect"
+                )
 
     occupied_indices = [slot["index"] for slot in slots if slot["occupancy"] == "OCCUPIED"]
     occupied_count = 0

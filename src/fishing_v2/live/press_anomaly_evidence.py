@@ -49,6 +49,7 @@ class PressAnomalyEvidenceRecorder:
         self.config = config or PressAnomalyEvidenceConfig()
         self.root = Path(session_path) / "press_anomalies"
         self._samples: deque[_Sample] = deque(maxlen=self.config.buffer_frames)
+        self._pinned: dict[int, dict[str, _Sample]] = {}
         self._triggered: set[int] = set()
         self._futures: list[Future[Any]] = []
         self._executor = (
@@ -72,7 +73,7 @@ class PressAnomalyEvidenceRecorder:
     ) -> None:
         if not self.enabled or roi_pixels is None or observation is None:
             return
-        self._samples.append(_Sample(
+        sample = _Sample(
             int(episode_index),
             int(frame_index),
             float(timestamp),
@@ -89,7 +90,32 @@ class PressAnomalyEvidenceRecorder:
                 "slots": list(observation.evidence.get("slots", ())),
                 "press_completeness_certificate": dict(certificate or {}),
             },
-        ))
+        )
+        self._samples.append(sample)
+        pins = self._pinned.setdefault(int(episode_index), {})
+        completeness = dict(certificate or {})
+        sequence_stability = int(
+            completeness.get("sequence_stability_count", 0) or 0
+        )
+        if (
+            completeness.get("complete") is False
+            and sequence_stability >= 2
+            and observation.sequence_candidate
+        ):
+            pins.setdefault("first_incomplete_stable_candidate", sample)
+        decoded_count = int(completeness.get("decoded_count", 0) or 0)
+        best = pins.get("best_decoded_candidate")
+        best_decoded = (
+            int(best.diagnostics["press_completeness_certificate"].get(
+                "decoded_count", 0
+            ) or 0)
+            if best is not None else -1
+        )
+        if decoded_count > best_decoded:
+            pins["best_decoded_candidate"] = sample
+        occupied_count = int(completeness.get("occupied_count", 0) or 0)
+        if occupied_count != decoded_count:
+            pins.setdefault("first_occupancy_decoded_mismatch", sample)
 
     def trigger(self, *, episode_index: int, reason: str) -> bool:
         if (
@@ -99,12 +125,30 @@ class PressAnomalyEvidenceRecorder:
             or len(self._triggered) >= self.config.max_episodes
         ):
             return False
-        selected = [
+        recent = [
             sample for sample in self._samples
             if sample.episode_index == int(episode_index)
-        ][-self.config.frames_per_anomaly:]
-        if not selected:
+        ]
+        if not recent:
             return False
+        pins = dict(self._pinned.get(int(episode_index), {}))
+        pins["last_before_panel_disappears"] = recent[-1]
+        selected_by_frame: dict[int, _Sample] = {}
+        for category in (
+            "first_incomplete_stable_candidate",
+            "best_decoded_candidate",
+            "first_occupancy_decoded_mismatch",
+            "last_before_panel_disappears",
+        ):
+            sample = pins.get(category)
+            if sample is not None:
+                selected_by_frame.setdefault(sample.frame_index, sample)
+        for sample in reversed(recent):
+            if len(selected_by_frame) >= self.config.frames_per_anomaly:
+                break
+            selected_by_frame.setdefault(sample.frame_index, sample)
+        selected = sorted(selected_by_frame.values(), key=lambda item: item.frame_index)
+        selected = selected[:self.config.frames_per_anomaly]
         self._triggered.add(int(episode_index))
         # Copy the bounded snapshot before returning to the capture loop.
         snapshot = tuple(selected)
@@ -113,6 +157,10 @@ class PressAnomalyEvidenceRecorder:
             int(episode_index),
             str(reason),
             snapshot,
+            {
+                category: sample.frame_index
+                for category, sample in pins.items()
+            },
         ))
         return True
 
@@ -162,6 +210,7 @@ class PressAnomalyEvidenceRecorder:
         episode_index: int,
         reason: str,
         samples: tuple[_Sample, ...],
+        categories: Mapping[str, int],
     ) -> None:
         destination = self.root / f"episode_{episode_index}"
         destination.mkdir(parents=True, exist_ok=True)
@@ -171,6 +220,7 @@ class PressAnomalyEvidenceRecorder:
                 "reason": reason,
                 "frame_count": len(samples),
                 "frames": [sample.frame_index for sample in samples],
+                "evidence_categories": dict(categories),
             }, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
