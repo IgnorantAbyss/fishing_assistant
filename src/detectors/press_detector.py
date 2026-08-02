@@ -806,21 +806,34 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
             key=lambda item: item["area"],
             default=None,
         )
-        if selected_letter is not None or selected_component is not None:
+        valid_letter_arrow_pair = bool(
+            selected_letter is not None and selected_component is not None
+        )
+        if valid_letter_arrow_pair:
             occupancy = "OCCUPIED"
             occupancy_confidence = min(1.0, 0.55 + structural_pixels / 100.0)
-        elif any(
-            item.get("structural") is True
-            for item in region_debug.get("letter_component_candidates", ())
-        ) or any(
-            item.get("eligible") is True
-            for item in arrow.get("arrow_component_candidates", ())
+            occupancy_reason = "valid_letter_arrow_pair"
+        elif (
+            selected_letter is not None
+            or selected_component is not None
+            or any(
+                item.get("structural") is True
+                for item in region_debug.get(
+                    "letter_component_candidates", ()
+                )
+            )
+            or any(
+                item.get("eligible") is True
+                for item in arrow.get("arrow_component_candidates", ())
+            )
         ):
             occupancy = "UNCERTAIN"
             occupancy_confidence = 0.5
+            occupancy_reason = "unpaired_structural_component"
         else:
             occupancy = "EMPTY"
             occupancy_confidence = 1.0
+            occupancy_reason = "no_glyph_structure"
         coloured_hues = cell[:, :, 0][colour]
         median_hue = float(np.median(coloured_hues)) if len(coloured_hues) else None
         slot = {
@@ -829,6 +842,7 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
             "recognition_bbox": [x1, y1, x2, extended_y2],
             "occupancy": occupancy,
             "occupancy_confidence": round(float(occupancy_confidence), 4),
+            "occupancy_reason": occupancy_reason,
             "coloured_pixel_count": raw_coloured_pixels,
             "raw_coloured_pixel_count": raw_coloured_pixels,
             "structural_pixel_count": structural_pixels,
@@ -838,6 +852,8 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
             "arrow_shape_segmentation": arrow_shape_segmentation,
             "arrow_value_threshold": round(float(arrow_value_threshold), 3),
             "occupancy_uses_classification": False,
+            "valid_letter_arrow_pair": valid_letter_arrow_pair,
+            "tail_component_rejected": False,
             "median_hue": None if median_hue is None else round(median_hue, 2),
             **region_debug,
             **arrow,
@@ -846,6 +862,89 @@ def _decode_arrow_slots(crop: np.ndarray, geometry: dict[str, Any]) -> dict[str,
             ax1, ay1, ax2, ay2 = arrow["arrow_bbox"]
             slot["arrow_bbox"] = [x1 + 3 + ax1, y1 + arrow_start + ay1, x1 + 3 + ax2, y1 + arrow_start + ay2]
         slots.append(slot)
+
+    # A real clean prefix supplies a frame-local vertical model.  Background
+    # text and animation fragments in unused tail cells sit close to the top
+    # edge and have no classifier-eligible arrow; they must not lengthen the
+    # physical occupied prefix.  A letter-like component near the canonical
+    # baseline remains UNCERTAIN (fail closed) instead of being declared empty.
+    canonical_prefix: list[dict[str, Any]] = []
+    for slot in slots:
+        if (
+            slot["index"] != len(canonical_prefix)
+            or not slot.get("valid_letter_arrow_pair")
+            or slot.get("mapped_key") not in ARROW_TO_KEY.values()
+        ):
+            break
+        canonical_prefix.append(slot)
+    if canonical_prefix:
+        letter_centres = [
+            float(slot["selected_letter_component"]["centroid"][1])
+            for slot in canonical_prefix
+        ]
+        letter_tops = [
+            float(slot["selected_letter_component"]["bbox"][1])
+            for slot in canonical_prefix
+        ]
+        arrow_tops = [
+            float(slot["arrow_bbox"][1] - slot["bbox"][1])
+            for slot in canonical_prefix
+        ]
+        arrow_bottoms = [
+            float(slot["arrow_bbox"][3] - slot["bbox"][1])
+            for slot in canonical_prefix
+        ]
+        slot_heights = [
+            float(slot["recognition_bbox"][3] - slot["recognition_bbox"][1])
+            for slot in canonical_prefix
+        ]
+        canonical_letter_baseline = float(np.median(letter_centres))
+        canonical_letter_top = float(np.median(letter_tops))
+        canonical_arrow_top = float(np.median(arrow_tops))
+        canonical_arrow_bottom = float(np.median(arrow_bottoms))
+        baseline_tolerance = max(3.0, float(np.median(slot_heights)) * 0.12)
+        for slot in slots:
+            slot.update({
+                "canonical_prefix_length": len(canonical_prefix),
+                "canonical_letter_baseline_y": round(
+                    canonical_letter_baseline, 3
+                ),
+                "canonical_arrow_band": [
+                    round(canonical_arrow_top, 3),
+                    round(canonical_arrow_bottom, 3),
+                ],
+                "canonical_letter_arrow_vertical_relationship": round(
+                    canonical_arrow_top - canonical_letter_baseline, 3
+                ),
+                "canonical_baseline_tolerance_y": round(
+                    baseline_tolerance, 3
+                ),
+            })
+        for slot in slots[len(canonical_prefix):]:
+            letter = slot.get("selected_letter_component")
+            if (
+                not isinstance(letter, dict)
+                or int(slot.get("arrow_pixel_count", 0) or 0) > 0
+            ):
+                continue
+            centroid_y = float(letter["centroid"][1])
+            letter_bottom = float(letter["bbox"][3])
+            slot["tail_component_baseline_delta_y"] = round(
+                centroid_y - canonical_letter_baseline, 3
+            )
+            is_top_edge_outlier = bool(
+                centroid_y
+                < canonical_letter_baseline - baseline_tolerance
+                and letter_bottom
+                < canonical_letter_top - max(2.0, baseline_tolerance * 0.25)
+            )
+            if is_top_edge_outlier:
+                slot["occupancy"] = "EMPTY"
+                slot["occupancy_confidence"] = 0.98
+                slot["occupancy_reason"] = (
+                    "unpaired_top_edge_outside_canonical_letter_baseline"
+                )
+                slot["tail_component_rejected"] = True
 
     structural_indices = [
         slot["index"] for slot in slots if slot["occupancy"] == "OCCUPIED"

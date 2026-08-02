@@ -132,11 +132,15 @@ def _snapshot(
         confidence = float(slot.get("arrow_confidence", slot.get("confidence", 0.0)) or 0.0)
         is_occupied = occupancy == "OCCUPIED"
         selected_letter = slot.get("selected_letter_component")
+        tail_component_rejected = bool(
+            slot.get("tail_component_rejected") is True
+        )
         has_component_evidence = bool(
             slot.get("possible_occupied") is True
             or (
                 isinstance(selected_letter, Mapping)
                 and selected_letter.get("structural", True) is True
+                and not tail_component_rejected
             )
             or isinstance(slot.get("combined_input_effect_component"), Mapping)
             or int(slot.get("arrow_pixel_count", 0) or 0) > 0

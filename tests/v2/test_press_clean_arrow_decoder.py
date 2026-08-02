@@ -123,6 +123,8 @@ def _decode_structural_fixture(name: str) -> dict:
     [
         ("episode_1_shifted_wwaw.png", "WWAW"),
         ("episode_2_transparent_wsaaswa.png", "WWSAASWA"),
+        ("session_20260802_145338_episode_1_dsddd.png", "DSDDD"),
+        ("session_20260802_145338_episode_3_ddawasw.png", "DDAWASW"),
     ],
 )
 def test_live_structural_occupancy_fixtures_decode_complete_prefix(
@@ -162,6 +164,8 @@ def test_vertically_shifted_arrows_are_found_without_fixed_40_percent_crop() -> 
     [
         ("episode_1_shifted_wwaw.png", "WWAW"),
         ("episode_2_transparent_wsaaswa.png", "WWSAASWA"),
+        ("session_20260802_145338_episode_1_dsddd.png", "DSDDD"),
+        ("session_20260802_145338_episode_3_ddawasw.png", "DDAWASW"),
     ],
 )
 def test_live_structural_fixture_builds_complete_certificate_and_freezes(
@@ -201,6 +205,29 @@ def test_live_structural_fixture_builds_complete_certificate_and_freezes(
     assert result.completeness.complete is True
     assert result.sequence_ready is True
     assert "".join(result.sequence_candidate) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "tail_indices"),
+    [
+        ("session_20260802_145338_episode_1_dsddd.png", (7,)),
+        ("session_20260802_145338_episode_3_ddawasw.png", (7, 8)),
+    ],
+)
+def test_unpaired_top_edge_tail_components_do_not_extend_occupancy(
+    name: str,
+    tail_indices: tuple[int, ...],
+) -> None:
+    result = _decode_structural_fixture(name)
+    for index in tail_indices:
+        slot = result["slots"][index]
+        assert slot["arrow_pixel_count"] == 0
+        assert slot["mapped_key"] is None
+        assert slot["tail_component_rejected"] is True
+        assert slot["occupancy"] == "EMPTY"
+        assert slot["occupancy_reason"] == (
+            "unpaired_top_edge_outside_canonical_letter_baseline"
+        )
 
 
 def test_sas_live_regression_uses_down_left_down_arrow_geometry() -> None:

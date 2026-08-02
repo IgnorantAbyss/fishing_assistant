@@ -16,6 +16,22 @@
       "expected_sequence": "WWSAASWA",
       "expected_occupied_count": 8,
       "notes": "Transparent trailing slots contain about 384 broad HSV pixels but no glyph structure."
+    },
+    {
+      "image": "session_20260802_145338_episode_1_dsddd.png",
+      "episode_index": 1,
+      "source_frame": 1911,
+      "expected_sequence": "DSDDD",
+      "expected_occupied_count": 5,
+      "notes": "Tail slot 8 contains an unpaired top-edge component and no eligible arrow."
+    },
+    {
+      "image": "session_20260802_145338_episode_3_ddawasw.png",
+      "episode_index": 3,
+      "source_frame": 12316,
+      "expected_sequence": "DDAWASW",
+      "expected_occupied_count": 7,
+      "notes": "Tail slots 8 and 9 contain top-edge components outside the decoded-prefix letter baseline and no eligible arrows."
     }
   ],
   "event_regressions": [
@@ -32,6 +48,20 @@
       "decoded_count": 8,
       "incorrect_occupied_count_before_fix": 10,
       "trailing_raw_colour_pixels": [384, 384]
+    },
+    {
+      "source_frame": 1911,
+      "expected_sequence": "DSDDD",
+      "decoded_count": 5,
+      "incorrect_occupied_count_before_fix": 6,
+      "unpaired_tail_slot_indices": [7]
+    },
+    {
+      "source_frame": 12316,
+      "expected_sequence": "DDAWASW",
+      "decoded_count": 7,
+      "incorrect_occupied_count_before_fix": 9,
+      "unpaired_tail_slot_indices": [7, 8]
     }
   ]
 }
