@@ -15,6 +15,7 @@ from src.fishing_v2.live.live_detect_only import (  # noqa: E402
     LiveDetectOnlyConfig,
     LiveDetectOnlyRuntime,
     LivePreflightError,
+    PRESS_DETECTOR_MODES,
     RUNTIME_PROFILES,
     validate_emit_actions,
 )
@@ -219,6 +220,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--press-detector-mode",
+        choices=PRESS_DETECTOR_MODES,
+        default="legacy",
+        help=(
+            "PRESS recognition mode; shadow compares V3 without changing "
+            "actions, and live is explicit opt-in (default: legacy)"
+        ),
+    )
+    parser.add_argument(
+        "--press-v3-debug-evidence",
+        action="store_true",
+        help="Save bounded PRESS-panel V3 masks/JSON; no full frames or video",
+    )
+    parser.add_argument(
+        "--press-v3-debug-max-episodes", type=int, default=20,
+    )
+    parser.add_argument(
+        "--press-v3-debug-max-frames-per-episode", type=int, default=8,
+    )
+    parser.add_argument(
         "--press-anomaly-buffer-frames",
         type=int,
         default=12,
@@ -282,6 +303,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--press-anomaly-buffer-frames must be at least 6")
     if args.press_anomaly_max_episodes < 1:
         parser.error("--press-anomaly-max-episodes must be positive")
+    if args.press_v3_debug_max_episodes < 0:
+        parser.error("--press-v3-debug-max-episodes must be non-negative")
+    if args.press_v3_debug_max_frames_per_episode < 0:
+        parser.error(
+            "--press-v3-debug-max-frames-per-episode must be non-negative"
+        )
     return args
 
 
@@ -428,6 +455,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             press_anomaly_max_episodes=(
                 args.press_anomaly_max_episodes
+            ),
+            press_detector_mode=args.press_detector_mode,
+            press_v3_debug_evidence=args.press_v3_debug_evidence,
+            press_v3_debug_max_episodes=(
+                args.press_v3_debug_max_episodes
+            ),
+            press_v3_debug_max_frames_per_episode=(
+                args.press_v3_debug_max_frames_per_episode
             ),
             runtime_profile=args.runtime_profile,
         ),

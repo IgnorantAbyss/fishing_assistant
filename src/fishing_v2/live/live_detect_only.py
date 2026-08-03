@@ -31,6 +31,9 @@ from src.fishing_v2.fusion.observation_fusion import ObservationFusion
 from src.fishing_v2.legacy_adapters.get_detector_adapter import LegacyGetDetectorAdapter
 from src.fishing_v2.legacy_adapters.hook_detector_adapter import LegacyHookDetectorAdapter
 from src.fishing_v2.legacy_adapters.press_detector_adapter import LegacyPressDetectorAdapter
+from src.fishing_v2.legacy_adapters.press_background_subtraction_v3_adapter import (
+    BackgroundSubtractionPressDetectorAdapter,
+)
 from src.fishing_v2.live.session_logger import LiveSessionLogger
 from src.fishing_v2.live.cast_opportunity import (
     CastBlocker,
@@ -72,6 +75,10 @@ from src.fishing_v2.live.idle_recovery import (
     IdleRecoveryTracker,
 )
 from src.fishing_v2.live.press_shadow_verification import PressShadowVerifier
+from src.fishing_v2.live.press_v3_shadow import (
+    PressV3ShadowConfig,
+    PressV3ShadowRunner,
+)
 from src.fishing_v2.live.press_anomaly_evidence import (
     PressAnomalyEvidenceConfig,
     PressAnomalyEvidenceRecorder,
@@ -141,6 +148,11 @@ LIVE_ACTION_ALLOWLIST = frozenset({
 LIVE_ACTION_ALLOWLIST_DISPLAY = (
     "CAST,START_HOOK,HOOK_ACTION,COLLECT"
 )
+PRESS_DETECTOR_MODES = (
+    "legacy",
+    "background-subtraction-shadow",
+    "background-subtraction-live",
+)
 
 
 class LivePreflightError(RuntimeError):
@@ -174,6 +186,10 @@ class LiveDetectOnlyConfig:
     press_anomaly_evidence: bool = False
     press_anomaly_buffer_frames: int = 12
     press_anomaly_max_episodes: int = 20
+    press_detector_mode: str = "legacy"
+    press_v3_debug_evidence: bool = False
+    press_v3_debug_max_episodes: int = 20
+    press_v3_debug_max_frames_per_episode: int = 8
     # Programmatic callers retain the historical diagnostic behavior; the
     # public CLI explicitly defaults to Production.
     runtime_profile: str = "diagnostic"
@@ -211,6 +227,17 @@ class LiveDetectOnlyConfig:
             enabled=self.press_anomaly_evidence,
             buffer_frames=self.press_anomaly_buffer_frames,
             max_episodes=self.press_anomaly_max_episodes,
+        )
+        if self.press_detector_mode not in PRESS_DETECTOR_MODES:
+            raise ValueError(
+                f"press_detector_mode must be one of {PRESS_DETECTOR_MODES}"
+            )
+        PressV3ShadowConfig(
+            debug_evidence=self.press_v3_debug_evidence,
+            debug_max_episodes=self.press_v3_debug_max_episodes,
+            debug_max_frames_per_episode=(
+                self.press_v3_debug_max_frames_per_episode
+            ),
         )
         if self.hook_action_stall_timeout_seconds <= 0:
             raise ValueError(
@@ -500,7 +527,12 @@ class LiveDetectOnlyRuntime:
         self.logger = logger
         self.live_config = live_config
         self.hook_detector = hook_detector or LegacyHookDetectorAdapter()
-        self.press_detector = press_detector or LegacyPressDetectorAdapter()
+        if press_detector is not None:
+            self.press_detector = press_detector
+        elif live_config.press_detector_mode == "background-subtraction-live":
+            self.press_detector = BackgroundSubtractionPressDetectorAdapter()
+        else:
+            self.press_detector = LegacyPressDetectorAdapter()
         self.get_detector = get_detector or LegacyGetDetectorAdapter()
         self.emit_actions = bool(emit_actions)
         self.action_sink_name = action_sink_name
@@ -627,6 +659,23 @@ class LiveDetectOnlyRuntime:
         self._hook_decision_trace_rows_written = 0
         self._press_shadow = PressShadowVerifier(
             diagnostics_enabled=self.evidence_recorder is not None
+        )
+        self._press_v3_shadow = (
+            PressV3ShadowRunner(
+                output_root=self.logger.path,
+                config=PressV3ShadowConfig(
+                    debug_evidence=self.live_config.press_v3_debug_evidence,
+                    debug_max_episodes=(
+                        self.live_config.press_v3_debug_max_episodes
+                    ),
+                    debug_max_frames_per_episode=(
+                        self.live_config.press_v3_debug_max_frames_per_episode
+                    ),
+                ),
+            )
+            if self.live_config.press_detector_mode
+            == "background-subtraction-shadow"
+            else None
         )
         self._press_anomaly_evidence = PressAnomalyEvidenceRecorder(
             self.logger.path,
@@ -2100,6 +2149,19 @@ class LiveDetectOnlyRuntime:
                         )
                         else None
                     )
+                    if (
+                        self._press_v3_shadow is not None
+                        and not hook_critical_mode
+                        and run_detectors
+                        and activation.press != DetectorActivationMode.OFF
+                    ):
+                        for event_type, payload in self._press_v3_shadow.observe(
+                            frame, context, press
+                        ):
+                            self.logger.event(event_type, {
+                                "timestamp": elapsed,
+                                **payload,
+                            })
                     run_get = bool(
                         not hook_critical_mode
                         and run_detectors
@@ -3134,6 +3196,10 @@ class LiveDetectOnlyRuntime:
                                 timestamp=elapsed,
                                 frame_index=captured,
                             )
+                            if self._press_v3_shadow is not None:
+                                self._press_v3_shadow.record_visual_ack(
+                                    "acknowledged"
+                                )
                         elif (
                             press_event.event_type
                             == "press_visual_ack_timeout"
@@ -3147,6 +3213,10 @@ class LiveDetectOnlyRuntime:
                                 ),
                                 reason="press_visual_ack_timeout",
                             )
+                            if self._press_v3_shadow is not None:
+                                self._press_v3_shadow.record_visual_ack(
+                                    "timeout"
+                                )
                         self.logger.event(
                             press_event.event_type,
                             {
@@ -4901,6 +4971,25 @@ class LiveDetectOnlyRuntime:
             else:
                 self._press_shadow.finish_session()
                 hook_roi_clip_summary = self._write_hook_roi_clip()
+            press_v3_summary: dict[str, Any] = {
+                "press_v3_shadow_processed_frames": 0,
+                "press_v3_shadow_dropped_busy_frames": 0,
+                "press_v3_processing_latency_mean_ms": 0.0,
+                "press_v3_processing_latency_p95_ms": 0.0,
+                "press_v3_episode_count": 0,
+                "press_v3_episode_summaries": [],
+                "press_v3_debug_evidence_path": None,
+                "press_v3_debug_evidence_frames": 0,
+            }
+            if self._press_v3_shadow is not None:
+                press_v3_events, press_v3_summary = (
+                    self._press_v3_shadow.finish(elapsed_total)
+                )
+                for event_type, payload in press_v3_events:
+                    self.logger.event(event_type, {
+                        "timestamp": elapsed_total,
+                        **payload,
+                    })
             evidence_summary: dict[str, Any] = {
                 "evidence_mode": "minimal",
                 "video_path": None,
@@ -5072,6 +5161,7 @@ class LiveDetectOnlyRuntime:
                 **evidence_summary,
                 **hook_roi_clip_summary,
                 **press_shadow_summary,
+                **press_v3_summary,
                 **press_anomaly_summary,
                 "preflight_passed": self._preflight_passed,
                 "preflight_failure_reason": self._preflight_failure_reason,
@@ -5123,6 +5213,7 @@ class LiveDetectOnlyRuntime:
                     "press_roi_clip_path", "press_roi_frames_path",
                     "press_decision_trace_path", "press_review_items_path",
                     "hook_decision_trace_path",
+                    "press_v3_debug_evidence_path",
                 ):
                     summary.pop(diagnostic_key, None)
             self.logger.finalize(summary)
