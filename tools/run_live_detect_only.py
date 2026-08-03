@@ -39,6 +39,9 @@ from src.fishing_v2.live.session_logger import (  # noqa: E402
     LiveSessionLogger,
     ProductionSessionLogger,
 )
+from src.fishing_v2.live.press_key_activity import (  # noqa: E402
+    WindowsAsyncKeyStateReader,
+)
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle  # noqa: E402
 from src.screen_capture import normalize_process_name  # noqa: E402
 
@@ -471,6 +474,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action_allowlist=args.action_allowlist,
         enable_live_press_sequence=args.enable_live_press_sequence,
         panic_key=args.panic_key,
+        press_key_state_reader=(
+            WindowsAsyncKeyStateReader()
+            if args.press_detector_mode == "background-subtraction-shadow"
+            else None
+        ),
     )
     summary = runtime.run()
     print(f"session: {logger.path}")

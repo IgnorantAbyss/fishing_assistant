@@ -32,6 +32,7 @@ reports/fishing_v2/get_cross_session_diagnostics/
 reports/fishing_v2/hook_bar_candidate_review/images/
 reports/fishing_v2/hook_bar_candidate_review/contact_sheets/
 reports/fishing_v2/live_detect_only/
+reports/fishing_v2/press_v3_validation/
 datasets/prompt_observation_v1/*
 !datasets/prompt_observation_v1/manifest.csv
 !datasets/prompt_observation_v1/dataset_summary.json

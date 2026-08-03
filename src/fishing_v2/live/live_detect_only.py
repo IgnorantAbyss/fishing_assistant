@@ -79,6 +79,10 @@ from src.fishing_v2.live.press_v3_shadow import (
     PressV3ShadowConfig,
     PressV3ShadowRunner,
 )
+from src.fishing_v2.live.press_key_activity import (
+    KeyStateReader,
+    PressKeyActivityMonitor,
+)
 from src.fishing_v2.live.press_anomaly_evidence import (
     PressAnomalyEvidenceConfig,
     PressAnomalyEvidenceRecorder,
@@ -514,6 +518,7 @@ class LiveDetectOnlyRuntime:
         sleep: Callable[[float], None] = time.sleep,
         press_timing_rng: PressTimingRng | None = None,
         console_queue: LiveConsoleEventQueue | None = None,
+        press_key_state_reader: KeyStateReader | None = None,
     ) -> None:
         validate_emit_actions(
             emit_actions,
@@ -648,6 +653,7 @@ class LiveDetectOnlyRuntime:
         self._idle_liveness_physical_idle_id: str | None = None
         self._idle_liveness_armed_physical_ids: set[str] = set()
         self._action_emission_in_progress = False
+        self._press_action_emission_active = False
         self._hook_roi_clip_samples: list[HookROIFrame] | None = (
             [] if self.evidence_recorder is not None else None
         )
@@ -672,6 +678,11 @@ class LiveDetectOnlyRuntime:
                         self.live_config.press_v3_debug_max_frames_per_episode
                     ),
                 ),
+                key_activity_monitor=(
+                    PressKeyActivityMonitor(press_key_state_reader)
+                    if press_key_state_reader is not None else None
+                ),
+                clock=self.clock,
             )
             if self.live_config.press_detector_mode
             == "background-subtraction-shadow"
@@ -1867,6 +1878,8 @@ class LiveDetectOnlyRuntime:
         last_terminal = 0.0
         last_production_heartbeat = 0.0
         started = self.clock()
+        if self._press_v3_shadow is not None:
+            self._press_v3_shadow.start_session(started)
         next_prompt_due = 0.0
         next_detector_due = 0.0
         next_result_banner_due = 0.0
@@ -2156,7 +2169,13 @@ class LiveDetectOnlyRuntime:
                         and activation.press != DetectorActivationMode.OFF
                     ):
                         for event_type, payload in self._press_v3_shadow.observe(
-                            frame, context, press
+                            frame,
+                            context,
+                            press,
+                            runtime_state=self.fsm.state.value,
+                            action_sink_press_emission_active=(
+                                self._press_action_emission_active
+                            ),
                         ):
                             self.logger.event(event_type, {
                                 "timestamp": elapsed,
@@ -3065,21 +3084,25 @@ class LiveDetectOnlyRuntime:
                                         "PRESS emitting: "
                                         + " ".join(scheduled_attempt.sequence)
                                     )
-                                    press_fast_execution = self.action_sink.apply(
-                                        press_shadow_request,
-                                        ActionExecutionContext(
-                                            action_id=action_id,
-                                            episode_id=str(
-                                                scheduled_attempt.episode_index
+                                    self._press_action_emission_active = True
+                                    try:
+                                        press_fast_execution = self.action_sink.apply(
+                                            press_shadow_request,
+                                            ActionExecutionContext(
+                                                action_id=action_id,
+                                                episode_id=str(
+                                                    scheduled_attempt.episode_index
+                                                ),
+                                                requested_at=elapsed,
+                                                capture_frame_index=captured,
+                                                runtime_state=RuntimeState.PRESS.value,
+                                                target_hwnd=self._capture_diagnostics.get(
+                                                    "hwnd"
+                                                ),
                                             ),
-                                            requested_at=elapsed,
-                                            capture_frame_index=captured,
-                                            runtime_state=RuntimeState.PRESS.value,
-                                            target_hwnd=self._capture_diagnostics.get(
-                                                "hwnd"
-                                            ),
-                                        ),
-                                    )
+                                        )
+                                    finally:
+                                        self._press_action_emission_active = False
                                     execution_events = (
                                         self._press_live_emission.record_execution(
                                             episode_index=(
@@ -4973,7 +4996,7 @@ class LiveDetectOnlyRuntime:
                 hook_roi_clip_summary = self._write_hook_roi_clip()
             press_v3_summary: dict[str, Any] = {
                 "press_v3_shadow_processed_frames": 0,
-                "press_v3_shadow_dropped_busy_frames": 0,
+                "press_v3_shadow_dropped_new_while_busy_frames": 0,
                 "press_v3_processing_latency_mean_ms": 0.0,
                 "press_v3_processing_latency_p95_ms": 0.0,
                 "press_v3_episode_count": 0,

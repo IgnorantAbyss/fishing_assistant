@@ -56,6 +56,27 @@ def v3_result_to_observation(
         evidence={
             "press_evidence_version": 3,
             "panel_phase": result.get("panel_phase"),
+            "frame_structurally_complete": bool(
+                result.get(
+                    "frame_structurally_complete",
+                    result.get("frame_complete", False),
+                )
+            ),
+            "frame_clean_eligible": bool(
+                result.get(
+                    "frame_clean_eligible",
+                    result.get("clean_frame_eligible", False),
+                )
+            ),
+            "episode_sequence_ready": bool(
+                result.get("episode_sequence_ready", False)
+            ),
+            "episode_input_started": bool(
+                result.get("episode_input_started", False)
+            ),
+            "post_input_frame": bool(
+                result.get("post_input_frame", False)
+            ),
             "clean_frame_eligible": bool(
                 result.get("clean_frame_eligible", False)
             ),

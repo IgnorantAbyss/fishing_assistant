@@ -720,7 +720,12 @@ class PressBackgroundSubtractionDetectorV3:
 
     @staticmethod
     def _panel_effect_evidence(key_strip: np.ndarray) -> dict[str, Any]:
-        """Measure broad neutral glow independently of occupancy/classification."""
+        """Measure frame-local neutral flash as one non-classification signal.
+
+        Episode-relative coloured/diffuse effects are evaluated by
+        PressV3InputEffectTracker; this stateless signal is intentionally not
+        the complete input-effect decision.
+        """
         lab = cv2.cvtColor(key_strip, cv2.COLOR_BGR2LAB)
         lightness = lab[:, :, 0].astype(np.float32)
         chroma = np.linalg.norm(
@@ -731,6 +736,7 @@ class PressBackgroundSubtractionDetectorV3:
         detected = glow_ratio >= 0.045
         return {
             "input_effect_detected": detected,
+            "frame_local_input_effect_detected": detected,
             "input_effect_reason": (
                 f"panel_neutral_glow_ratio:{glow_ratio:.4f}"
                 if detected else "none"
@@ -850,6 +856,8 @@ class PressBackgroundSubtractionDetectorV3:
                 if effect["input_effect_detected"] else
                 "PANEL_CLEAN" if frame_complete else "PANEL_APPEARING"
             ),
+            "frame_structurally_complete": frame_complete,
+            "frame_clean_eligible": clean_frame_eligible,
             "clean_frame_eligible": clean_frame_eligible,
             **effect,
             "sequence_candidate": sequence,
