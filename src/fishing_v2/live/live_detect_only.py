@@ -2778,6 +2778,12 @@ class LiveDetectOnlyRuntime:
                         )
                         if qualified_press_for_shadow is not None else None
                     )
+                    if self._press_v3_shadow is not None:
+                        self._press_v3_shadow.record_legacy_authoritative_observation(
+                            qualified_press_for_shadow,
+                            frame_index=captured,
+                            timestamp=elapsed,
+                        )
                     if (
                         isinstance(press_completeness, Mapping)
                         and not bool(press_completeness.get("complete"))
@@ -2898,6 +2904,11 @@ class LiveDetectOnlyRuntime:
                             )
                         )
                         if scheduled is not None:
+                            if self._press_v3_shadow is not None:
+                                self._press_v3_shadow.record_authoritative_action_scheduled(
+                                    episode_index=scheduled.episode_index,
+                                    sequence=scheduled.sequence,
+                                )
                             self._press_seen_cycles.add(
                                 self.deduplicator.cycle_id
                             )
@@ -3103,6 +3114,25 @@ class LiveDetectOnlyRuntime:
                                         )
                                     finally:
                                         self._press_action_emission_active = False
+                                    if (
+                                        self._press_v3_shadow is not None
+                                        and press_fast_execution.started_at
+                                        is not None
+                                    ):
+                                        self._press_v3_shadow.record_runtime_press_emission(
+                                            action_id=action_id,
+                                            press_episode_id=(
+                                                scheduled_attempt
+                                                .episode_index
+                                            ),
+                                            sequence=scheduled_attempt.sequence,
+                                            emission_started_at=(
+                                                press_fast_execution.started_at
+                                            ),
+                                            emission_completed_at=(
+                                                press_fast_execution.completed_at
+                                            ),
+                                        )
                                     execution_events = (
                                         self._press_live_emission.record_execution(
                                             episode_index=(
@@ -3127,6 +3157,16 @@ class LiveDetectOnlyRuntime:
                                             else "failed"
                                         )
                                     )
+                                    if self._press_v3_shadow is not None:
+                                        self._press_v3_shadow.record_authoritative_action_completed(
+                                            episode_index=(
+                                                scheduled_attempt.episode_index
+                                            ),
+                                            action_id=action_id,
+                                            sequence=scheduled_attempt.sequence,
+                                            applied=press_fast_execution.applied,
+                                            terminal_outcome=outcome,
+                                        )
                                     self.console.emit(f"PRESS {outcome}")
                                     self._press_shadow.record_emission_result(
                                         safety_reason=press_safety.reason,

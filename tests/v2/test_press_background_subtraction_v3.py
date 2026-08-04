@@ -17,6 +17,7 @@ from src.detectors.press_background_subtraction_v3 import (
     PressKeyStripLocator,
 )
 from src.fishing_v2.domain.frame_context import FrameContext
+from src.fishing_v2.domain.observations import PressObservation
 from src.fishing_v2.legacy_adapters.press_background_subtraction_v3_adapter import (
     BackgroundSubtractionPressDetectorAdapter,
 )
@@ -525,6 +526,213 @@ def test_read_only_key_activity_is_mockable_and_never_emits_input() -> None:
     assert activity[0].source == "external_or_manual_candidate"
     assert activity[0].payload()["telemetry_only"] is True
     assert len(api.reads) == 8
+
+
+def test_runtime_press_emission_crossing_poll_interval_is_not_manual() -> None:
+    class FakeReader:
+        def __init__(self) -> None:
+            self.down: set[str] = set()
+
+        def is_down(self, key: str) -> bool:
+            return key in self.down
+
+    reader = FakeReader()
+    monitor = PressKeyActivityMonitor(reader)
+    monitor.poll(
+        frame_index=576,
+        timestamp=28.0,
+        runtime_state="PRESS",
+        press_episode_id=1,
+        action_sink_press_emission_active=False,
+    )
+    monitor.record_runtime_emission(
+        action_id="cycle:1:PRESS_SEQUENCE",
+        press_episode_id=1,
+        sequence=tuple("SAWSDAAA"),
+        emission_started_at=27.35,
+        emission_completed_at=28.8633773,
+    )
+    reader.down.add("W")
+    activity = monitor.poll(
+        frame_index=577,
+        timestamp=28.8643665,
+        runtime_state="RESULT_PENDING",
+        press_episode_id=1,
+        action_sink_press_emission_active=False,
+    )
+    assert len(activity) == 1
+    event = activity[0].payload()
+    assert event["source"] == "runtime_emission_correlated"
+    assert event["source"] != "external_or_manual_candidate"
+    assert event["previous_poll_timestamp"] == pytest.approx(28.0)
+    assert event["current_poll_timestamp"] == pytest.approx(28.8643665)
+    assert event["runtime_press_emission_overlap"] is True
+    assert event["runtime_press_emission"] == {
+        "action_id": "cycle:1:PRESS_SEQUENCE",
+        "press_episode_id": 1,
+        "sequence": list("SAWSDAAA"),
+        "emission_started_at": pytest.approx(27.35),
+        "emission_completed_at": pytest.approx(28.8633773),
+    }
+    reader.down.clear()
+    monitor.poll(
+        frame_index=578,
+        timestamp=28.9,
+        runtime_state="RESULT_PENDING",
+        press_episode_id=1,
+        action_sink_press_emission_active=False,
+    )
+    reader.down.add("D")
+    later = monitor.poll(
+        frame_index=579,
+        timestamp=29.0,
+        runtime_state="RESULT_PENDING",
+        press_episode_id=1,
+        action_sink_press_emission_active=False,
+    )
+    assert later[0].source == "external_or_manual_candidate"
+
+
+def test_overlapping_runtime_emission_with_unmatched_key_is_ambiguous() -> None:
+    class FakeReader:
+        down: set[str] = set()
+
+        def is_down(self, key: str) -> bool:
+            return key in self.down
+
+    reader = FakeReader()
+    monitor = PressKeyActivityMonitor(reader)
+    monitor.poll(
+        frame_index=1,
+        timestamp=10.0,
+        runtime_state="PRESS",
+        press_episode_id=2,
+        action_sink_press_emission_active=False,
+    )
+    monitor.record_runtime_emission(
+        action_id="cycle:2:PRESS_SEQUENCE",
+        press_episode_id=2,
+        sequence=("S",),
+        emission_started_at=10.1,
+        emission_completed_at=10.2,
+    )
+    reader.down.add("W")
+    event = monitor.poll(
+        frame_index=2,
+        timestamp=10.201,
+        runtime_state="RESULT_PENDING",
+        press_episode_id=2,
+        action_sink_press_emission_active=False,
+    )[0]
+    assert event.source == "runtime_emission_or_external_ambiguous"
+
+
+@pytest.mark.parametrize(
+    "episode_index,sequence,freeze_frame",
+    [
+        (1, tuple("SAWSDAAA"), 574),
+        (2, tuple("SSA"), 8471),
+    ],
+)
+def test_v3_episode_summary_latches_legacy_and_authoritative_outcome(
+    tmp_path: Path,
+    episode_index: int,
+    sequence: tuple[str, ...],
+    freeze_frame: int,
+) -> None:
+    runner = PressV3ShadowRunner(output_root=tmp_path)
+    runner._active = True
+    runner._episode = episode_index
+    runner._episode_started_at = 1.0
+    runner._episode_v3_sequence = sequence
+    runner._episode_v3_complete = True
+    certificate = {
+        "complete": True,
+        "occupied_count": len(sequence),
+        "decoded_count": len(sequence),
+        "completeness_confidence": 0.9931,
+    }
+    qualified = PressObservation(
+        True,
+        0.99,
+        freeze_frame,
+        2.0,
+        sequence=sequence,
+        panel_present=True,
+        sequence_candidate=sequence,
+        sequence_ready=True,
+        evidence={
+            "occupied_slot_count": len(sequence),
+            "press_completeness_certificate": certificate,
+        },
+    )
+    runner.record_legacy_authoritative_observation(
+        qualified,
+        frame_index=freeze_frame,
+        timestamp=2.0,
+    )
+    runner.record_authoritative_action_scheduled(
+        episode_index=episode_index,
+        sequence=sequence,
+    )
+    runner.record_authoritative_action_completed(
+        episode_index=episode_index,
+        action_id=f"cycle:{episode_index}:PRESS_SEQUENCE",
+        sequence=sequence,
+        applied=True,
+        terminal_outcome="completed",
+    )
+    runner.record_visual_ack("acknowledged")
+    final_absent = PressObservation(
+        False,
+        0.0,
+        freeze_frame + 4,
+        3.0,
+        panel_present=False,
+        sequence_candidate=(),
+        sequence_ready=False,
+        evidence={"press_completeness_certificate": None},
+    )
+    runner.record_legacy_authoritative_observation(
+        final_absent,
+        frame_index=freeze_frame + 4,
+        timestamp=3.0,
+    )
+    _, payload = runner._close_episode(
+        3.0, frame_index=freeze_frame + 4
+    )[0]
+    runner.finish(3.1)
+    assert payload["legacy_final_frame_observation"]["panel_present"] is False
+    assert payload["legacy_temporal_ready"] is True
+    assert payload["legacy_completeness_certificate_complete"] is True
+    assert payload["legacy_sequence_candidate"] == list(sequence)
+    assert payload["legacy_episode_ever_temporal_ready"] is True
+    assert payload["legacy_episode_complete_certificate"]["complete"] is True
+    assert payload["first_legacy_temporal_ready_frame"] == freeze_frame
+    assert payload["first_legacy_complete_certificate_frame"] == freeze_frame
+    assert payload["legacy_frozen_frame"] == freeze_frame
+    assert payload["first_legacy_nonempty_candidate_frame"] == freeze_frame
+    assert payload["legacy_frozen_sequence"] == list(sequence)
+    assert payload["legacy_frozen_occupied_count"] == len(sequence)
+    assert payload["legacy_frozen_decoded_count"] == len(sequence)
+    assert payload["legacy_frozen_completeness_confidence"] == pytest.approx(
+        0.9931
+    )
+    assert payload["authoritative_action_scheduled"] is True
+    assert payload["authoritative_action_sequence"] == list(sequence)
+    assert payload["authoritative_action_completed"] is True
+    assert payload["authoritative_visual_acknowledged"] is True
+    assert payload["legacy_authoritative_action_outcome"] == {
+        "scheduled": True,
+        "sequence": list(sequence),
+        "action_id": f"cycle:{episode_index}:PRESS_SEQUENCE",
+        "completed": True,
+        "terminal_outcome": "completed",
+        "visual_acknowledged": True,
+    }
+    assert payload["v3_episode_complete"] is True
+    assert payload["v3_frozen_sequence"] == list(sequence)
+    assert payload["legacy_v3_agreement"] == "exact"
 
 
 def test_v3_debug_separates_capture_worker_and_write_timestamps(

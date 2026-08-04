@@ -37,9 +37,25 @@ label or a fixed hue. Input start is monotonic for that episode: later frames
 remain diagnostic but are excluded from sequence consensus, and a new physical
 panel episode resets the tracker. Optional W/A/S/D transition telemetry polls
 the existing mockable Win32 state boundary only while PRESS detection is
-active. `external_or_manual_candidate` and `runtime_emission_correlated` are
-correlation labels, not proof that input was physical or synthetic; telemetry
-never enters Runtime, Safety, or ActionIntent.
+active. A completed synchronous Runtime emission is retained in memory with
+its action/episode identity, sequence, and start/completion timestamps. A key
+edge observed after the call returns is correlated against the polling window
+`(previous_poll_timestamp, current_poll_timestamp]`: an overlapping Runtime
+emission containing that key is `runtime_emission_correlated`, an overlap that
+cannot identify the key is `runtime_emission_or_external_ambiguous`, and only
+an interval without an overlapping Runtime emission is
+`external_or_manual_candidate`. These are correlation labels, not proof that
+input was physical or synthetic, because `GetAsyncKeyState` does not expose a
+key-down timestamp or input origin. Telemetry never enters Runtime, Safety, or
+ActionIntent.
+
+Shadow episode summaries keep monotonic Legacy lifecycle facts separately
+from `legacy_final_frame_observation`. Once temporal readiness, completeness,
+the frozen sequence, action scheduling/completion, or visual acknowledgement
+has occurred, a later panel-absent frame cannot erase it. The summary reports
+the frozen Legacy and V3 sequences and their episode-level agreement; Legacy
+remains the authoritative Production detector and V3 Shadow still cannot
+create an `ActionIntent`.
 
 Offline inspection uses:
 

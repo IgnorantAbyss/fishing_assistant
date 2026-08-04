@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from statistics import mean
 import time
-from typing import Any
+from typing import Any, Mapping
 
 import cv2
 import numpy as np
@@ -226,6 +226,21 @@ class PressV3ShadowRunner:
             None
         )
         self._episode_legacy_occupied_count: int | None = None
+        self._first_legacy_nonempty_candidate_frame: int | None = None
+        self._first_legacy_temporal_ready_frame: int | None = None
+        self._first_legacy_complete_certificate_frame: int | None = None
+        self._legacy_frozen_frame: int | None = None
+        self._legacy_frozen_sequence: tuple[str, ...] = ()
+        self._legacy_frozen_occupied_count: int | None = None
+        self._legacy_frozen_decoded_count: int | None = None
+        self._legacy_frozen_completeness_confidence: float | None = None
+        self._legacy_final_frame_observation: dict[str, Any] | None = None
+        self._authoritative_action_scheduled = False
+        self._authoritative_action_sequence: tuple[str, ...] = ()
+        self._authoritative_action_completed = False
+        self._authoritative_visual_acknowledged = False
+        self._authoritative_action_id: str | None = None
+        self._authoritative_action_terminal_outcome: str | None = None
         self._episode_v3_sequence: tuple[str, ...] = ()
         self._episode_v3_complete = False
         self._episode_v3_occupied_count: int | None = None
@@ -298,6 +313,21 @@ class PressV3ShadowRunner:
             self._episode_legacy_temporal_ready = None
             self._episode_legacy_completeness_certificate_complete = None
             self._episode_legacy_occupied_count = None
+            self._first_legacy_nonempty_candidate_frame = None
+            self._first_legacy_temporal_ready_frame = None
+            self._first_legacy_complete_certificate_frame = None
+            self._legacy_frozen_frame = None
+            self._legacy_frozen_sequence = ()
+            self._legacy_frozen_occupied_count = None
+            self._legacy_frozen_decoded_count = None
+            self._legacy_frozen_completeness_confidence = None
+            self._legacy_final_frame_observation = None
+            self._authoritative_action_scheduled = False
+            self._authoritative_action_sequence = ()
+            self._authoritative_action_completed = False
+            self._authoritative_visual_acknowledged = False
+            self._authoritative_action_id = None
+            self._authoritative_action_terminal_outcome = None
             self._episode_v3_sequence = ()
             self._episode_v3_complete = False
             self._episode_v3_occupied_count = None
@@ -433,18 +463,47 @@ class PressV3ShadowRunner:
             bool(legacy_certificate.get("complete"))
             if isinstance(legacy_certificate, dict) else None
         )
+        if legacy is not None:
+            self._legacy_final_frame_observation = {
+                "frame_index": int(legacy.frame_index),
+                "timestamp": float(legacy.timestamp),
+                "panel_present": bool(legacy.panel_present),
+                "sequence_candidate": list(legacy_sequence),
+                "sequence_ready": bool(legacy.sequence_ready),
+                "completeness_certificate_complete": (
+                    legacy_certificate_complete
+                ),
+            }
+        if (
+            legacy_sequence
+            and self._first_legacy_nonempty_candidate_frame is None
+        ):
+            self._first_legacy_nonempty_candidate_frame = int(
+                legacy.frame_index if legacy is not None else context.frame_index
+            )
+        if legacy_temporal_ready is True:
+            self._episode_legacy_temporal_ready = True
+            if self._first_legacy_temporal_ready_frame is None:
+                self._first_legacy_temporal_ready_frame = int(
+                    legacy.frame_index
+                    if legacy is not None else context.frame_index
+                )
+        if legacy_certificate_complete is True:
+            self._episode_legacy_completeness_certificate_complete = True
+            if self._first_legacy_complete_certificate_frame is None:
+                self._first_legacy_complete_certificate_frame = int(
+                    legacy.frame_index
+                    if legacy is not None else context.frame_index
+                )
+        self._episode_legacy_frame_clean_candidate = bool(
+            self._episode_legacy_frame_clean_candidate
+            or legacy_frame_clean_candidate
+        )
         if legacy_sequence and (
             legacy_frame_clean_candidate
             or len(legacy_sequence) > len(self._episode_legacy_sequence)
         ):
             self._episode_legacy_sequence = legacy_sequence
-            self._episode_legacy_frame_clean_candidate = (
-                legacy_frame_clean_candidate
-            )
-            self._episode_legacy_temporal_ready = legacy_temporal_ready
-            self._episode_legacy_completeness_certificate_complete = (
-                legacy_certificate_complete
-            )
             self._episode_legacy_occupied_count = int(
                 legacy.evidence.get("occupied_slot_count", len(legacy_sequence))
             )
@@ -517,6 +576,144 @@ class PressV3ShadowRunner:
             ))
         return events
 
+    def record_legacy_authoritative_observation(
+        self,
+        observation: PressObservation | None,
+        *,
+        frame_index: int,
+        timestamp: float,
+    ) -> None:
+        """Latch qualified Legacy episode facts without affecting Runtime."""
+        if not self._active or observation is None:
+            return
+        sequence = tuple(
+            observation.sequence
+            or observation.sequence_candidate
+        )
+        certificate = observation.evidence.get(
+            "press_completeness_certificate"
+        )
+        certificate_mapping = (
+            certificate if isinstance(certificate, Mapping) else None
+        )
+        certificate_complete = bool(
+            certificate_mapping
+            and certificate_mapping.get("complete") is True
+        )
+        self._legacy_final_frame_observation = {
+            "frame_index": int(frame_index),
+            "timestamp": float(timestamp),
+            "panel_present": bool(observation.panel_present),
+            "sequence_candidate": list(sequence),
+            "sequence_ready": bool(observation.sequence_ready),
+            "completeness_certificate_complete": (
+                certificate_complete
+                if certificate_mapping is not None else None
+            ),
+        }
+        if sequence and self._first_legacy_nonempty_candidate_frame is None:
+            self._first_legacy_nonempty_candidate_frame = int(frame_index)
+        if sequence and (
+            not self._episode_legacy_sequence
+            or len(sequence) >= len(self._episode_legacy_sequence)
+        ):
+            self._episode_legacy_sequence = sequence
+            self._episode_legacy_occupied_count = int(
+                observation.evidence.get(
+                    "occupied_slot_count", len(sequence)
+                )
+            )
+        if observation.sequence_ready:
+            self._episode_legacy_temporal_ready = True
+            if self._first_legacy_temporal_ready_frame is None:
+                self._first_legacy_temporal_ready_frame = int(frame_index)
+        if certificate_complete:
+            self._episode_legacy_completeness_certificate_complete = True
+            if self._first_legacy_complete_certificate_frame is None:
+                self._first_legacy_complete_certificate_frame = int(
+                    frame_index
+                )
+        if (
+            sequence
+            and observation.sequence_ready
+            and not self._legacy_frozen_sequence
+        ):
+            self._legacy_frozen_frame = int(frame_index)
+            self._legacy_frozen_sequence = sequence
+            self._legacy_frozen_occupied_count = int(
+                (
+                    certificate_mapping.get("occupied_count")
+                    if certificate_mapping is not None else None
+                )
+                or observation.evidence.get(
+                    "occupied_slot_count", len(sequence)
+                )
+            )
+            self._legacy_frozen_decoded_count = int(
+                (
+                    certificate_mapping.get("decoded_count")
+                    if certificate_mapping is not None else None
+                )
+                or len(sequence)
+            )
+            confidence = (
+                certificate_mapping.get("completeness_confidence")
+                if certificate_mapping is not None else None
+            )
+            self._legacy_frozen_completeness_confidence = (
+                float(confidence) if confidence is not None else None
+            )
+
+    def record_authoritative_action_scheduled(
+        self,
+        *,
+        episode_index: int,
+        sequence: tuple[str, ...],
+    ) -> None:
+        if not self._active or int(episode_index) != self._episode:
+            return
+        self._authoritative_action_scheduled = True
+        if not self._authoritative_action_sequence:
+            self._authoritative_action_sequence = tuple(sequence)
+
+    def record_authoritative_action_completed(
+        self,
+        *,
+        episode_index: int,
+        action_id: str,
+        sequence: tuple[str, ...],
+        applied: bool,
+        terminal_outcome: str,
+    ) -> None:
+        if not self._active or int(episode_index) != self._episode:
+            return
+        self._authoritative_action_id = str(action_id)
+        if not self._authoritative_action_sequence:
+            self._authoritative_action_sequence = tuple(sequence)
+        self._authoritative_action_completed = bool(
+            self._authoritative_action_completed or applied
+        )
+        self._authoritative_action_terminal_outcome = str(terminal_outcome)
+
+    def record_runtime_press_emission(
+        self,
+        *,
+        action_id: str,
+        press_episode_id: int,
+        sequence: tuple[str, ...],
+        emission_started_at: float,
+        emission_completed_at: float,
+    ) -> None:
+        if self._key_activity_monitor is None:
+            return
+        self._key_activity_monitor.record_runtime_emission(
+            action_id=action_id,
+            press_episode_id=press_episode_id,
+            sequence=sequence,
+            emission_started_at=emission_started_at,
+            emission_completed_at=emission_completed_at,
+        )
+
     def _close_episode(
         self,
         timestamp: float,
@@ -526,6 +723,18 @@ class PressV3ShadowRunner:
     ) -> list[tuple[str, dict[str, Any]]]:
         if not self._active:
             return []
+        agreement = (
+            "exact"
+            if (
+                self._legacy_frozen_sequence
+                and self._episode_v3_sequence
+                and self._legacy_frozen_sequence
+                == self._episode_v3_sequence
+            )
+            else "mismatch"
+            if self._legacy_frozen_sequence and self._episode_v3_sequence
+            else "not_evaluable"
+        )
         payload = {
             "episode_index": self._episode,
             "source_frame_index": frame_index,
@@ -550,6 +759,69 @@ class PressV3ShadowRunner:
             ),
             "v3_sequence": list(self._episode_v3_sequence),
             "v3_complete": self._episode_v3_complete,
+            "first_legacy_nonempty_candidate_frame": (
+                self._first_legacy_nonempty_candidate_frame
+            ),
+            "first_legacy_temporal_ready_frame": (
+                self._first_legacy_temporal_ready_frame
+            ),
+            "first_legacy_complete_certificate_frame": (
+                self._first_legacy_complete_certificate_frame
+            ),
+            "legacy_frozen_frame": self._legacy_frozen_frame,
+            "legacy_frozen_sequence": list(self._legacy_frozen_sequence),
+            "legacy_frozen_occupied_count": (
+                self._legacy_frozen_occupied_count
+            ),
+            "legacy_frozen_decoded_count": (
+                self._legacy_frozen_decoded_count
+            ),
+            "legacy_frozen_completeness_confidence": (
+                self._legacy_frozen_completeness_confidence
+            ),
+            "authoritative_action_scheduled": (
+                self._authoritative_action_scheduled
+            ),
+            "authoritative_action_sequence": list(
+                self._authoritative_action_sequence
+            ),
+            "authoritative_action_completed": (
+                self._authoritative_action_completed
+            ),
+            "authoritative_visual_acknowledged": (
+                self._authoritative_visual_acknowledged
+            ),
+            "legacy_final_frame_observation": (
+                dict(self._legacy_final_frame_observation)
+                if self._legacy_final_frame_observation is not None else None
+            ),
+            "legacy_episode_ever_temporal_ready": bool(
+                self._episode_legacy_temporal_ready
+            ),
+            "legacy_episode_complete_certificate": {
+                "complete": bool(
+                    self._episode_legacy_completeness_certificate_complete
+                ),
+                "first_frame": self._first_legacy_complete_certificate_frame,
+                "completeness_confidence": (
+                    self._legacy_frozen_completeness_confidence
+                ),
+            },
+            "legacy_authoritative_action_outcome": {
+                "scheduled": self._authoritative_action_scheduled,
+                "sequence": list(self._authoritative_action_sequence),
+                "action_id": self._authoritative_action_id,
+                "completed": self._authoritative_action_completed,
+                "terminal_outcome": (
+                    self._authoritative_action_terminal_outcome
+                ),
+                "visual_acknowledged": (
+                    self._authoritative_visual_acknowledged
+                ),
+            },
+            "v3_episode_complete": self._episode_v3_complete,
+            "v3_frozen_sequence": list(self._episode_v3_sequence),
+            "legacy_v3_agreement": agreement,
             "episode_input_started": self._input_effect_tracker.input_started,
             "input_effect_baseline_frame_index": (
                 self._input_effect_tracker.baseline_frame_index
@@ -575,6 +847,8 @@ class PressV3ShadowRunner:
     def record_visual_ack(self, outcome: str) -> None:
         if self._active:
             self._visual_ack_outcome = str(outcome)
+            if str(outcome) == "acknowledged":
+                self._authoritative_visual_acknowledged = True
 
     def observe(
         self,
