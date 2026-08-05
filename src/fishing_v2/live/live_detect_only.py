@@ -93,6 +93,11 @@ from src.fishing_v2.live.press_live_emission import (
     PressTimingRng,
     pending_press_cancellation_reason,
 )
+from src.fishing_v2.live.ready_recovery import (
+    ReadyRecoveryCertificate,
+    ReadyRecoveryConfig,
+    ReadyRecoveryTracker,
+)
 from src.fishing_v2.live.windows_action_sink import (
     ACTION_SINK_NONE,
     ACTION_SINK_SENDINPUT,
@@ -620,6 +625,16 @@ class LiveDetectOnlyRuntime:
         self._hook_action_lifecycle = HookActionLifecycle(
             self.live_config.hook_action_stall_timeout_seconds
         )
+        self._ready_recovery = ReadyRecoveryTracker(ReadyRecoveryConfig(
+            stable_frames=fsm_config.stable_frames,
+            min_confidence=fusion_config.prompt_min_confidence,
+            freshness_seconds=0.25,
+        ))
+        self._ready_rearmed_certificates: set[str] = set()
+        self._ready_applied_certificates: set[str] = set()
+        self._ready_blocked_certificates: set[tuple[str, str]] = set()
+        self._start_hook_blocked_reasons: set[tuple[str | None, str]] = set()
+        self._ready_visual_acknowledged_episodes: set[str] = set()
         idle_recovery_config = IdleRecoveryConfig(
             window_size=self.live_config.idle_recovery_window_size,
             required_count=(
@@ -1588,6 +1603,62 @@ class LiveDetectOnlyRuntime:
             and summary().get("panic_triggered", False)
         )
 
+    def _ready_target_valid(self) -> bool:
+        """Validate the already-resolved target without selecting a new one."""
+        if self.action_sink is None:
+            return True
+        diagnostics = self._capture_diagnostics
+        return bool(
+            isinstance(diagnostics.get("hwnd"), int)
+            and int(diagnostics["hwnd"]) > 0
+            and isinstance(diagnostics.get("process_id"), int)
+            and int(diagnostics["process_id"]) > 0
+            and str(diagnostics.get("process", "")).casefold()
+            == EXPECTED_GAME_PROCESS.casefold()
+            and tuple(diagnostics.get("client_size") or ())
+            == EXPECTED_RESOLUTION
+        )
+
+    def _ready_event_payload(
+        self,
+        *,
+        timestamp: float,
+        frame_index: int,
+        prompt: PromptObservation | None,
+        foreground: bool,
+        certificate: ReadyRecoveryCertificate | None,
+        reason: str,
+    ) -> dict[str, Any]:
+        return {
+            "timestamp": timestamp,
+            "frame_index": frame_index,
+            "runtime_state": self.fsm.state.value,
+            "prompt_kind": prompt.kind.value if prompt is not None else None,
+            "prompt_confidence": (
+                prompt.confidence if prompt is not None else None
+            ),
+            "prompt_age_seconds": (
+                max(0.0, timestamp - prompt.timestamp)
+                if prompt is not None else None
+            ),
+            "foreground": foreground,
+            "physical_ready_episode_id": (
+                certificate.physical_ready_episode_id
+                if certificate is not None
+                else self._ready_recovery.physical_ready_episode_id
+            ),
+            "proposal_existed": self.fsm.pending_request is not None,
+            "emission_started": self._ready_recovery.emission_started,
+            "emission_completed": (
+                self._ready_recovery.consumed
+            ),
+            "dedupe_consumed": self.deduplicator.already_consumed(
+                ActionIntent.START_HOOK
+            ),
+            "reason": reason,
+            "action_applied": False,
+        }
+
     def _idle_conflicting_evidence(
         self,
         result: Any,
@@ -2362,6 +2433,189 @@ class LiveDetectOnlyRuntime:
                             "action_applied": False,
                         })
                     self._foreground_unavailable_event_active = foreground_unavailable
+
+                    ready_conflict = bool(
+                        (hook is not None and hook.detected)
+                        or (press is not None and press.detected)
+                        or (get is not None and get.detected)
+                        or (
+                            result_banner is not None
+                            and result_banner.detected
+                        )
+                    )
+                    prior_ready_episode_id = (
+                        self._ready_recovery.physical_ready_episode_id
+                    )
+                    ready_update = self._ready_recovery.observe(
+                        frame_index=captured,
+                        timestamp=elapsed,
+                        runtime_state=self.fsm.state,
+                        prompt=prompt,
+                        foreground=(foreground is True),
+                        target_valid=self._ready_target_valid(),
+                        conflicting_evidence=ready_conflict,
+                        panic_triggered=self._panic_latched(),
+                        action_emission_in_progress=(
+                            self._action_emission_in_progress
+                        ),
+                    )
+                    for ready_event in ready_update.events:
+                        self.logger.event(
+                            ready_event.event_type,
+                            self._ready_event_payload(
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                prompt=prompt,
+                                foreground=(foreground is True),
+                                certificate=ready_update.certificate,
+                                reason=ready_event.reason,
+                            ),
+                        )
+                    if (
+                        prior_ready_episode_id is not None
+                        and prompt is not None
+                        and prompt.kind
+                        == PromptObservationKind.HOOK_INSTRUCTION
+                        and prior_ready_episode_id
+                        not in self._ready_visual_acknowledged_episodes
+                    ):
+                        self._ready_visual_acknowledged_episodes.add(
+                            prior_ready_episode_id
+                        )
+                        self.logger.event(
+                            "start_hook_visual_acknowledged",
+                            {
+                                **self._ready_event_payload(
+                                    timestamp=elapsed,
+                                    frame_index=captured,
+                                    prompt=prompt,
+                                    foreground=(foreground is True),
+                                    certificate=None,
+                                    reason="hook_instruction_observed",
+                                ),
+                                "physical_ready_episode_id": (
+                                    prior_ready_episode_id
+                                ),
+                            },
+                        )
+                    ready_certificate = ready_update.certificate
+                    if ready_certificate is not None:
+                        certificate_id = ready_certificate.certificate_id
+                        stale_ready_states = {
+                            RuntimeState.SYNC_REQUIRED,
+                            RuntimeState.CAST_PENDING,
+                            RuntimeState.IDLE,
+                        }
+                        downstream_states = {
+                            RuntimeState.HOOK_PENDING,
+                            RuntimeState.HOOK,
+                            RuntimeState.RESULT_PENDING,
+                            RuntimeState.PRESS,
+                            RuntimeState.GET,
+                            RuntimeState.COLLECT_PENDING,
+                        }
+                        if (
+                            self.fsm.state in stale_ready_states
+                            and certificate_id
+                            not in self._ready_applied_certificates
+                        ):
+                            previous_ready_state = self.fsm.state
+                            self.controller.discard_external_proposal()
+                            self.deduplicator.release(
+                                ActionIntent.START_HOOK
+                            )
+                            recovered_ready = self.fsm.force_state(
+                                RuntimeState.READY,
+                                elapsed,
+                                "authoritative_ready_prompt_recovery",
+                            )
+                            transition_results.append(recovered_ready)
+                            self._ready_applied_certificates.add(
+                                certificate_id
+                            )
+                            self._ready_rearmed_certificates.add(
+                                certificate_id
+                            )
+                            self.logger.event(
+                                "ready_recovery_applied",
+                                {
+                                    **self._ready_event_payload(
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        prompt=prompt,
+                                        foreground=(foreground is True),
+                                        certificate=ready_certificate,
+                                        reason=(
+                                            "fresh_stable_ready_"
+                                            "authoritative_recovery"
+                                        ),
+                                    ),
+                                    "previous_state": (
+                                        previous_ready_state.value
+                                    ),
+                                    "next_state": RuntimeState.READY.value,
+                                },
+                            )
+                        elif self.fsm.state in downstream_states:
+                            blocked_key = (
+                                certificate_id,
+                                self.fsm.state.value,
+                            )
+                            if (
+                                blocked_key
+                                not in self._ready_blocked_certificates
+                            ):
+                                self._ready_blocked_certificates.add(
+                                    blocked_key
+                                )
+                                self.logger.event(
+                                    "ready_recovery_blocked",
+                                    self._ready_event_payload(
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        prompt=prompt,
+                                        foreground=(foreground is True),
+                                        certificate=ready_certificate,
+                                        reason=(
+                                            "downstream_runtime_state_"
+                                            "cannot_recover_to_ready"
+                                        ),
+                                    ),
+                                )
+                        elif (
+                            self.fsm.state == RuntimeState.READY
+                            and certificate_id
+                            not in self._ready_rearmed_certificates
+                            and self._ready_recovery.proposal_allowed
+                            and ready_certificate.foreground_generation > 0
+                        ):
+                            proposal_existed = (
+                                self.fsm.pending_request is not None
+                            )
+                            self.controller.discard_external_proposal()
+                            self.deduplicator.release(
+                                ActionIntent.START_HOOK
+                            )
+                            self._ready_rearmed_certificates.add(
+                                certificate_id
+                            )
+                            self.logger.event(
+                                "start_hook_rearmed_after_foreground_restore",
+                                {
+                                    **self._ready_event_payload(
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        prompt=prompt,
+                                        foreground=(foreground is True),
+                                        certificate=ready_certificate,
+                                        reason=(
+                                            "fresh_ready_certificate_"
+                                            "released_unemitted_proposal"
+                                        ),
+                                    ),
+                                    "proposal_existed": proposal_existed,
+                                },
+                            )
 
                     cast_tracking_enabled = bool(
                         self.action_sink is not None
@@ -4476,6 +4730,31 @@ class LiveDetectOnlyRuntime:
                             would_fire["physical_get_episode_id"] = (
                                 self.collect_retry.physical_episode_id
                             )
+                    elif request.intent == ActionIntent.START_HOOK:
+                        self.deduplicator.record_raw_proposal(request)
+                        start_hook_safety_reason = (
+                            last_result.safety.reason
+                        )
+                        if ready_certificate is None:
+                            start_hook_safety_reason = (
+                                "ready_recovery_certificate_missing"
+                            )
+                        elif not self._ready_recovery.proposal_allowed:
+                            start_hook_safety_reason = (
+                                "ready_episode_opportunity_consumed"
+                            )
+                        would_fire = self.deduplicator.observe(
+                            request,
+                            safety_reason=start_hook_safety_reason,
+                            frame_index=captured,
+                            timestamp=elapsed,
+                            runtime_state=self.fsm.state.value,
+                            prompt_evidence=(
+                                prompt.evidence if prompt else None
+                            ),
+                            specialized_evidence=specialized,
+                            count_raw=False,
+                        )
                     else:
                         would_fire = self.deduplicator.observe(
                             request,
@@ -4521,6 +4800,46 @@ class LiveDetectOnlyRuntime:
                                 would_fire["safety_reason"] = (
                                     "press_sequence_shadow_only_not_live_allowlisted"
                                 )
+                    if request.intent == ActionIntent.START_HOOK:
+                        current_ready_episode = (
+                            self._ready_recovery
+                            .physical_ready_episode_id
+                        )
+                        if would_fire is None:
+                            blocked_key = (
+                                current_ready_episode,
+                                start_hook_safety_reason,
+                            )
+                            if (
+                                blocked_key
+                                not in self._start_hook_blocked_reasons
+                            ):
+                                self._start_hook_blocked_reasons.add(
+                                    blocked_key
+                                )
+                                self.logger.event(
+                                    "start_hook_safety_blocked",
+                                    self._ready_event_payload(
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        prompt=prompt,
+                                        foreground=(foreground is True),
+                                        certificate=ready_certificate,
+                                        reason=start_hook_safety_reason,
+                                    ),
+                                )
+                        else:
+                            self.logger.event(
+                                "start_hook_proposed",
+                                self._ready_event_payload(
+                                    timestamp=elapsed,
+                                    frame_index=captured,
+                                    prompt=prompt,
+                                    foreground=(foreground is True),
+                                    certificate=ready_certificate,
+                                    reason=request.reason,
+                                ),
+                            )
                     if would_fire:
                         event_type = would_fire.pop("event_type")
                         action_id = str(would_fire["deduplication_key"])
@@ -4742,6 +5061,61 @@ class LiveDetectOnlyRuntime:
                                 )
                             finally:
                                 self._action_emission_in_progress = False
+                            if request.intent == ActionIntent.START_HOOK:
+                                emission_started = (
+                                    execution.started_at is not None
+                                )
+                                if emission_started:
+                                    self.logger.event(
+                                        "start_hook_emission_started",
+                                        {
+                                            **self._ready_event_payload(
+                                                timestamp=(
+                                                    execution.started_at
+                                                ),
+                                                frame_index=captured,
+                                                prompt=prompt,
+                                                foreground=(
+                                                    foreground is True
+                                                ),
+                                                certificate=(
+                                                    ready_certificate
+                                                ),
+                                                reason="os_emission_started",
+                                            ),
+                                            "action_id": action_id,
+                                        },
+                                    )
+                                if execution.applied:
+                                    self.logger.event(
+                                        "start_hook_emission_completed",
+                                        {
+                                            **self._ready_event_payload(
+                                                timestamp=(
+                                                    execution.completed_at
+                                                ),
+                                                frame_index=captured,
+                                                prompt=prompt,
+                                                foreground=(
+                                                    foreground is True
+                                                ),
+                                                certificate=(
+                                                    ready_certificate
+                                                ),
+                                                reason=(
+                                                    "complete_os_input_emission"
+                                                ),
+                                            ),
+                                            "action_id": action_id,
+                                        },
+                                    )
+                                elif not emission_started:
+                                    # Sink-side preflight rejected before any
+                                    # OS input. The current physical READY
+                                    # opportunity remains eligible.
+                                    self.deduplicator.release(
+                                        ActionIntent.START_HOOK
+                                    )
                             if collect_attempt is not None:
                                 self._log_collect_events(
                                     self.collect_retry.record_execution(
@@ -4791,6 +5165,12 @@ class LiveDetectOnlyRuntime:
                                     elapsed,
                                 )
                                 if not commit.action_applied:
+                                    if request.intent == ActionIntent.START_HOOK:
+                                        self._ready_recovery.record_emission(
+                                            started=True,
+                                            completed=True,
+                                            committed=False,
+                                        )
                                     if collect_attempt is not None and self.collect_retry.active:
                                         self._log_collect_events(
                                             (self.collect_retry.cancel(
@@ -4815,6 +5195,14 @@ class LiveDetectOnlyRuntime:
                                     stop_after_action_commit_failure = True
                                 else:
                                     if request.intent == ActionIntent.START_HOOK:
+                                        self._ready_recovery.record_emission(
+                                            started=(
+                                                execution.started_at
+                                                is not None
+                                            ),
+                                            completed=True,
+                                            committed=True,
+                                        )
                                         self._runtime_cycle_started = True
                                         self._hook_action_lifecycle.begin_episode(
                                             cycle_id=self.deduplicator.cycle_id,
@@ -4836,6 +5224,14 @@ class LiveDetectOnlyRuntime:
                                             recorded_observation=True,
                                         )
                             else:
+                                if request.intent == ActionIntent.START_HOOK:
+                                    self._ready_recovery.record_emission(
+                                        started=(
+                                            execution.started_at is not None
+                                        ),
+                                        completed=False,
+                                        committed=False,
+                                    )
                                 self.controller.discard_external_proposal()
                         else:
                             self.controller.discard_external_proposal()

@@ -122,6 +122,11 @@ class FishingFSM:
     def hook_episode_active(self) -> bool:
         return self._hook_episode_active
 
+    @property
+    def pending_request(self) -> ActionRequest | None:
+        """Expose proposal presence for lifecycle diagnostics only."""
+        return self._pending_request
+
     @staticmethod
     def _none(reason: str = "no_action") -> ActionRequest:
         return ActionRequest(ActionIntent.NONE, 0.0, reason)

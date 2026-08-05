@@ -2541,6 +2541,158 @@ def test_live_start_hook_focus_loss_never_reaches_sink(
     assert summary["unique_would_fire"].get("WOULD_START_HOOK", 0) == 0
 
 
+def test_live_foreground_restore_recertifies_ready_and_emits_once(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class RestoreCapture(MockCapture):
+        def __init__(self, frame):
+            super().__init__(frame, diagnostics={
+                "hwnd": 4242,
+                "window_title": "test-window",
+                "process": "BlackDesert64",
+                "process_id": 99,
+                "client_size": [2560, 1440],
+            })
+            self.foreground_checks = 0
+
+        def is_foreground(self) -> bool:
+            self.foreground_checks += 1
+            return self.foreground_checks >= 4
+
+    class ReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.99,
+                {PromptObservationKind.READY_BITE.value: 0.99},
+                "foreground-restore-regression",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    class CompleteSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["START_HOOK"],
+                "panic_triggered": False,
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteSink(kwargs)
+        created.append(sink)
+        return sink
+
+    runtime = _runtime(
+        tmp_path,
+        RestoreCapture(supported_frame),
+        FakeClock(),
+        duration_seconds=1.2,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="START_HOOK",
+        action_sink_factory=factory,
+    )
+    runtime.prompt_bundle = replace(runtime.prompt_bundle, observer=ReadyObserver())
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+
+    summary = runtime.run(max_frames=35)
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+
+    assert len(created[0].calls) == 1
+    assert summary["actions_applied"] == 1
+    event_types = [item["event_type"] for item in events]
+    assert "foreground_lost" in event_types
+    assert "foreground_restored" in event_types
+    restored = next(
+        item for item in events
+        if item["event_type"] == "foreground_restored"
+    )
+    certificate = next(
+        item for item in events
+        if item["event_type"] == "ready_recovery_certificate_created"
+    )
+    assert certificate["frame_index"] > restored["frame_index"]
+    assert event_types.count("start_hook_emission_completed") == 1
+
+
+def test_live_sync_required_uses_fresh_ready_certificate_before_start_hook(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class ReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.99,
+                {PromptObservationKind.READY_BITE.value: 0.99},
+                "sync-ready-regression",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        duration_seconds=0.8,
+    )
+    runtime.prompt_bundle = replace(runtime.prompt_bundle, observer=ReadyObserver())
+    runtime.fsm.force_state(
+        RuntimeState.SYNC_REQUIRED,
+        0.0,
+        "stale_after_foreground_loss",
+    )
+
+    summary = runtime.run(max_frames=25)
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+
+    applied = next(
+        item for item in events
+        if item["event_type"] == "ready_recovery_applied"
+    )
+    assert applied["previous_state"] == RuntimeState.SYNC_REQUIRED.value
+    assert applied["next_state"] == RuntimeState.READY.value
+    assert summary["unique_would_fire"].get("WOULD_START_HOOK") == 1
+    assert summary["actions_applied"] == 0
+
+
 def test_live_session_directory_never_overwrites(tmp_path: Path) -> None:
     timestamp = datetime(2026, 7, 13, 1, 2, 3, tzinfo=timezone.utc)
     first = create_live_session_directory(tmp_path, timestamp=timestamp)
