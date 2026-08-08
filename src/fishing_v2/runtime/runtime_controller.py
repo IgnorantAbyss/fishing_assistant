@@ -187,6 +187,73 @@ class RuntimeController:
             execution,
         )
 
+    def reevaluate_qualified_after_recovery(
+        self,
+        raw_bundle: ObservationBundle,
+        qualified: QualifiedObservationBundle,
+        *,
+        foreground: bool | None,
+        runtime_environment_supported: bool,
+    ) -> ControllerResult:
+        """Re-evaluate one fresh qualified frame after an external recovery.
+
+        Qualification is intentionally not run twice. The same immutable raw
+        observation still traverses Fusion, the FSM's HookActionPolicy, and
+        Safety under the newly committed runtime state.
+        """
+        activation = self.activation_policy.evaluate(
+            self.fsm.state,
+            raw_bundle,
+            recorded_observation=True,
+        )
+        bundle = qualified.bundle
+        evidence = self.fusion.fuse(bundle, self.fsm.state)
+        fsm_result = self.fsm.advance(
+            evidence,
+            bundle.timestamp,
+            bundle,
+            recorded_observation=True,
+            hook_action_observation=raw_bundle.hook,
+        )
+        get_panel_present = (
+            bundle.get.detected if bundle.get is not None else None
+        )
+        safety = self.safety.evaluate(
+            fsm_result.action_request,
+            fsm_result.next_state,
+            evidence,
+            foreground=foreground,
+            already_sent=False,
+            elapsed_since_action=(
+                None
+                if self._last_action_at is None
+                else bundle.timestamp - self._last_action_at
+            ),
+            runtime_environment_supported=runtime_environment_supported,
+            get_panel_present=get_panel_present,
+        )
+        next_activation = self.activation_policy.evaluate(
+            self.fsm.state,
+            raw_bundle,
+            recorded_observation=True,
+        )
+        return ControllerResult(
+            evidence,
+            fsm_result,
+            safety,
+            activation,
+            next_activation,
+            qualified,
+            False,
+            ActionCommitResult(
+                False,
+                self.fsm.state,
+                self.fsm.state,
+                "action_not_applied",
+            ),
+            None,
+        )
+
     def commit_external_action(
         self,
         request: ActionRequest,

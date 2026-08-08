@@ -45,6 +45,7 @@ def _config_objects(config_path: Path):
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     fsm = dict(data["fsm"])
     fsm.update({
+        "prompt_min_confidence": data["fusion"]["prompt_min_confidence"],
         "hook_divider_safety_margin_px": data["hook"]["divider_safety_margin_px"],
         "hook_fallback_trigger_threshold": data["hook"]["fallback_trigger_threshold"],
         "hook_episode_timeout_sec": data["hook"]["episode_timeout_sec"],

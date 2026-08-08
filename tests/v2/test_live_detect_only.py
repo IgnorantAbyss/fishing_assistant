@@ -1399,6 +1399,76 @@ def test_live_hook_stall_without_current_evidence_returns_to_sync_required(
     )
 
 
+def test_session_20260804_hook_watchdog_rearm_has_bounded_terminal(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class QualifiedButNotReadyHookDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                True,
+                0.90,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.20,
+                evidence={
+                    "matched_features": ["hook_bar_rect", "bar_fill"],
+                    "fallback_ratio_trustworthy": True,
+                },
+            )
+
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        duration_seconds=7.0,
+        hook_action_stall_timeout_seconds=3.0,
+    )
+    runtime.hook_detector = QualifiedButNotReadyHookDetector()
+    runtime.fsm.force_state(
+        RuntimeState.SYNC_REQUIRED,
+        0.0,
+        "persistent_conflicting_or_illegal_evidence",
+    )
+    runtime._hook_action_lifecycle.begin_episode(
+        cycle_id=runtime.deduplicator.cycle_id,
+        timestamp=0.0,
+        start_hook_applied=True,
+    )
+
+    summary = runtime.run(max_frames=220)
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+
+    assert summary["actions_applied"] == 0
+    assert runtime.fsm.state == RuntimeState.SYNC_REQUIRED
+    assert any(
+        row["event_type"] == "hook_action_rearmed_after_sync_recovery"
+        for row in events
+    )
+    assert any(
+        row["event_type"] == "hook_action_rearmed_by_watchdog"
+        for row in events
+    )
+    terminal = next(
+        row for row in events
+        if row["event_type"] == "hook_stall_returned_to_sync_required"
+        and row["recovery_reason"]
+        in {
+            "hook_action_rearm_grace_expired",
+            "hook_action_hard_liveness_ceiling",
+        }
+    )
+    assert terminal["terminal_outcome"] == "sync_required"
+    assert summary["hook_action_lifecycle"]["terminal_outcome"] == (
+        "sync_required"
+    )
+
+
 def test_live_press_shadow_proposes_once_without_calling_action_sink(
     tmp_path: Path,
     supported_frame: np.ndarray,
@@ -2102,6 +2172,7 @@ def test_hook_critical_roi_loop_sustains_source_rate_despite_slow_diagnostics(
     assert suspension["hook_roi_clip_covers_interval"] is True
     assert suspension["hook_roi_clip_frame_count"] == 31
     assert summary["detector_runs"]["result_banner"] == 0
+    assert summary["hook_critical_state_invariant_violations"] == 0
     trace_path = Path(summary["hook_decision_trace_path"])
     trace_rows = [
         json.loads(line)

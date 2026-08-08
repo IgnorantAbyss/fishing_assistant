@@ -21,7 +21,12 @@ from src.fishing_v2.runtime.runtime_controller import (
 from src.fishing_v2.runtime.safety_policy import SafetyConfig, SafetyPolicy
 
 
-def _qualified_crossing(frame: int, timestamp: float) -> ObservationBundle:
+def _qualified_crossing(
+    frame: int,
+    timestamp: float,
+    *,
+    fill_ratio: float = 0.75,
+) -> ObservationBundle:
     return ObservationBundle(
         frame,
         timestamp,
@@ -38,7 +43,7 @@ def _qualified_crossing(frame: int, timestamp: float) -> ObservationBundle:
             0.90,
             frame,
             timestamp,
-            fill_ratio=0.75,
+            fill_ratio=fill_ratio,
             evidence={
                 "matched_features": ["hook_bar_rect", "bar_fill"],
                 "fallback_ratio_trustworthy": True,
@@ -99,8 +104,8 @@ def test_sync_required_hook_recovery_rearms_exactly_once() -> None:
     assert repeated.fsm.action_request.intent == ActionIntent.NONE
 
 
-@pytest.mark.parametrize("terminal", ["started", "emitted", "applied"])
-def test_sync_recovery_never_rearms_started_or_consumed_action(
+@pytest.mark.parametrize("terminal", ["emitted", "applied"])
+def test_sync_recovery_never_rearms_consumed_action(
     terminal: str,
 ) -> None:
     lifecycle = HookActionLifecycle(3.0)
@@ -109,19 +114,34 @@ def test_sync_recovery_never_rearms_started_or_consumed_action(
         timestamp=0.0,
         start_hook_applied=True,
     )
-    if terminal == "started":
-        lifecycle.mark_action_started()
-    else:
-        lifecycle.mark_emission_result(
-            emission_started=(terminal == "emitted"),
-            applied=(terminal == "applied"),
-        )
+    lifecycle.mark_emission_result(
+        emission_started=(terminal == "emitted"),
+        applied=(terminal == "applied"),
+    )
 
     assert lifecycle.can_rearm_after_sync() is False
     assert lifecycle.rearm_after_sync() is False
     episode = lifecycle.episode
     assert episode is not None
-    assert episode.hook_action_consumed is (terminal != "started")
+    assert episode.hook_action_consumed is True
+
+
+def test_proposal_without_os_emission_remains_rearmable() -> None:
+    lifecycle = HookActionLifecycle(3.0)
+    lifecycle.begin_episode(
+        cycle_id=53,
+        timestamp=0.0,
+        start_hook_applied=True,
+    )
+    lifecycle.mark_action_started()
+    lifecycle.mark_emission_result(
+        emission_started=False,
+        applied=False,
+    )
+
+    assert lifecycle.can_rearm_after_sync() is True
+    assert lifecycle.episode is not None
+    assert lifecycle.episode.hook_action_consumed is False
 
 
 def test_hook_stall_with_current_qualified_evidence_rearms_once() -> None:
@@ -135,6 +155,7 @@ def test_hook_stall_with_current_qualified_evidence_rearms_once() -> None:
 
     first = lifecycle.evaluate_stall(
         runtime_state=RuntimeState.HOOK,
+        timestamp=3.01,
         state_age_seconds=3.01,
         qualified_hook_current=True,
         hook_evidence_confidence=0.90,
@@ -142,13 +163,17 @@ def test_hook_stall_with_current_qualified_evidence_rearms_once() -> None:
     )
     assert first is not None
     assert first.action == "rearm"
-    assert lifecycle.evaluate_stall(
+    terminal = lifecycle.evaluate_stall(
         runtime_state=RuntimeState.HOOK,
+        timestamp=6.1,
         state_age_seconds=6.1,
         qualified_hook_current=True,
         hook_evidence_confidence=0.91,
         hook_evidence_age_seconds=0.01,
-    ) is None
+    )
+    assert terminal is not None
+    assert terminal.action == "sync_required"
+    assert terminal.reason == "hook_action_rearm_grace_expired"
 
 
 def test_hook_stall_without_current_evidence_returns_to_sync_required() -> None:
@@ -160,6 +185,7 @@ def test_hook_stall_without_current_evidence_returns_to_sync_required() -> None:
     )
     decision = lifecycle.evaluate_stall(
         runtime_state=RuntimeState.HOOK,
+        timestamp=341.06,
         state_age_seconds=341.06,
         qualified_hook_current=False,
         hook_evidence_confidence=None,
@@ -200,6 +226,7 @@ def test_hook_stall_safety_blocker_never_rearms_or_consumes(
     )
     decision = lifecycle.evaluate_stall(
         runtime_state=RuntimeState.HOOK,
+        timestamp=4.0,
         state_age_seconds=4.0,
         qualified_hook_current=True,
         hook_evidence_confidence=0.90,
@@ -207,10 +234,14 @@ def test_hook_stall_safety_blocker_never_rearms_or_consumes(
         safety_blockers=(blocker,),
     )
     assert decision is not None
-    assert decision.action == "blocked"
+    assert decision.action == "sync_required"
     episode = lifecycle.episode
     assert episode is not None
-    assert episode.watchdog_triggered is False
+    assert episode.terminal_outcome in {
+        "panic",
+        "foreground_lost",
+        "safety_blocked_terminal",
+    }
     assert episode.hook_action_consumed is False
 
 
@@ -251,3 +282,286 @@ def test_normal_hook_pending_path_is_unchanged() -> None:
     assert result.fsm.previous_state == RuntimeState.HOOK_PENDING
     assert result.fsm.next_state == RuntimeState.HOOK
     assert result.fsm.action_request.intent == ActionIntent.HOOK_ACTION
+
+
+def test_hook_instruction_ack_wins_over_pending_prompt_conflict() -> None:
+    fsm = FishingFSM(
+        FSMConfig(
+            stable_frames=1,
+            sync_lost_timeout_sec=2.0,
+            hook_pending_timeout_sec=3.0,
+        ),
+        initial_state=RuntimeState.HOOK_PENDING,
+        initial_timestamp=0.0,
+    )
+    controller = _controller(fsm)
+    ready = PromptObservation(
+        PromptObservationKind.READY_BITE,
+        0.99,
+        {PromptObservationKind.READY_BITE.value: 0.99},
+        "ready-hook-overlap",
+        1,
+        0.01,
+    )
+    first = controller.process(
+        ObservationBundle(1, 0.01, ready),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert first.fsm.next_state == RuntimeState.HOOK_PENDING
+
+    hook_prompt = PromptObservation(
+        PromptObservationKind.HOOK_INSTRUCTION,
+        0.99,
+        {PromptObservationKind.HOOK_INSTRUCTION.value: 0.99},
+        "fresh-hook-ack",
+        2,
+        2.05,
+    )
+    acknowledged = controller.process(
+        ObservationBundle(2, 2.05, hook_prompt),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert acknowledged.fsm.next_state == RuntimeState.HOOK_PENDING
+    assert acknowledged.fsm.transition_reason == (
+        "hook_instruction_acknowledged_waiting_for_hook_evidence"
+    )
+    assert acknowledged.fsm.visual_acknowledgement == "HOOK_INSTRUCTION"
+
+    crossed = _process(controller, 3, 2.10)
+    assert crossed.fsm.next_state == RuntimeState.HOOK
+    assert crossed.fsm.action_request.intent == ActionIntent.HOOK_ACTION
+
+
+def test_hook_instruction_ack_does_not_disable_hook_pending_timeout() -> None:
+    fsm = FishingFSM(
+        FSMConfig(stable_frames=1, hook_pending_timeout_sec=3.0),
+        initial_state=RuntimeState.HOOK_PENDING,
+        initial_timestamp=0.0,
+    )
+    prompt = PromptObservation(
+        PromptObservationKind.HOOK_INSTRUCTION,
+        0.99,
+        {PromptObservationKind.HOOK_INSTRUCTION.value: 0.99},
+        "persistent-hook-hint-without-bar",
+        1,
+        3.01,
+    )
+    result = _controller(fsm).process(
+        ObservationBundle(1, 3.01, prompt),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert result.fsm.next_state == RuntimeState.SYNC_REQUIRED
+    assert result.fsm.transition_reason == "hook_pending_timeout"
+
+
+def test_low_confidence_hook_instruction_is_not_visual_ack() -> None:
+    fsm = FishingFSM(
+        FSMConfig(stable_frames=1, prompt_min_confidence=0.8),
+        initial_state=RuntimeState.HOOK_PENDING,
+    )
+    prompt = PromptObservation(
+        PromptObservationKind.HOOK_INSTRUCTION,
+        0.79,
+        {PromptObservationKind.HOOK_INSTRUCTION.value: 0.79},
+        "below-existing-prompt-gate",
+        1,
+        0.1,
+    )
+    result = _controller(fsm).process(
+        ObservationBundle(1, 0.1, prompt),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert result.fsm.visual_acknowledgement is None
+    assert result.fsm.transition_reason != (
+        "hook_instruction_acknowledged_waiting_for_hook_evidence"
+    )
+
+
+def test_sync_recovery_reuses_same_fresh_qualified_crossing() -> None:
+    fsm = FishingFSM(
+        FSMConfig(stable_frames=1),
+        initial_state=RuntimeState.SYNC_REQUIRED,
+    )
+    controller = _controller(fsm)
+    raw = _qualified_crossing(10, 5.0)
+    blocked = controller.process(
+        raw,
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert blocked.fsm.action_request.intent == ActionIntent.NONE
+
+    fsm.recover_from_sync_required(
+        RuntimeState.HOOK,
+        5.0,
+        "qualified_hook_sync_recovery",
+    )
+    assert fsm.rearm_hook_action_opportunity(5.0)
+    reevaluated = controller.reevaluate_qualified_after_recovery(
+        raw,
+        blocked.qualified,
+        foreground=True,
+        runtime_environment_supported=True,
+    )
+    assert reevaluated.fsm.action_request.intent == ActionIntent.HOOK_ACTION
+    assert reevaluated.safety.reason == "action_emission_disabled"
+
+
+def test_watchdog_rearm_next_frame_action_ready_exactly_once() -> None:
+    lifecycle = HookActionLifecycle(3.0, hard_liveness_ceiling_seconds=12.0)
+    lifecycle.begin_episode(
+        cycle_id=1,
+        timestamp=0.0,
+        start_hook_applied=True,
+    )
+    decision = lifecycle.evaluate_stall(
+        runtime_state=RuntimeState.HOOK,
+        timestamp=3.01,
+        state_age_seconds=3.01,
+        qualified_hook_current=True,
+        hook_evidence_confidence=0.90,
+        hook_evidence_age_seconds=0.01,
+    )
+    assert decision is not None and decision.action == "rearm"
+
+    fsm = FishingFSM(
+        FSMConfig(stable_frames=1),
+        initial_state=RuntimeState.HOOK,
+    )
+    assert fsm.rearm_hook_action_opportunity(3.01)
+    controller = _controller(fsm)
+    first = _process(controller, 2, 3.04)
+    assert first.fsm.action_request.intent == ActionIntent.HOOK_ACTION
+    lifecycle.mark_action_started()
+    lifecycle.mark_emission_result(emission_started=True, applied=True)
+
+    controller.discard_external_proposal()
+    repeated = _process(controller, 3, 3.07)
+    assert repeated.fsm.action_request.intent == ActionIntent.NONE
+    assert lifecycle.evaluate_stall(
+        runtime_state=RuntimeState.HOOK,
+        timestamp=20.0,
+        state_age_seconds=20.0,
+        qualified_hook_current=True,
+        hook_evidence_confidence=0.90,
+        hook_evidence_age_seconds=0.01,
+    ) is None
+
+
+def test_rearm_grace_evidence_loss_and_never_ready_are_bounded() -> None:
+    lost = HookActionLifecycle(3.0, hard_liveness_ceiling_seconds=12.0)
+    lost.begin_episode(cycle_id=1, timestamp=0.0, start_hook_applied=True)
+    assert lost.evaluate_stall(
+        runtime_state=RuntimeState.HOOK,
+        timestamp=3.01,
+        state_age_seconds=3.01,
+        qualified_hook_current=True,
+        hook_evidence_confidence=0.9,
+        hook_evidence_age_seconds=0.01,
+    ).action == "rearm"
+    lost_decision = lost.evaluate_stall(
+        runtime_state=RuntimeState.HOOK,
+        timestamp=3.04,
+        state_age_seconds=3.04,
+        qualified_hook_current=False,
+        hook_evidence_confidence=None,
+        hook_evidence_age_seconds=None,
+    )
+    assert lost_decision is not None
+    assert lost_decision.reason == "hook_action_rearm_grace_evidence_lost"
+
+    never_ready = HookActionLifecycle(
+        3.0,
+        rearm_grace_seconds=1.0,
+        hard_liveness_ceiling_seconds=12.0,
+    )
+    never_ready.begin_episode(
+        cycle_id=2,
+        timestamp=0.0,
+        start_hook_applied=True,
+    )
+    assert never_ready.evaluate_stall(
+        runtime_state=RuntimeState.HOOK,
+        timestamp=3.01,
+        state_age_seconds=3.01,
+        qualified_hook_current=True,
+        hook_evidence_confidence=0.9,
+        hook_evidence_age_seconds=0.01,
+    ).action == "rearm"
+    expired = never_ready.evaluate_stall(
+        runtime_state=RuntimeState.HOOK,
+        timestamp=4.02,
+        state_age_seconds=4.02,
+        qualified_hook_current=True,
+        hook_evidence_confidence=0.9,
+        hook_evidence_age_seconds=0.01,
+    )
+    assert expired is not None
+    assert expired.reason == "hook_action_rearm_grace_expired"
+
+
+def test_hook_hard_ceiling_and_ten_thousand_ticks_cannot_stay_live() -> None:
+    lifecycle = HookActionLifecycle(
+        3.0,
+        rearm_grace_seconds=3.0,
+        hard_liveness_ceiling_seconds=8.0,
+    )
+    lifecycle.begin_episode(
+        cycle_id=53,
+        timestamp=0.0,
+        start_hook_applied=True,
+    )
+    terminal = None
+    for tick in range(1, 10_001):
+        now = tick / 1000.0
+        decision = lifecycle.evaluate_stall(
+            runtime_state=RuntimeState.HOOK,
+            timestamp=now,
+            state_age_seconds=now,
+            qualified_hook_current=True,
+            hook_evidence_confidence=0.9,
+            hook_evidence_age_seconds=0.001,
+        )
+        if decision is not None and decision.action == "sync_required":
+            terminal = decision
+            break
+    assert terminal is not None
+    assert terminal.reason in {
+        "hook_action_rearm_grace_expired",
+        "hook_action_hard_liveness_ceiling",
+    }
+    assert lifecycle.terminal
+
+
+def test_new_physical_hook_episode_resets_terminal_watchdog_state() -> None:
+    lifecycle = HookActionLifecycle(3.0)
+    first = lifecycle.begin_episode(
+        cycle_id=7,
+        timestamp=0.0,
+        start_hook_applied=True,
+    )
+    lifecycle.mark_sync_required("sync_required")
+    second = lifecycle.begin_episode(
+        cycle_id=7,
+        timestamp=20.0,
+        start_hook_applied=True,
+    )
+
+    assert second.hook_episode_id != first.hook_episode_id
+    assert second.watchdog_phase == "NORMAL"
+    assert second.terminal_outcome is None
+    assert second.hard_liveness_deadline == 32.0

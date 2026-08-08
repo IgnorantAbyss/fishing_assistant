@@ -20,6 +20,7 @@ from src.fishing_v2.runtime.hook_action_policy import (
 @dataclass(frozen=True)
 class FSMConfig:
     stable_frames: int = 2
+    prompt_min_confidence: float = 0.80
     cast_pending_timeout_sec: float = 4.0
     hook_pending_timeout_sec: float = 3.0
     result_pending_timeout_sec: float = 5.0
@@ -43,6 +44,8 @@ class FSMConfig:
         )
         if self.hook_episode_timeout_sec <= 0:
             raise ValueError("Hook episode timeout must be positive")
+        if not 0.0 <= self.prompt_min_confidence <= 1.0:
+            raise ValueError("Prompt minimum confidence must be within 0..1")
         if self.hook_disappearance_frames_required < 1:
             raise ValueError("Hook disappearance frames must be positive")
         if not 0.3 <= self.get_retry_interval_seconds <= 0.5:
@@ -217,13 +220,15 @@ class FishingFSM:
     def return_hook_stall_to_sync_required(
         self,
         timestamp: float,
+        *,
+        reason: str = "hook_action_stall_without_current_hook_evidence",
     ) -> FSMResult:
         if self.state != RuntimeState.HOOK:
             raise RuntimeError("Hook stall recovery requires HOOK state")
         return self._transition(
             RuntimeState.SYNC_REQUIRED,
             timestamp,
-            "hook_action_stall_without_current_hook_evidence",
+            reason,
         )
 
     def recover_missed_ready(
@@ -642,6 +647,40 @@ class FishingFSM:
                     timestamp,
                     "recorded_press_result_prompt_acknowledgement",
                     visual_acknowledgement=prompt.value,
+                )
+
+        # A threshold-qualified HOOK_INSTRUCTION is the visual acknowledgement
+        # for a completed START_HOOK. During the READY-to-HOOK hand-off it must
+        # clear transient prompt conflict before the generic conflict timer can
+        # force SYNC_REQUIRED. It is still only an activation hint: transition
+        # to HOOK and HOOK_ACTION remain gated by qualified Hook evidence.
+        if (
+            recorded_observation
+            and self.state == RuntimeState.HOOK_PENDING
+            and prompt == PromptObservationKind.HOOK_INSTRUCTION
+            and bundle is not None
+            and bundle.prompt is not None
+            and bundle.prompt.confidence
+            >= self.config.prompt_min_confidence
+        ):
+            self._conflict_since = None
+            if evidence.recommended_state != RuntimeState.HOOK:
+                if (
+                    self._timeout(timestamp)
+                    >= self.config.hook_pending_timeout_sec
+                ):
+                    return self._transition(
+                        RuntimeState.SYNC_REQUIRED,
+                        timestamp,
+                        "hook_pending_timeout",
+                    )
+                self._candidate = None
+                self._candidate_frames = 0
+                return self._held(
+                    previous,
+                    "hook_instruction_acknowledged_waiting_for_hook_evidence",
+                    failed_telemetry,
+                    visual_acknowledgement="HOOK_INSTRUCTION",
                 )
 
         # A completed physical CAST has its own bounded visual acknowledgement
