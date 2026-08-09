@@ -1,4 +1,4 @@
-from src.fishing_v2.domain.action_intent import ActionIntent
+from src.fishing_v2.domain.action_intent import ActionIntent, ActionRequest
 from src.fishing_v2.domain.observations import (
     GetObservation,
     HookObservation,
@@ -63,6 +63,21 @@ CONFIG = FSMConfig(
 )
 
 
+def _cast_request(
+    opportunity_id: str | None,
+    physical_idle_id: str,
+) -> ActionRequest:
+    payload = {"physical_idle_id": physical_idle_id}
+    if opportunity_id is not None:
+        payload["cast_opportunity_id"] = opportunity_id
+    return ActionRequest(
+        ActionIntent.CAST,
+        0.99,
+        "armed_cast_lifecycle_ready",
+        payload,
+    )
+
+
 def test_idle_cast_pending_waiting_flow_requires_get_guard() -> None:
     fsm = FishingFSM(CONFIG, initial_state=RuntimeState.IDLE)
     first = fsm.advance(
@@ -77,6 +92,143 @@ def test_idle_cast_pending_waiting_flow_requires_get_guard() -> None:
         _bundle(2, prompt=PromptObservationKind.WAITING_IN_PROGRESS),
     )
     assert second.next_state == RuntimeState.WAITING
+
+
+def test_authoritative_idle_new_cast_opportunity_is_not_blocked_by_old_idle_cast() -> None:
+    """Regression for production session_20260809_061247 opportunities 159/160."""
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.IDLE)
+    first = _cast_request("cast_opportunity:159", "physical_idle:159")
+    assert fsm.stage_external_cast(first)
+    assert fsm.commit_action(first, 1.0).action_applied
+
+    fsm.force_state(RuntimeState.SYNC_REQUIRED, 5.0, "cast_visual_timeout")
+    fsm.recover_to_authoritative_idle(
+        5.5,
+        physical_idle_id="physical_idle:160",
+    )
+    second = _cast_request("cast_opportunity:160", "physical_idle:160")
+    assert fsm.stage_external_cast(second)
+
+    commit = fsm.commit_action(second, 6.1)
+
+    assert commit.action_applied
+    assert commit.reason != "action_already_applied_in_state"
+    assert commit.next_state == RuntimeState.CAST_PENDING
+
+
+def test_authoritative_idle_boundary_isolates_legacy_idle_cast_marker() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.IDLE)
+    legacy = _cast_request(None, "physical_idle:159")
+    assert fsm.stage_external_cast(legacy)
+    assert fsm.commit_action(legacy, 1.0).action_applied
+    assert (RuntimeState.IDLE, ActionIntent.CAST) in fsm.actions_applied
+
+    fsm.force_state(RuntimeState.SYNC_REQUIRED, 5.0, "cast_visual_timeout")
+    fsm.recover_to_authoritative_idle(
+        5.5,
+        physical_idle_id="physical_idle:160",
+    )
+    fresh = _cast_request("cast_opportunity:160", "physical_idle:160")
+    assert fsm.stage_external_cast(fresh)
+
+    assert fsm.commit_action(fresh, 6.1).action_applied
+    assert (RuntimeState.IDLE, ActionIntent.CAST) not in fsm.actions_applied
+
+
+def test_same_cast_opportunity_identity_cannot_commit_twice() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.IDLE)
+    request = _cast_request("cast_opportunity:160", "physical_idle:160")
+    assert fsm.stage_external_cast(request)
+    assert fsm.commit_action(request, 1.0).action_applied
+
+    fsm.recover_to_authoritative_idle(
+        2.0,
+        physical_idle_id="physical_idle:161",
+    )
+    replayed = _cast_request(
+        "cast_opportunity:160",
+        "physical_idle:161",
+    )
+    assert fsm.stage_external_cast(replayed)
+    duplicate = fsm.commit_action(replayed, 2.1)
+
+    assert not duplicate.action_applied
+    assert duplicate.reason == "cast_opportunity_already_applied"
+
+
+def test_authoritative_idle_rejects_cast_from_different_physical_episode() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.SYNC_REQUIRED)
+    fsm.recover_to_authoritative_idle(
+        1.0,
+        physical_idle_id="physical_idle:B",
+    )
+
+    stale = _cast_request("cast_opportunity:A", "physical_idle:A")
+
+    assert not fsm.stage_external_cast(stale)
+    assert fsm.pending_request is None
+
+
+def test_repeated_same_authoritative_idle_certificate_does_not_reopen_cast() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.SYNC_REQUIRED)
+    first_boundary = fsm.recover_to_authoritative_idle(
+        1.0,
+        physical_idle_id="physical_idle:B",
+    )
+    request = _cast_request("cast_opportunity:B", "physical_idle:B")
+    assert first_boundary.changed
+    assert fsm.stage_external_cast(request)
+    assert fsm.commit_action(request, 1.1).action_applied
+
+    fsm.force_state(RuntimeState.IDLE, 1.2, "stale_state_pointer_override")
+    repeated_boundary = fsm.recover_to_authoritative_idle(
+        1.3,
+        physical_idle_id="physical_idle:B",
+    )
+    duplicate = _cast_request("cast_opportunity:B", "physical_idle:B")
+    assert not repeated_boundary.changed
+    assert repeated_boundary.transition_reason == (
+        "authoritative_idle_episode_already_open"
+    )
+    assert fsm.stage_external_cast(duplicate)
+    assert not fsm.commit_action(duplicate, 1.4).action_applied
+
+
+def test_force_state_without_new_certificate_does_not_clear_legacy_cast_marker() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.IDLE)
+    first = _cast_request(None, "physical_idle:A")
+    assert fsm.stage_external_cast(first)
+    assert fsm.commit_action(first, 1.0).action_applied
+
+    fsm.force_state(RuntimeState.SYNC_REQUIRED, 2.0, "test_sync")
+    fsm.force_state(RuntimeState.IDLE, 2.1, "state_pointer_only")
+    second = _cast_request(None, "physical_idle:B")
+    assert fsm.stage_external_cast(second)
+
+    assert not fsm.commit_action(second, 2.2).action_applied
+
+
+def test_cast_identity_stress_has_no_cross_episode_leakage() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.SYNC_REQUIRED)
+    for index in range(1000):
+        physical_idle_id = f"physical_idle:{index}"
+        opportunity_id = f"cast_opportunity:{index}"
+        fsm.recover_to_authoritative_idle(
+            float(index),
+            physical_idle_id=physical_idle_id,
+        )
+        request = _cast_request(opportunity_id, physical_idle_id)
+        assert fsm.stage_external_cast(request)
+        commit = fsm.commit_action(request, float(index) + 0.1)
+        assert commit.action_applied
+        assert commit.next_state == RuntimeState.CAST_PENDING
+        fsm.force_state(
+            RuntimeState.SYNC_REQUIRED,
+            float(index) + 0.2,
+            "cast_visual_timeout",
+        )
+
+    assert len(fsm.cast_opportunities_applied) == 1000
 
 
 def test_get_guard_cancels_cast_and_enters_get() -> None:

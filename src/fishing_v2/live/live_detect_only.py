@@ -3023,15 +3023,19 @@ class LiveDetectOnlyRuntime:
                     )
                     if startup_idle:
                         previous_idle_state = self.fsm.state
-                        if self.fsm.state != RuntimeState.IDLE:
-                            transition_results.append(
-                                self.fsm.force_state(
-                                    RuntimeState.IDLE,
-                                    elapsed,
-                                    "startup_idle_confirmation",
-                                )
+                        startup_transition = (
+                            self.fsm.recover_to_authoritative_idle(
+                                elapsed,
+                                physical_idle_id=(
+                                    idle_certificate.physical_idle_id
+                                ),
+                                reason="startup_idle_confirmation",
                             )
-                            self.controller.reset_action_history_for_authoritative_idle()
+                        )
+                        if startup_transition.changed:
+                            transition_results.append(startup_transition)
+                        self.controller.reset_action_history_for_authoritative_idle()
+                        if previous_idle_state != RuntimeState.IDLE:
                             self.synchronizer.reset(started_at=elapsed)
                         self._startup_idle_handled = True
                         self._idle_candidate_origin_state = None
@@ -3076,14 +3080,25 @@ class LiveDetectOnlyRuntime:
                             and self._idle_candidate_origin_state is not None
                             else self.fsm.state
                         )
+                        previous_cast_opportunity_id = (
+                            self.cast_opportunity.opportunity_id
+                        )
+                        previous_cast_was_open = (
+                            self.cast_opportunity.opportunity_open
+                        )
+                        previous_cast_terminal_outcome = (
+                            self.cast_opportunity.terminal_outcome.value
+                        )
                         self._clear_stale_cycle_for_idle_recovery(
                             timestamp=elapsed,
                             frame_index=captured,
                         )
-                        authoritative = self.fsm.force_state(
-                            RuntimeState.IDLE,
+                        authoritative = self.fsm.recover_to_authoritative_idle(
                             elapsed,
-                            "authoritative_idle_prompt_recovery",
+                            physical_idle_id=(
+                                idle_certificate.physical_idle_id
+                            ),
+                            reason="authoritative_idle_prompt_recovery",
                         )
                         transition_results.append(authoritative)
                         authoritative_idle_applied_this_frame = True
@@ -3112,6 +3127,18 @@ class LiveDetectOnlyRuntime:
                                     "authoritative_idle_prompt_recovery"
                                 ),
                                 "cycle_id": self.deduplicator.cycle_id,
+                                "physical_idle_episode_id": (
+                                    idle_certificate.physical_idle_id
+                                ),
+                                "previous_cast_opportunity_id": (
+                                    previous_cast_opportunity_id
+                                ),
+                                "old_opportunity_terminal_reason": (
+                                    "authoritative_idle_prompt_recovery"
+                                    if previous_cast_was_open
+                                    else previous_cast_terminal_outcome
+                                ),
+                                "new_physical_idle_episode_opened": True,
                                 **self._idle_certificate_payload(
                                     idle_certificate,
                                     timestamp=elapsed,
@@ -4624,14 +4651,20 @@ class LiveDetectOnlyRuntime:
                         cast_safety_reason = last_result.safety.reason
                         if (
                             cast_arm_ready
-                            and request.intent == ActionIntent.NONE
+                            and request.intent
+                            in {ActionIntent.NONE, ActionIntent.CAST}
                             and active_cast_arm is not None
                         ):
                             request = ActionRequest(
                                 ActionIntent.CAST,
-                                last_result.evidence.confidence,
+                                (
+                                    request.confidence
+                                    if request.intent == ActionIntent.CAST
+                                    else last_result.evidence.confidence
+                                ),
                                 "armed_cast_lifecycle_ready",
                                 payload={
+                                    **dict(request.payload),
                                     "source_type": (
                                         active_cast_arm.source_type
                                     ),
@@ -4799,6 +4832,33 @@ class LiveDetectOnlyRuntime:
                                     cycle_id=active_cast_arm.cycle_id,
                                 )
                             )
+                            if cast_attempt is not None:
+                                request = ActionRequest(
+                                    request.intent,
+                                    request.confidence,
+                                    request.reason,
+                                    payload={
+                                        **dict(request.payload),
+                                        "cast_opportunity_id": (
+                                            cast_attempt.opportunity_id
+                                        ),
+                                    },
+                                )
+                                if not self.controller.stage_external_cast(
+                                    request
+                                ):
+                                    self._log_cast_events(
+                                        self.cast_opportunity.cancel(
+                                            timestamp=elapsed,
+                                            reason=(
+                                                "cast_identity_not_staged"
+                                            ),
+                                        ),
+                                        timestamp=elapsed,
+                                        frame_index=captured,
+                                        runtime_state=self.fsm.state.value,
+                                    )
+                                    cast_attempt = None
                             if cast_attempt is not None:
                                 self._cast_arming.mark_cast_started(
                                     cast_attempt.opportunity_id
@@ -5378,9 +5438,60 @@ class LiveDetectOnlyRuntime:
                                         "commit_reason": commit.reason,
                                         "action_applied": True,
                                     })
+                                    if request.intent == ActionIntent.CAST:
+                                        self.logger.event(
+                                            "cast_commit_failure_after_input",
+                                            {
+                                                "timestamp": elapsed,
+                                                "frame_index": captured,
+                                                "physical_idle_episode_id": (
+                                                    request.payload.get(
+                                                        "physical_idle_id"
+                                                    )
+                                                ),
+                                                "cast_opportunity_id": (
+                                                    request.payload.get(
+                                                        "cast_opportunity_id"
+                                                    )
+                                                ),
+                                                "source_identity": (
+                                                    request.payload.get(
+                                                        "source_id"
+                                                    )
+                                                ),
+                                                "commit_reason": commit.reason,
+                                                "action_applied": True,
+                                            },
+                                        )
                                     result_name = "safe_stop_action_commit_failure"
                                     stop_after_action_commit_failure = True
                                 else:
+                                    if request.intent == ActionIntent.CAST:
+                                        self.logger.event(
+                                            "cast_commit_completed",
+                                            {
+                                                "timestamp": elapsed,
+                                                "frame_index": captured,
+                                                "physical_idle_episode_id": (
+                                                    request.payload.get(
+                                                        "physical_idle_id"
+                                                    )
+                                                ),
+                                                "cast_opportunity_id": (
+                                                    request.payload.get(
+                                                        "cast_opportunity_id"
+                                                    )
+                                                ),
+                                                "source_identity": (
+                                                    request.payload.get(
+                                                        "source_id"
+                                                    )
+                                                ),
+                                                "cast_emission_started": True,
+                                                "cast_emission_completed": True,
+                                                "action_applied": True,
+                                            },
+                                        )
                                     if request.intent == ActionIntent.START_HOOK:
                                         self._ready_recovery.record_emission(
                                             started=(

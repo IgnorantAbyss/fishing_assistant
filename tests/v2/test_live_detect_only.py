@@ -44,6 +44,7 @@ from src.fishing_v2.perception.prototype_prompt_observer import (
     validate_prompt_input,
 )
 from src.fishing_v2.runtime.runtime_controller import ActionExecutionMode
+from src.fishing_v2.runtime.fishing_fsm import ActionCommitResult
 from src.screen_capture import mss_bgra_to_bgr
 
 
@@ -3343,6 +3344,93 @@ def test_authoritative_idle_recovers_stuck_state_then_casts_once(
     assert recovery["previous_state"] != RuntimeState.IDLE.value
     assert cast["cast_source_type"] == "authoritative_idle_recovery"
     assert cast["timestamp"] - recovery["timestamp"] >= 0.5
+
+
+def test_authoritative_idle_recovery_commits_new_cast_after_stale_idle_marker(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    """Deterministic opportunity 159/160 regression from 20260809_061247."""
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    runtime.fsm.force_state(RuntimeState.IDLE, 0.0, "episode_159")
+    legacy = ActionRequest(
+        ActionIntent.CAST,
+        0.99,
+        "legacy_cast_159",
+    )
+    assert runtime.fsm.stage_external_cast(legacy)
+    assert runtime.fsm.commit_action(legacy, 0.1).action_applied
+    runtime.fsm.force_state(
+        RuntimeState.SYNC_REQUIRED,
+        0.2,
+        "cast_visual_timeout",
+    )
+    runtime._runtime_cycle_started = True
+
+    summary = runtime.run(max_frames=70)
+
+    assert summary["result"] != "safe_stop_action_commit_failure"
+    assert summary["actions_applied"] == 1
+    assert [call[0].intent for call in created[0].calls] == [
+        ActionIntent.CAST
+    ]
+    emitted_request = created[0].calls[0][0]
+    assert emitted_request.payload["cast_opportunity_id"] == (
+        "cast_opportunity:1"
+    )
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    recovery = next(
+        item
+        for item in events
+        if item["event_type"] == "authoritative_idle_recovery_applied"
+    )
+    committed = next(
+        item
+        for item in events
+        if item["event_type"] == "cast_commit_completed"
+    )
+    assert recovery["new_physical_idle_episode_opened"] is True
+    assert committed["cast_opportunity_id"] == "cast_opportunity:1"
+    assert committed["physical_idle_episode_id"] == (
+        recovery["physical_idle_episode_id"]
+    )
+
+
+def test_complete_cast_input_with_true_commit_failure_still_safe_stops_once(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+
+    def reject_commit(request, timestamp, **_kwargs):
+        return ActionCommitResult(
+            False,
+            runtime.fsm.state,
+            runtime.fsm.state,
+            "synthetic_true_commit_failure",
+        )
+
+    runtime.controller.commit_external_action = reject_commit
+    summary = runtime.run(max_frames=70)
+
+    assert summary["result"] == "safe_stop_action_commit_failure"
+    assert len(created[0].calls) == 1
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    failures = [
+        item
+        for item in events
+        if item["event_type"] == "cast_commit_failure_after_input"
+    ]
+    assert len(failures) == 1
+    assert failures[0]["commit_reason"] == "synthetic_true_commit_failure"
 
 
 def test_armed_recovery_cast_is_serviced_after_cooldown_without_new_fsm_cast(

@@ -74,7 +74,12 @@ class RuntimeController:
         self._last_action_at = None
 
     def reset_action_history_for_authoritative_idle(self) -> None:
-        """Drop stale proposals after an external visual IDLE certificate."""
+        """Drop controller-owned history after a certified IDLE boundary.
+
+        FishingFSM ownership is closed separately by
+        ``recover_to_authoritative_idle`` so the physical episode identity is
+        never lost between the Live lifecycle and commit layer.
+        """
         self.evidence_qualifier.reset_temporal_state()
         self._sent.clear()
         self._last_action_at = None

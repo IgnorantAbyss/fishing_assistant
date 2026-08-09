@@ -94,6 +94,8 @@ class FishingFSM:
         self._candidate_frames = 0
         self._conflict_since: float | None = None
         self._actions_applied: set[tuple[RuntimeState, ActionIntent]] = set()
+        self._cast_opportunities_applied: set[str] = set()
+        self._authoritative_physical_idle_id: str | None = None
         self._pending_request: ActionRequest | None = None
         self._press_waiting_for_clear = False
         self._press_intent_proposed = False
@@ -114,6 +116,10 @@ class FishingFSM:
     @property
     def actions_applied(self) -> frozenset[tuple[RuntimeState, ActionIntent]]:
         return frozenset(self._actions_applied)
+
+    @property
+    def cast_opportunities_applied(self) -> frozenset[str]:
+        return frozenset(self._cast_opportunities_applied)
 
     @property
     def last_hook_action_decision(
@@ -162,6 +168,46 @@ class FishingFSM:
         if state == RuntimeState.GET:
             self._reset_get_retry(timestamp)
         return FSMResult(previous, state, self._none(), reason, previous != state)
+
+    def recover_to_authoritative_idle(
+        self,
+        timestamp: float,
+        *,
+        physical_idle_id: str,
+        reason: str = "authoritative_idle_prompt_recovery",
+    ) -> FSMResult:
+        """Commit a certified physical-IDLE boundary, not a state-pointer move.
+
+        A repeated certificate for the same physical IDLE episode is
+        intentionally idempotent.  Only a new certificate-owned identity may
+        close the legacy state-owned CAST marker left by an older episode.
+        Per-opportunity CAST identities remain retained for session-wide
+        exactly-once protection.
+        """
+        resolved_physical_idle_id = str(physical_idle_id).strip()
+        if not resolved_physical_idle_id:
+            raise ValueError(
+                "Authoritative IDLE recovery requires a physical idle identity"
+            )
+        previous = self.state
+        if (
+            self._authoritative_physical_idle_id
+            == resolved_physical_idle_id
+            and self.state == RuntimeState.IDLE
+        ):
+            return self._held(
+                previous,
+                "authoritative_idle_episode_already_open",
+            )
+
+        # Close proposal and state-owned legacy CAST ownership before opening
+        # the newly certified physical IDLE episode.  Do not clear the
+        # opportunity-owned set: an already emitted CAST must stay consumed.
+        self._pending_request = None
+        self._actions_applied.discard((RuntimeState.IDLE, ActionIntent.CAST))
+        result = self.force_state(RuntimeState.IDLE, timestamp, reason)
+        self._authoritative_physical_idle_id = resolved_physical_idle_id
+        return result
 
     def begin_sync_recovery(self, timestamp: float) -> None:
         """Clear all episode/action state before accepting recovery evidence."""
@@ -281,6 +327,7 @@ class FishingFSM:
             self._hook_absent_frames = 0
         if target == RuntimeState.IDLE and previous != RuntimeState.IDLE:
             self._actions_applied.clear()
+            self._authoritative_physical_idle_id = None
             self._press_waiting_for_clear = False
             self._hook_intent_proposed = False
         return FSMResult(
@@ -401,9 +448,17 @@ class FishingFSM:
 
     def stage_external_cast(self, request: ActionRequest) -> bool:
         """Stage a certified IDLE lifecycle CAST for the normal commit path."""
+        physical_idle_id = str(
+            request.payload.get("physical_idle_id", "")
+        ).strip()
         if (
             self.state != RuntimeState.IDLE
             or request.intent != ActionIntent.CAST
+            or (
+                self._authoritative_physical_idle_id is not None
+                and physical_idle_id
+                != self._authoritative_physical_idle_id
+            )
             or (
                 self._pending_request is not None
                 and self._pending_request.intent != ActionIntent.CAST
@@ -413,15 +468,47 @@ class FishingFSM:
         self._pending_request = request
         return True
 
+    @staticmethod
+    def _cast_opportunity_identity(request: ActionRequest) -> str | None:
+        if request.intent != ActionIntent.CAST:
+            return None
+        value = request.payload.get("cast_opportunity_id")
+        if value is None:
+            return None
+        resolved = str(value).strip()
+        return resolved or None
+
     def commit_action(self, request: ActionRequest, timestamp: float) -> ActionCommitResult:
         previous = self.state
         if request.intent == ActionIntent.NONE or self._pending_request != request:
             return ActionCommitResult(False, previous, previous, "no_matching_proposed_action")
         key = (self.state, request.intent)
-        if key in self._actions_applied and request.intent != ActionIntent.COLLECT:
+        cast_opportunity_id = self._cast_opportunity_identity(request)
+        duplicate_cast_opportunity = bool(
+            cast_opportunity_id is not None
+            and cast_opportunity_id in self._cast_opportunities_applied
+        )
+        duplicate_legacy_action = bool(
+            cast_opportunity_id is None
+            and key in self._actions_applied
+            and request.intent != ActionIntent.COLLECT
+        )
+        if duplicate_cast_opportunity or duplicate_legacy_action:
             self._pending_request = None
-            return ActionCommitResult(False, previous, previous, "action_already_applied_in_state")
-        self._actions_applied.add(key)
+            return ActionCommitResult(
+                False,
+                previous,
+                previous,
+                (
+                    "cast_opportunity_already_applied"
+                    if duplicate_cast_opportunity
+                    else "action_already_applied_in_state"
+                ),
+            )
+        if cast_opportunity_id is not None:
+            self._cast_opportunities_applied.add(cast_opportunity_id)
+        else:
+            self._actions_applied.add(key)
         self._pending_request = None
         target = {
             ActionIntent.CAST: RuntimeState.CAST_PENDING,
