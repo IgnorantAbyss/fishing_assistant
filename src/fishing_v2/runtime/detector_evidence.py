@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -12,6 +13,7 @@ from src.fishing_v2.runtime.detector_activation import (
     DetectorActivationSnapshot,
 )
 from src.fishing_v2.runtime.press_sequence_aggregator import (
+    PressSequenceAggregation,
     PressSequenceAggregationConfig,
     PressSequenceTemporalAggregator,
 )
@@ -88,12 +90,41 @@ class DetectorEvidenceQualifier:
         )
         self._get_confirmed_frames = 0
         self._get_last_frame: int | None = None
+        self._press_last_aggregation: PressSequenceAggregation | None = None
+        self._press_version_counts: Counter[str] = Counter()
+        self._press_path_counts: Counter[str] = Counter()
+        self._press_v3_simple_ready_count = 0
+        self._press_v3_post_input_excluded_count = 0
 
     def reset_temporal_state(self) -> None:
         """Discard detector confirmation accumulated before resynchronization."""
         self.press_aggregator.reset()
+        self._press_last_aggregation = None
         self._get_confirmed_frames = 0
         self._get_last_frame = None
+
+    def press_qualification_summary(self) -> dict[str, object]:
+        """Return bounded aggregate telemetry for the Production summary."""
+        return {
+            "press_evidence_version_counts": dict(
+                self._press_version_counts
+            ),
+            "press_qualification_path_counts": dict(
+                self._press_path_counts
+            ),
+            "press_v3_simple_ready_count": (
+                self._press_v3_simple_ready_count
+            ),
+            "press_v3_temporal_frame_count": int(
+                self._press_path_counts.get("temporal_v3", 0)
+                + self._press_path_counts.get(
+                    "temporal_v3_post_input_excluded", 0
+                )
+            ),
+            "press_v3_post_input_excluded_count": (
+                self._press_v3_post_input_excluded_count
+            ),
+        }
 
     def qualify(
         self,
@@ -189,17 +220,36 @@ class DetectorEvidenceQualifier:
     ) -> tuple[PressObservation | None, EvidenceQualification]:
         if observation is None:
             self.press_aggregator.reset()
+            self._press_last_aggregation = None
             return None, EvidenceQualification(
                 "press", mode, False, False, "raw_not_detected", False,
                 mode == DetectorActivationMode.OFF,
                 press_evidence_kind=PressEvidenceKind.REJECTED,
                 sequence_qualification_reason="panel_not_present",
             )
-        versioned = observation.evidence.get("press_evidence_version") == 2
-        if not versioned:
+        raw_version = observation.evidence.get("press_evidence_version")
+        version = (
+            int(raw_version)
+            if isinstance(raw_version, int) and not isinstance(raw_version, bool)
+            else None
+        )
+        version_key = str(version) if version is not None else "unversioned"
+        self._press_version_counts[version_key] += 1
+        temporal_version = version in (2, 3)
+        if not temporal_version:
+            path = "legacy_simple"
+            self._press_path_counts[path] += 1
             sanitized, qualification = self._simple(
                 "press", observation, mode, self.config.press_strong_confidence
             )
+            if isinstance(sanitized, PressObservation):
+                sanitized = replace(
+                    sanitized,
+                    evidence={
+                        **sanitized.evidence,
+                        "press_qualification_path": path,
+                    },
+                )
             if isinstance(sanitized, PressObservation) and sanitized.sequence:
                 sanitized = replace(
                     sanitized,
@@ -230,8 +280,11 @@ class DetectorEvidenceQualifier:
 
         raw_detected = bool(observation.panel_present)
         diagnostic_only = mode == DetectorActivationMode.OFF
+        path = f"temporal_v{version}"
         if diagnostic_only:
             self.press_aggregator.reset()
+            self._press_last_aggregation = None
+            self._press_path_counts[f"{path}_activation_off"] += 1
             kind = (
                 PressEvidenceKind.PRESS_PANEL_CANDIDATE
                 if observation.panel_candidate else PressEvidenceKind.REJECTED
@@ -244,6 +297,12 @@ class DetectorEvidenceQualifier:
                 sequence=(),
                 sequence_ready=False,
                 sequence_qualification_reason="activation_off_diagnostic_only",
+                evidence={
+                    **observation.evidence,
+                    "press_qualification_path": (
+                        f"{path}_activation_off"
+                    ),
+                },
             )
             return sanitized, EvidenceQualification(
                 "press", mode, raw_detected, False,
@@ -253,7 +312,29 @@ class DetectorEvidenceQualifier:
                 sequence_qualification_reason="activation_off_diagnostic_only",
             )
 
-        aggregation = self.press_aggregator.update(observation)
+        post_input_excluded = bool(
+            version == 3
+            and observation.evidence.get("post_input_frame") is True
+        )
+        if post_input_excluded:
+            path = "temporal_v3_post_input_excluded"
+            self._press_v3_post_input_excluded_count += 1
+            aggregation = self._press_last_aggregation
+            if aggregation is None:
+                aggregation = PressSequenceAggregation(
+                    False,
+                    0,
+                    0,
+                    (),
+                    False,
+                    0.0,
+                    (),
+                    "post_input_without_pre_input_consensus",
+                )
+        else:
+            aggregation = self.press_aggregator.update(observation)
+            self._press_last_aggregation = aggregation
+        self._press_path_counts[path] += 1
         strong_panel = observation.confidence >= self.config.press_strong_confidence
         qualified = bool(aggregation.panel_confirmed and observation.panel_present and strong_panel)
         sequence_ready = bool(qualified and aggregation.sequence_ready)
@@ -285,6 +366,19 @@ class DetectorEvidenceQualifier:
             sequence_qualification_reason=aggregation.qualification_reason,
             evidence={
                 **observation.evidence,
+                "press_qualification_path": path,
+                "press_episode_id": observation.evidence.get(
+                    "press_episode_id"
+                ),
+                "panel_confirmation_count": aggregation.stable_panel_frames,
+                "clean_consensus_count": (
+                    aggregation.completeness.sequence_stability_count
+                    if aggregation.completeness is not None else 0
+                ),
+                "frozen_sequence": list(
+                    self.press_aggregator.frozen_clean_sequence
+                ),
+                "post_input_excluded": post_input_excluded,
                 "stable_panel_frames": aggregation.stable_panel_frames,
                 "per_key_aggregated_confidence": list(aggregation.per_key_confidence),
                 "selected_clean_frame": aggregation.selected_clean_frame,

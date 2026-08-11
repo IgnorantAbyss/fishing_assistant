@@ -35,9 +35,13 @@ from src.fishing_v2.live.live_detect_only import (
 )
 from src.fishing_v2.live.session_logger import LiveSessionLogger
 from src.fishing_v2.perception.prompt_bundle import load_prompt_bundle
+from src.fishing_v2.perception.observation_bundle import ObservationBundle
+from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
+from src.fishing_v2.runtime.detector_evidence import DetectorEvidenceQualifier
 from src.fishing_v2.runtime.press_sequence_aggregator import (
     PressSequenceTemporalAggregator,
 )
+from src.fishing_v2.runtime.runtime_controller import ActionExecutionMode
 from tools.run_live_detect_only import parse_args
 
 
@@ -60,6 +64,16 @@ def _press_roi(session: str, frame: int) -> np.ndarray:
         "press_sequence", image.shape[1], image.shape[0]
     )
     return image[y1:y2, x1:x2]
+
+
+def _full_frame_for_press_roi(roi: np.ndarray) -> np.ndarray:
+    full_frame = np.zeros((1440, 2560, 3), dtype=np.uint8)
+    x1, y1, x2, y2 = load_roi_config().pixel_roi(
+        "press_sequence", 2560, 1440
+    )
+    assert roi.shape[:2] == (y2 - y1, x2 - x1)
+    full_frame[y1:y2, x1:x2] = roi
+    return full_frame
 
 
 @pytest.mark.parametrize(
@@ -198,6 +212,144 @@ def test_v3_adapter_reuses_full_frame_and_existing_temporal_consensus() -> None:
     assert "".join(aggregate.sequence_candidate) == "DW"
 
 
+def test_v3_single_complete_frame_is_not_ready() -> None:
+    image = _read(SESSIONS / "session_20260710_123210" / "frames" / "000574.jpg")
+    observation = BackgroundSubtractionPressDetectorAdapter().observe(
+        image, FrameContext(1, 0.0, metadata={})
+    )
+    qualified, qualification = DetectorEvidenceQualifier()._press(
+        observation, DetectorActivationMode.ACTIVE
+    )
+
+    assert observation.evidence["press_evidence_version"] == 3
+    assert observation.evidence["frame_structurally_complete"] is True
+    assert observation.confidence > 0.99
+    assert qualified is not None
+    assert qualified.detected is False
+    assert qualified.sequence_ready is False
+    assert qualified.sequence == ()
+    assert qualification.sequence_qualification_reason != "legacy_ready_sequence"
+    assert qualified.evidence["press_qualification_path"] == "temporal_v3"
+
+
+def test_v3_consistent_clean_frames_produce_complete_temporal_sequence() -> None:
+    image = _read(SESSIONS / "session_20260710_123210" / "frames" / "000574.jpg")
+    adapter = BackgroundSubtractionPressDetectorAdapter()
+    qualifier = DetectorEvidenceQualifier()
+    qualified = None
+    qualification = None
+    for index in range(3):
+        observation = adapter.observe(
+            image, FrameContext(index + 1, index * 0.2, metadata={})
+        )
+        qualified, qualification = qualifier._press(
+            observation, DetectorActivationMode.ACTIVE
+        )
+
+    assert qualified is not None
+    assert qualification is not None
+    assert qualified.detected is True
+    assert qualified.sequence_ready is True
+    assert qualified.sequence == tuple("DW")
+    assert qualification.sequence_qualification_reason != "legacy_ready_sequence"
+    certificate = qualified.evidence["press_completeness_certificate"]
+    assert certificate["complete"] is True
+    assert certificate["sequence"] == list("DW")
+    assert qualified.evidence["frozen_sequence"] == list("DW")
+
+
+def test_v3_production_post_input_frames_preserve_frozen_clean_sequence() -> None:
+    adapter = BackgroundSubtractionPressDetectorAdapter()
+    qualifier = DetectorEvidenceQualifier()
+    clean = _full_frame_for_press_roi(
+        _read(INPUT_EFFECT / "episode_002_frame_003996_clean_wssddws.png")
+    )
+    qualified = None
+    for frame in (3996, 3997, 3998):
+        observation = adapter.observe(
+            clean, FrameContext(frame, frame / 20.0, metadata={})
+        )
+        qualified, _ = qualifier._press(
+            observation, DetectorActivationMode.ACTIVE
+        )
+    assert qualified is not None
+    assert qualified.sequence == tuple("WSSDDWS")
+    frozen_certificate = qualified.evidence["press_completeness_certificate"]
+
+    for filename, frame in (
+        ("episode_002_frame_004029_green_glow.png", 4029),
+        ("episode_002_frame_004030_gold_flash.png", 4030),
+    ):
+        post_input = _full_frame_for_press_roi(_read(INPUT_EFFECT / filename))
+        observation = adapter.observe(
+            post_input, FrameContext(frame, frame / 20.0, metadata={})
+        )
+        qualified, _ = qualifier._press(
+            observation, DetectorActivationMode.ACTIVE
+        )
+        assert observation.evidence["episode_input_started"] is True
+        assert observation.evidence["post_input_frame"] is True
+        assert qualified is not None
+        assert qualified.sequence == tuple("WSSDDWS")
+        assert qualified.evidence["post_input_excluded"] is True
+        assert (
+            qualified.evidence["press_completeness_certificate"]
+            == frozen_certificate
+        )
+
+    clean_after_input = adapter.observe(
+        clean, FrameContext(4031, 4031 / 20.0, metadata={})
+    )
+    qualified, _ = qualifier._press(
+        clean_after_input, DetectorActivationMode.ACTIVE
+    )
+    assert clean_after_input.evidence["input_effect_detected"] is False
+    assert clean_after_input.evidence["episode_input_started"] is True
+    assert clean_after_input.evidence["post_input_frame"] is True
+    assert qualified is not None
+    assert qualified.sequence == tuple("WSSDDWS")
+    assert qualified.evidence["post_input_excluded"] is True
+
+    summary = qualifier.press_qualification_summary()
+    assert summary["press_v3_simple_ready_count"] == 0
+    assert summary["press_v3_post_input_excluded_count"] == 3
+
+
+def test_v3_panel_disappearance_resets_episode_and_allows_new_sequence() -> None:
+    first = _read(SESSIONS / "session_20260710_123210" / "frames" / "000574.jpg")
+    second = _read(SESSIONS / "session_20260710_061220" / "frames" / "000507.jpg")
+    adapter = BackgroundSubtractionPressDetectorAdapter()
+    qualifier = DetectorEvidenceQualifier()
+
+    for index in range(3):
+        observation = adapter.observe(
+            first, FrameContext(index + 1, index * 0.2, metadata={})
+        )
+        qualified, _ = qualifier._press(
+            observation, DetectorActivationMode.ACTIVE
+        )
+    assert qualified is not None and qualified.sequence == tuple("DW")
+    first_episode = observation.evidence["press_episode_id"]
+
+    blank = np.zeros_like(first)
+    for index in range(2):
+        observation = adapter.observe(
+            blank, FrameContext(10 + index, 1.0 + index * 0.2, metadata={})
+        )
+        qualifier._press(observation, DetectorActivationMode.ACTIVE)
+
+    for index in range(3):
+        observation = adapter.observe(
+            second, FrameContext(20 + index, 2.0 + index * 0.2, metadata={})
+        )
+        qualified, _ = qualifier._press(
+            observation, DetectorActivationMode.ACTIVE
+        )
+    assert qualified is not None
+    assert qualified.sequence == tuple("AWSA")
+    assert observation.evidence["press_episode_id"] != first_episode
+
+
 def test_cli_defaults_to_legacy_and_shadow_is_explicit() -> None:
     default = parse_args(["--window-title", "test"])
     shadow = parse_args([
@@ -262,6 +414,9 @@ def test_shadow_worker_drops_new_frames_while_busy_without_blocking_capture(
 def test_background_subtraction_live_is_explicit_and_keeps_sink_disabled(
     tmp_path: Path,
 ) -> None:
+    image = _read(
+        SESSIONS / "session_20260710_123210" / "frames" / "000574.jpg"
+    )
     runtime = LiveDetectOnlyRuntime(
         config_path=ROOT / "config" / "fishing_v2.yaml",
         prompt_bundle=load_prompt_bundle(
@@ -281,6 +436,28 @@ def test_background_subtraction_live_is_explicit_and_keeps_sink_disabled(
         runtime.press_detector, BackgroundSubtractionPressDetectorAdapter
     )
     assert runtime.action_sink is None
+
+    first = None
+    final = None
+    for index in range(3):
+        observation = runtime.press_detector.observe(
+            image, FrameContext(index + 1, index * 0.2, metadata={})
+        )
+        _, qualified = runtime.controller.qualify_raw_bundle(
+            ObservationBundle(
+                index + 1,
+                index * 0.2,
+                press=observation,
+            ),
+            action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        )
+        first = first or qualified.bundle.press
+        final = qualified.bundle.press
+    assert first is not None and first.sequence_ready is False
+    assert final is not None and final.sequence_ready is True
+    assert final.sequence == tuple("DW")
+    assert final.evidence["press_completeness_certificate"]["complete"] is True
+    assert final.evidence["press_qualification_path"] == "temporal_v3"
 
 
 def test_v3_components_are_independent_and_do_not_open_video() -> None:

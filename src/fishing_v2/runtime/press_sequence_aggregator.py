@@ -99,6 +99,10 @@ class PressSequenceTemporalAggregator:
         self._panel_seen = False
         self._panel_exit_latched = False
 
+    @property
+    def frozen_clean_sequence(self) -> tuple[str, ...]:
+        return self._frozen_clean_sequence or ()
+
     @staticmethod
     def _boxes(observation: PressObservation) -> list[dict[str, Any]]:
         boxes = observation.evidence.get("key_boxes", ())

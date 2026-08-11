@@ -5847,6 +5847,10 @@ class LiveDetectOnlyRuntime:
                     name: count / elapsed_total if elapsed_total > 0 else 0.0
                     for name, count in detector_runs.items()
                 },
+                **(
+                    self.controller.evidence_qualifier
+                    .press_qualification_summary()
+                ),
                 "raw_action_proposals": dict(self.deduplicator.raw_proposals),
                 "proposed_action_counts": dict(self.deduplicator.raw_proposals),
                 "unique_would_fire": dict(self.deduplicator.unique_events),

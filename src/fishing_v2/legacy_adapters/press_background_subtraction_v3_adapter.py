@@ -9,6 +9,7 @@ from src.detectors.press_background_subtraction_v3 import (
 )
 from src.fishing_v2.domain.frame_context import FrameContext
 from src.fishing_v2.domain.observations import PressObservation
+from src.fishing_v2.live.press_v3_input_effect import PressV3InputEffectTracker
 
 
 def create_v3_detector() -> PressBackgroundSubtractionDetectorV3:
@@ -55,6 +56,10 @@ def v3_result_to_observation(
         ),
         evidence={
             "press_evidence_version": 3,
+            "press_episode_id": result.get("press_episode_id"),
+            "panel_disappearance_count": int(
+                result.get("panel_disappearance_count", 0)
+            ),
             "panel_phase": result.get("panel_phase"),
             "frame_structurally_complete": bool(
                 result.get(
@@ -102,9 +107,68 @@ class BackgroundSubtractionPressDetectorAdapter:
         self,
         detector: PressBackgroundSubtractionDetectorV3 | None = None,
         roi_config: ROIConfig | None = None,
+        input_effect_tracker: PressV3InputEffectTracker | None = None,
+        panel_disappearance_frames: int = 2,
     ) -> None:
+        if panel_disappearance_frames < 1:
+            raise ValueError("panel_disappearance_frames must be positive")
         self.detector = detector or PressBackgroundSubtractionDetectorV3()
         self.roi_config = roi_config or load_roi_config()
+        self.input_effect_tracker = (
+            input_effect_tracker or PressV3InputEffectTracker()
+        )
+        self.panel_disappearance_frames = int(panel_disappearance_frames)
+        self._episode_active = False
+        self._episode_id = 0
+        self._missing_panel_frames = 0
+
+    def reset_temporal_state(self) -> None:
+        """Reset only episode-relative V3 state; detector thresholds stay intact."""
+        self.input_effect_tracker.reset()
+        self._episode_active = False
+        self._missing_panel_frames = 0
+
+    def _apply_episode_lifecycle(
+        self,
+        result: dict[str, Any],
+        context: FrameContext,
+    ) -> dict[str, Any]:
+        panel_present = bool(result.get("panel_present", False))
+        if panel_present:
+            if not self._episode_active:
+                self.input_effect_tracker.reset()
+                self._episode_active = True
+                self._episode_id += 1
+            self._missing_panel_frames = 0
+            updated = self.input_effect_tracker.evaluate(
+                result,
+                frame_index=context.frame_index,
+                source_capture_timestamp=context.timestamp,
+            )
+        else:
+            updated = dict(result)
+            if self._episode_active:
+                self._missing_panel_frames += 1
+                if (
+                    self._missing_panel_frames
+                    >= self.panel_disappearance_frames
+                ):
+                    self.input_effect_tracker.reset()
+                    self._episode_active = False
+            updated.update({
+                "episode_input_started": (
+                    self.input_effect_tracker.input_started
+                    if self._episode_active else False
+                ),
+                "post_input_frame": False,
+                "frame_clean_eligible": False,
+                "clean_frame_eligible": False,
+            })
+        updated["press_episode_id"] = (
+            self._episode_id if self._episode_active else None
+        )
+        updated["panel_disappearance_count"] = self._missing_panel_frames
+        return updated
 
     def observe(self, frame: Any, context: FrameContext) -> PressObservation:
         try:
@@ -113,6 +177,7 @@ class BackgroundSubtractionPressDetectorAdapter:
                 "press_sequence", width, height
             )
             result = self.detector.detect(frame[y1:y2, x1:x2])
+            result = self._apply_episode_lifecycle(result, context)
             return v3_result_to_observation(result, context)
         except Exception as exc:
             return PressObservation(
@@ -121,6 +186,7 @@ class BackgroundSubtractionPressDetectorAdapter:
                 context.frame_index,
                 context.timestamp,
                 evidence={
+                    "press_evidence_version": 3,
                     "adapter": "press_background_subtraction_v3",
                     "exception": f"{type(exc).__name__}: {exc}",
                 },

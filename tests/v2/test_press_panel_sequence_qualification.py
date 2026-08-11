@@ -139,6 +139,51 @@ def test_panel_confirmation_precedes_temporal_sequence_consensus() -> None:
     assert third.bundle.press.sequence_ready is True
     assert third.bundle.press.sequence == tuple("WWDDWWSS")
     assert third.bundle.press.stable_key_box_count == 8
+    assert third.bundle.press.evidence["press_qualification_path"] == "temporal_v2"
+
+
+def test_unversioned_legacy_sequence_keeps_simple_compatibility() -> None:
+    legacy = replace(
+        _press(1, panel=True, sequence="WASD"),
+        sequence=tuple("WASD"),
+        evidence={},
+    )
+    result = DetectorEvidenceQualifier().qualify(
+        _bundle(legacy), _activation(DetectorActivationMode.ACTIVE)
+    )
+    assert result.bundle.press is not None
+    assert result.bundle.press.sequence_ready is True
+    assert result.bundle.press.sequence == tuple("WASD")
+    assert result.bundle.press.sequence_qualification_reason == (
+        "legacy_ready_sequence"
+    )
+    assert result.bundle.press.evidence["press_qualification_path"] == (
+        "legacy_simple"
+    )
+
+
+def test_v3_post_input_without_pre_input_consensus_abstains() -> None:
+    post_input = replace(
+        _press(1, panel=True, sequence="WASD"),
+        sequence=tuple("WASD"),
+        evidence={
+            **_press(1, panel=True, sequence="WASD").evidence,
+            "press_evidence_version": 3,
+            "post_input_frame": True,
+            "episode_input_started": True,
+        },
+    )
+    result = DetectorEvidenceQualifier().qualify(
+        _bundle(post_input), _activation(DetectorActivationMode.ACTIVE)
+    )
+    assert result.bundle.press is not None
+    assert result.bundle.press.detected is False
+    assert result.bundle.press.sequence_ready is False
+    assert result.bundle.press.sequence == ()
+    assert result.bundle.press.evidence["post_input_excluded"] is True
+    assert result.press.sequence_qualification_reason == (
+        "post_input_without_pre_input_consensus"
+    )
 
 
 def test_panel_candidate_never_enters_fusion_or_creates_a_sequence() -> None:

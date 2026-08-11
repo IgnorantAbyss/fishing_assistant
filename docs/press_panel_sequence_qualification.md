@@ -22,6 +22,16 @@ shape without assuming a glyph hue. It is opt-in:
   V3 adapter while retaining the existing temporal completeness, Safety, and
   mockable ActionSink path.
 
+In Production V3 mode, the adapter owns one reusable
+`PressV3InputEffectTracker` per physical panel episode. The tracker establishes
+the immutable clean-strip baseline, latches input start monotonically, and is
+reset only after confirmed panel disappearance. Evidence versions 2 and 3
+both pass through `PressSequenceTemporalAggregator`; unversioned legacy
+observations alone retain the simple compatibility path. Version 3 post-input
+frames remain available for diagnostics but are excluded from completeness,
+per-key aggregation, and consensus, so they cannot replace the frozen
+pre-input sequence.
+
 Optional bounded ROI evidence is enabled with `--press-v3-debug-evidence` and
 limited by `--press-v3-debug-max-episodes` and
 `--press-v3-debug-max-frames-per-episode`. It writes PRESS-panel crops, masks,
