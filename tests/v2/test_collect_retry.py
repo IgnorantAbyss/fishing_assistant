@@ -354,6 +354,161 @@ def test_collect_pending_keeps_get_detector_armed_for_disappearance_confirmation
     assert activation.get == DetectorActivationMode.ARMED
 
 
+def test_distinct_physical_get_attempts_have_distinct_deduplication_identity() -> None:
+    controller = CollectRetryController()
+    tracker = WouldFireDeduplicator()
+    request = ActionRequest(ActionIntent.COLLECT, 0.99, "get_panel_present")
+    values = dict(
+        safety_reason="action_emission_disabled",
+        frame_index=1,
+        timestamp=1.0,
+        runtime_state="GET",
+        prompt_evidence={},
+        specialized_evidence={},
+        count_raw=False,
+    )
+
+    _observe(controller, 0.0)
+    first, _ = _schedule(controller, 0.4)
+    assert first is not None
+    assert tracker.observe(
+        request, identity_suffix=first.deduplication_identity, **values
+    ) is not None
+    controller.record_execution(
+        first, _execution(first.attempt_id, 0.4), timestamp=0.4
+    )
+    _observe(controller, 0.5, visible=False)
+    _observe(controller, 0.6, visible=False)
+
+    _observe(controller, 1.0, opportunity="cycle:1:COLLECT")
+    second, _ = _schedule(controller, 1.4)
+    assert second is not None
+    assert second.attempt_number == first.attempt_number == 1
+    assert second.deduplication_identity != first.deduplication_identity
+    assert tracker.observe(
+        request,
+        identity_suffix=second.deduplication_identity,
+        timestamp=1.4,
+        **{key: value for key, value in values.items() if key != "timestamp"},
+    ) is not None
+
+
+def test_zero_emission_terminal_sync_recovery_rearms_once_with_new_identity() -> None:
+    controller = CollectRetryController(
+        CollectRetryConfig(max_duration_seconds=1.0)
+    )
+    _observe(controller, 0.0)
+    first, _ = _schedule(controller, 0.4)
+    assert first is not None
+    events = _observe(controller, 1.01)
+    assert [event.event_type for event in events] == ["collect_retry_exhausted"]
+
+    serviceable, recovery_events = controller.prepare_sync_recovery(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=1.4,
+        panel_observed=True,
+        panel_visible=True,
+        get_confidence=0.99,
+        get_confirmation_frames=6,
+    )
+    assert serviceable is True
+    assert [event.event_type for event in recovery_events] == [
+        "collect_rearmed_after_sync_recovery"
+    ]
+    payload = controller.lifecycle_payload(1.4)
+    assert payload["physical_get_episode_id"] == "get_episode:1"
+    assert payload["collect_opportunity_id"] == (
+        "get_episode:1:COLLECT:recovery:1"
+    )
+    assert payload["recovery_generation"] == 1
+    assert payload["serviceable"] is True
+
+    recovered, _ = _schedule(controller, 1.8)
+    assert recovered is not None
+    assert recovered.deduplication_identity != first.deduplication_identity
+
+    _observe(controller, 2.41)
+    assert controller.episode_terminal is True
+    serviceable, recovery_events = controller.prepare_sync_recovery(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=2.5,
+        panel_observed=True,
+        panel_visible=True,
+        get_confidence=0.99,
+        get_confirmation_frames=6,
+    )
+    assert serviceable is False
+    assert recovery_events == ()
+    assert controller.lifecycle_payload(2.5)["service_block_reason"] == (
+        "zero_emission_sync_recovery_already_used"
+    )
+
+
+def test_successful_emission_terminal_is_not_rearmed_by_sync_recovery() -> None:
+    controller = CollectRetryController(
+        CollectRetryConfig(max_duration_seconds=1.0)
+    )
+    _observe(controller, 0.0)
+    _complete(controller, 0.4)
+    _observe(controller, 1.01)
+
+    serviceable, events = controller.prepare_sync_recovery(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=1.4,
+        panel_observed=True,
+        panel_visible=True,
+        get_confidence=0.99,
+        get_confirmation_frames=6,
+    )
+    assert serviceable is False
+    assert events == ()
+    payload = controller.lifecycle_payload(1.4)
+    assert payload["actual_emission_count"] == 1
+    assert payload["service_block_reason"] == (
+        "terminal_after_actual_os_emission"
+    )
+
+
+def test_collect_sync_recovery_is_bounded_across_one_thousand_observations() -> None:
+    controller = CollectRetryController(
+        CollectRetryConfig(max_duration_seconds=1.0)
+    )
+    _observe(controller, 0.0)
+    first, _ = _schedule(controller, 0.4)
+    assert first is not None
+    _observe(controller, 1.01)
+
+    serviceable, events = controller.prepare_sync_recovery(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=1.4,
+        panel_observed=True,
+        panel_visible=True,
+        get_confidence=0.99,
+        get_confirmation_frames=6,
+    )
+    assert serviceable is True
+    assert sum(
+        event.event_type == "collect_rearmed_after_sync_recovery"
+        for event in events
+    ) == 1
+    recovered, _ = _schedule(controller, 1.8)
+    assert recovered is not None
+    _observe(controller, 2.41)
+
+    for index in range(1000):
+        serviceable, events = controller.prepare_sync_recovery(
+            opportunity_id="cycle:1:COLLECT",
+            timestamp=2.5 + index * 0.001,
+            panel_observed=True,
+            panel_visible=True,
+            get_confidence=0.99,
+            get_confirmation_frames=6,
+        )
+        assert serviceable is False
+        assert events == ()
+    assert controller.summary()["collect_opportunity_count"] == 2
+
+
 def test_collect_retry_module_contains_no_real_input_backend() -> None:
     source = (
         Path(__file__).resolve().parents[2]

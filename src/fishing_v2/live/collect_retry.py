@@ -45,6 +45,11 @@ class CollectAttempt:
     get_confidence: float
     get_confirmation_frames: int
 
+    @property
+    def deduplication_identity(self) -> str:
+        """Globally identify this attempt within a runtime session."""
+        return self.attempt_id
+
 
 @dataclass(frozen=True)
 class CollectRetryEvent:
@@ -66,6 +71,8 @@ class CollectRetryController:
         self._next_attempt_at: float | None = None
         self._attempt_count = 0
         self._complete_emission_count = 0
+        self._actual_emission_count = 0
+        self._last_emission_at: float | None = None
         self._inflight: CollectAttempt | None = None
         self._panel_visible = False
         self._absence_frames = 0
@@ -85,6 +92,8 @@ class CollectRetryController:
         self._physical_episode_count = 0
         self._collect_opportunity_count = 0
         self._collect_terminal_episode_count = 0
+        self._recovery_generation = 0
+        self._service_block_reason: str | None = "no_active_get_episode"
 
     @property
     def active(self) -> bool:
@@ -122,6 +131,10 @@ class CollectRetryController:
     def complete_emission_count(self) -> int:
         return self._complete_emission_count
 
+    @property
+    def actual_emission_count(self) -> int:
+        return self._actual_emission_count
+
     def _elapsed(self, timestamp: float) -> float:
         appeared_at = float(timestamp) if self._appeared_at is None else self._appeared_at
         return max(0.0, float(timestamp) - appeared_at)
@@ -138,6 +151,43 @@ class CollectRetryController:
             "disappearance_confirmation_frames": self._absence_frames,
             "collect_visual_acknowledged": self._visual_acknowledged,
             "next_retry_at": self._next_attempt_at,
+            "actual_emission_count": self._actual_emission_count,
+            "last_emission_at": self._last_emission_at,
+            "recovery_generation": self._recovery_generation,
+        }
+
+    def lifecycle_payload(self, timestamp: float) -> dict[str, Any]:
+        if not self._episode_open:
+            lifecycle_state = "closed"
+            serviceable = False
+            service_block_reason = "no_active_get_episode"
+        elif self._terminal:
+            lifecycle_state = "terminal"
+            serviceable = False
+            service_block_reason = (
+                self._service_block_reason or "terminal_collect_lifecycle"
+            )
+        elif self._inflight is not None:
+            lifecycle_state = "inflight"
+            serviceable = True
+            service_block_reason = None
+        elif self._panel_visible and self._next_attempt_at is not None:
+            lifecycle_state = "waiting_retry"
+            serviceable = True
+            service_block_reason = None
+        else:
+            lifecycle_state = "waiting_for_panel"
+            serviceable = False
+            service_block_reason = "qualified_get_panel_not_currently_visible"
+        return {
+            **self._base_payload(timestamp),
+            "collect_opportunity_id": self._opportunity_id,
+            "collect_lifecycle_state": lifecycle_state,
+            "collect_terminal": self._terminal,
+            "attempt_count": self._attempt_count,
+            "terminal_reason": self._terminal_reason,
+            "serviceable": serviceable,
+            "service_block_reason": service_block_reason,
         }
 
     def observe_panel(
@@ -164,6 +214,8 @@ class CollectRetryController:
             self._next_attempt_at = float(timestamp) + self.config.initial_settle_ms / 1000.0
             self._attempt_count = 0
             self._complete_emission_count = 0
+            self._actual_emission_count = 0
+            self._last_emission_at = None
             self._inflight = None
             self._panel_visible = True
             self._absence_frames = 0
@@ -172,6 +224,8 @@ class CollectRetryController:
             self._terminal_counted = False
             self._outcome = None
             self._visual_acknowledged = False
+            self._recovery_generation = 0
+            self._service_block_reason = None
             started_payload = {
                 **self._base_payload(timestamp),
                 "get_confidence": float(get_confidence),
@@ -251,6 +305,84 @@ class CollectRetryController:
             }))
         return tuple(events)
 
+    def prepare_sync_recovery(
+        self,
+        *,
+        opportunity_id: str,
+        timestamp: float,
+        panel_observed: bool,
+        panel_visible: bool,
+        get_confidence: float,
+        get_confirmation_frames: int,
+    ) -> tuple[bool, tuple[CollectRetryEvent, ...]]:
+        """Make a qualified GET recovery coherent without unbounded retries.
+
+        A terminal opportunity that never emitted OS input receives one new,
+        explicitly identified recovery opportunity.  Any actual input, or a
+        second terminal recovery request for the same physical panel, remains
+        fail-closed in SYNC_REQUIRED.
+        """
+        if not panel_observed or not panel_visible:
+            self._service_block_reason = "qualified_get_recovery_evidence_required"
+            return False, ()
+
+        events: tuple[CollectRetryEvent, ...] = ()
+        if not self._episode_open:
+            events = self.observe_panel(
+                opportunity_id=opportunity_id,
+                timestamp=timestamp,
+                panel_observed=True,
+                panel_visible=True,
+                get_confidence=get_confidence,
+                get_confirmation_frames=get_confirmation_frames,
+            )
+        if self.active:
+            self._service_block_reason = None
+            return True, events
+        if not self._terminal:
+            self._service_block_reason = "collect_lifecycle_not_serviceable"
+            return False, events
+        if self._actual_emission_count > 0:
+            self._service_block_reason = "terminal_after_actual_os_emission"
+            return False, events
+        if self._recovery_generation >= 1:
+            self._service_block_reason = (
+                "zero_emission_sync_recovery_already_used"
+            )
+            return False, events
+
+        self._recovery_generation += 1
+        self._opportunity_id = (
+            f"{self._physical_episode_id}:COLLECT:recovery:"
+            f"{self._recovery_generation}"
+        )
+        self._runtime_cycle_metadata = opportunity_id
+        self._collect_opportunity_count += 1
+        self._appeared_at = float(timestamp)
+        self._next_attempt_at = (
+            float(timestamp) + self.config.initial_settle_ms / 1000.0
+        )
+        self._attempt_count = 0
+        self._inflight = None
+        self._panel_visible = True
+        self._absence_frames = 0
+        self._terminal = False
+        self._terminal_reason = None
+        self._outcome = None
+        self._visual_acknowledged = False
+        self._last_get_confidence = float(get_confidence)
+        self._last_get_confirmation_frames = int(get_confirmation_frames)
+        self._service_block_reason = None
+        recovery_event = CollectRetryEvent(
+            "collect_rearmed_after_sync_recovery",
+            {
+                **self.lifecycle_payload(timestamp),
+                "sync_recovery_target": "GET",
+                "recovery_identity": self._opportunity_id,
+            },
+        )
+        return True, (*events, recovery_event)
+
     def schedule_attempt(
         self,
         *,
@@ -314,6 +446,9 @@ class CollectRetryController:
             "windows_error_message": result.windows_error_message,
             "integrity_diagnostics": dict(result.integrity_diagnostics),
         }
+        if result.emitted_event_count > 0:
+            self._actual_emission_count += 1
+            self._last_emission_at = float(timestamp)
         if (
             result.applied
             and result.os_input_emitted
@@ -352,6 +487,7 @@ class CollectRetryController:
         self._outcome = "cancelled"
         self._mark_terminal()
         self._inflight = None
+        self._service_block_reason = reason
         payload = self._base_payload(timestamp)
         if attempt is not None:
             payload.update(self.attempt_payload(attempt))
@@ -385,6 +521,7 @@ class CollectRetryController:
         self._mark_terminal()
         self._inflight = None
         self._visual_timeout_count += 1
+        self._service_block_reason = reason
         return CollectRetryEvent("collect_retry_exhausted", {
             **self._base_payload(timestamp),
             "cancellation_reason": reason,
@@ -422,6 +559,13 @@ class CollectRetryController:
             "physical_get_episode_count": self._physical_episode_count,
             "collect_opportunity_count": self._collect_opportunity_count,
             "collect_terminal_episode_count": self._collect_terminal_episode_count,
+            "collect_actual_emission_count": self._actual_emission_count,
+            "collect_last_emission_at": self._last_emission_at,
+            "collect_recovery_generation": self._recovery_generation,
+            "collect_serviceable": self.lifecycle_payload(0.0)["serviceable"],
+            "collect_service_block_reason": self.lifecycle_payload(0.0)[
+                "service_block_reason"
+            ],
             "collect_attempt_counts_by_get_episode": dict(
                 self._attempt_counts_by_get_episode
             ),

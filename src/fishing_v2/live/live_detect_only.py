@@ -755,6 +755,10 @@ class LiveDetectOnlyRuntime:
         self._logged_hook_action_blockers: set[
             tuple[str, tuple[str, ...]]
         ] = set()
+        self._logged_get_liveness_violations: set[
+            tuple[str | None, str | None, int, str | None]
+        ] = set()
+        self._get_liveness_invariant_violation_count = 0
         self._post_collect_banner_fps = float(
             self._raw_config["result"].get("get_burst_fps", 20.0)
         )
@@ -807,6 +811,103 @@ class LiveDetectOnlyRuntime:
                     ),
                     **dict(event.payload),
                 })
+
+    def _prepare_get_sync_recovery(
+        self,
+        *,
+        recovery: Any,
+        qualified_get: GetObservation | None,
+        timestamp: float,
+        frame_index: int,
+    ) -> bool:
+        """Require FSM GET recovery and COLLECT ownership to agree."""
+        if not (
+            recovery.synchronized
+            and recovery.state == RuntimeState.GET
+            and recovery.reason == "qualified_get_sync_recovery"
+        ):
+            return True
+        panel_visible = bool(
+            qualified_get is not None and qualified_get.detected
+        )
+        serviceable, events = self.collect_retry.prepare_sync_recovery(
+            opportunity_id=self.deduplicator.opportunity_id(
+                ActionIntent.COLLECT
+            ),
+            timestamp=timestamp,
+            panel_observed=qualified_get is not None,
+            panel_visible=panel_visible,
+            get_confidence=(
+                qualified_get.confidence if qualified_get is not None else 0.0
+            ),
+            get_confirmation_frames=(
+                int(qualified_get.evidence.get("get_confirmation_frames", 0))
+                if qualified_get is not None
+                else 0
+            ),
+        )
+        self._log_collect_events(
+            events,
+            timestamp=timestamp,
+            frame_index=frame_index,
+            runtime_state=self.fsm.state.value,
+        )
+        if serviceable:
+            return True
+        self.logger.event(
+            "collect_sync_recovery_blocked_terminal",
+            {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "runtime_state": self.fsm.state.value,
+                "sync_recovery_target": RuntimeState.GET.value,
+                **self.collect_retry.lifecycle_payload(timestamp),
+                "action_applied": False,
+            },
+        )
+        return False
+
+    def _log_get_liveness_invariant_if_needed(
+        self,
+        *,
+        request: ActionRequest,
+        qualified_get: GetObservation | None,
+        timestamp: float,
+        frame_index: int,
+    ) -> None:
+        if not (
+            self.fsm.state == RuntimeState.GET
+            and request.intent == ActionIntent.COLLECT
+            and qualified_get is not None
+            and qualified_get.detected
+            and self.collect_retry.episode_terminal
+        ):
+            return
+        payload = self.collect_retry.lifecycle_payload(timestamp)
+        if payload["serviceable"]:
+            return
+        key = (
+            self.collect_retry.physical_episode_id,
+            self.collect_retry.opportunity_id,
+            int(payload["recovery_generation"]),
+            payload["service_block_reason"],
+        )
+        if key in self._logged_get_liveness_violations:
+            return
+        self._logged_get_liveness_violations.add(key)
+        self._get_liveness_invariant_violation_count += 1
+        self.logger.event(
+            "get_liveness_invariant_violation",
+            {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "runtime_state": self.fsm.state.value,
+                "raw_intent": request.intent.value,
+                "sync_recovery_target": None,
+                **payload,
+                "action_applied": False,
+            },
+        )
 
     def _log_cast_events(
         self,
@@ -2762,7 +2863,31 @@ class LiveDetectOnlyRuntime:
                             self.recovery_synchronizer.reset(
                                 started_at=elapsed
                             )
-                        elif recovery.synchronized:
+                        collect_recovery_allowed = (
+                            self._prepare_get_sync_recovery(
+                                recovery=recovery,
+                                qualified_get=(
+                                    last_result.qualified.bundle.get
+                                ),
+                                timestamp=elapsed,
+                                frame_index=captured,
+                            )
+                            if not terminal_hook_recovery_blocked
+                            else True
+                        )
+                        if (
+                            recovery.synchronized
+                            and not terminal_hook_recovery_blocked
+                            and not collect_recovery_allowed
+                        ):
+                            self.recovery_synchronizer.reset(
+                                started_at=elapsed
+                            )
+                        elif (
+                            recovery.synchronized
+                            and not terminal_hook_recovery_blocked
+                            and collect_recovery_allowed
+                        ):
                             recovered = self.fsm.recover_from_sync_required(
                                 recovery.state,
                                 elapsed,
@@ -4039,6 +4164,12 @@ class LiveDetectOnlyRuntime:
                                 elapsed,
                                 "collect_visual_ack_timeout",
                             ))
+                        self._log_get_liveness_invariant_if_needed(
+                            request=request,
+                            qualified_get=qualified_get,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                        )
                     if last_result.fsm.changed:
                         transition_results.append(last_result.fsm)
                         if (
@@ -4200,9 +4331,30 @@ class LiveDetectOnlyRuntime:
                             self.recovery_synchronizer.reset(
                                 started_at=elapsed
                             )
+                        collect_recovery_allowed = (
+                            self._prepare_get_sync_recovery(
+                                recovery=recovery,
+                                qualified_get=(
+                                    last_result.qualified.bundle.get
+                                ),
+                                timestamp=elapsed,
+                                frame_index=captured,
+                            )
+                            if not terminal_hook_recovery_blocked
+                            else True
+                        )
                         if (
                             recovery.synchronized
                             and not terminal_hook_recovery_blocked
+                            and not collect_recovery_allowed
+                        ):
+                            self.recovery_synchronizer.reset(
+                                started_at=elapsed
+                            )
+                        if (
+                            recovery.synchronized
+                            and not terminal_hook_recovery_blocked
+                            and collect_recovery_allowed
                         ):
                             recovered = self.fsm.recover_from_sync_required(
                                 recovery.state, elapsed, recovery.reason
@@ -4962,7 +5114,7 @@ class LiveDetectOnlyRuntime:
                                 prompt_evidence=prompt.evidence if prompt else None,
                                 specialized_evidence=specialized,
                                 identity_suffix=(
-                                    f"attempt:{collect_attempt.attempt_number}"
+                                    collect_attempt.deduplication_identity
                                     if collect_attempt is not None else None
                                 ),
                                 count_raw=False,
@@ -5929,6 +6081,9 @@ class LiveDetectOnlyRuntime:
                 **self.cast_clearance.summary(),
                 **self.cast_opportunity.summary(),
                 **self.collect_retry.summary(),
+                "get_liveness_invariant_violation_count": (
+                    self._get_liveness_invariant_violation_count
+                ),
                 **self._press_live_emission.summary(),
                 **self.console.summary(),
                 **action_summary,

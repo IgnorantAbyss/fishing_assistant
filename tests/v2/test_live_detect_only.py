@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -565,6 +566,261 @@ def test_collect_only_live_path_applies_one_stable_action_after_qualified_get(
     assert "collect_attempt_started" in event_names
     assert "collect_attempt_emitted" in event_names
     assert "collect_attempt_waiting_ack" in event_names
+
+
+def test_episode_97_98_timeout_sync_get_recovery_is_serviceable(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    """Deterministically reproduce the terminal-SYNC-GET Live timeline."""
+    runtime = _runtime(
+        tmp_path,
+        MockCapture(supported_frame),
+        FakeClock(),
+        action_allowlist="COLLECT",
+    )
+    retry = runtime.collect_retry
+    request = ActionRequest(ActionIntent.COLLECT, 0.99, "get_panel_present")
+    observe_values = dict(
+        safety_reason="action_emission_disabled",
+        frame_index=1,
+        runtime_state="GET",
+        prompt_evidence={},
+        specialized_evidence={},
+        count_raw=False,
+    )
+
+    # The normal predecessor mirrors episode 97: actual emission followed by
+    # two qualified absence frames and visual acknowledgement.
+    retry.observe_panel(
+        opportunity_id="cycle:126:COLLECT",
+        timestamp=0.0,
+        panel_observed=True,
+        panel_visible=True,
+        get_confidence=0.99,
+        get_confirmation_frames=6,
+    )
+    episode_97_attempt, _ = retry.schedule_attempt(
+        timestamp=0.4, get_confidence=0.99, get_confirmation_frames=6
+    )
+    assert episode_97_attempt is not None
+    runtime.deduplicator.cycle_id = 126
+    assert runtime.deduplicator.observe(
+        request,
+        timestamp=0.4,
+        identity_suffix=episode_97_attempt.deduplication_identity,
+        **observe_values,
+    ) is not None
+    retry.record_execution(
+        episode_97_attempt,
+        ActionExecutionResult(
+            episode_97_attempt.attempt_id,
+            ActionIntent.COLLECT.value,
+            0.4,
+            0.4,
+            0.4,
+            True,
+            True,
+            2,
+            2,
+            10,
+            10,
+            os_input_emitted=True,
+        ),
+        timestamp=0.4,
+    )
+    retry.observe_panel(
+        opportunity_id="cycle:126:COLLECT",
+        timestamp=0.5,
+        panel_observed=True,
+        panel_visible=False,
+    )
+    completed = retry.observe_panel(
+        opportunity_id="cycle:126:COLLECT",
+        timestamp=0.6,
+        panel_observed=True,
+        panel_visible=False,
+    )
+    assert any(event.event_type == "get_episode_completed" for event in completed)
+
+    # Fresh qualified GET opens episode 98. Its first attempt is counted but
+    # deliberately receives no ActionSink result, matching the captured bug.
+    retry.observe_panel(
+        opportunity_id="cycle:126:COLLECT",
+        timestamp=0.7,
+        panel_observed=True,
+        panel_visible=True,
+        get_confidence=0.99,
+        get_confirmation_frames=6,
+    )
+    episode_98_attempt, _ = retry.schedule_attempt(
+        timestamp=1.1, get_confidence=0.99, get_confirmation_frames=6
+    )
+    assert episode_98_attempt is not None
+    assert episode_98_attempt.attempt_number == 1
+    assert runtime.deduplicator.observe(
+        request,
+        timestamp=1.1,
+        identity_suffix=episode_98_attempt.deduplication_identity,
+        **observe_values,
+    ) is not None
+    exhausted = retry.observe_panel(
+        opportunity_id="cycle:126:COLLECT",
+        timestamp=5.71,
+        panel_observed=True,
+        panel_visible=True,
+        get_confidence=0.99,
+        get_confirmation_frames=46,
+    )
+    assert [event.event_type for event in exhausted] == [
+        "collect_retry_exhausted"
+    ]
+
+    runtime.fsm.force_state(RuntimeState.GET, 0.7, "get_panel_priority")
+    runtime.fsm.force_state(
+        RuntimeState.SYNC_REQUIRED, 5.71, "collect_visual_ack_timeout"
+    )
+    qualified_get = GetObservation(
+        True,
+        0.99,
+        100,
+        6.08,
+        evidence={"get_confirmation_frames": 6},
+    )
+    recovery = SimpleNamespace(
+        synchronized=True,
+        state=RuntimeState.GET,
+        reason="qualified_get_sync_recovery",
+    )
+    assert runtime._prepare_get_sync_recovery(
+        recovery=recovery,
+        qualified_get=qualified_get,
+        timestamp=6.08,
+        frame_index=100,
+    ) is True
+    runtime.fsm.recover_from_sync_required(
+        RuntimeState.GET, 6.08, "qualified_get_sync_recovery"
+    )
+    assert runtime.fsm.state == RuntimeState.GET
+    assert retry.active is True
+    assert retry.episode_terminal is False
+    status = retry.lifecycle_payload(6.08)
+    assert status["recovery_generation"] == 1
+    assert status["serviceable"] is True
+    recovered_attempt, _ = retry.schedule_attempt(
+        timestamp=6.48, get_confidence=0.99, get_confirmation_frames=6
+    )
+    assert recovered_attempt is not None
+    assert recovered_attempt.attempt_id.endswith("recovery:1:attempt:1")
+
+
+def test_get_liveness_invariant_event_is_low_frequency(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    runtime = _runtime(tmp_path, MockCapture(supported_frame), FakeClock())
+    retry = runtime.collect_retry
+    retry.observe_panel(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=0.0,
+        panel_observed=True,
+        panel_visible=True,
+    )
+    retry.schedule_attempt(
+        timestamp=0.4, get_confidence=0.99, get_confirmation_frames=6
+    )
+    retry.observe_panel(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=5.01,
+        panel_observed=True,
+        panel_visible=True,
+    )
+    runtime.fsm.force_state(RuntimeState.GET, 0.0, "test_get")
+    request = ActionRequest(ActionIntent.COLLECT, 0.99, "get_panel_present")
+    qualified_get = GetObservation(True, 0.99, 1, 5.01)
+    for frame in range(100):
+        runtime._log_get_liveness_invariant_if_needed(
+            request=request,
+            qualified_get=qualified_get,
+            timestamp=5.01 + frame * 0.01,
+            frame_index=frame,
+        )
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    violations = [
+        event for event in events
+        if event["event_type"] == "get_liveness_invariant_violation"
+    ]
+    assert len(violations) == 1
+    assert violations[0]["collect_terminal"] is True
+    assert violations[0]["serviceable"] is False
+
+
+def test_terminal_after_collect_emission_cannot_recover_to_inert_get(
+    tmp_path: Path, supported_frame: np.ndarray
+) -> None:
+    runtime = _runtime(tmp_path, MockCapture(supported_frame), FakeClock())
+    retry = runtime.collect_retry
+    retry.observe_panel(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=0.0,
+        panel_observed=True,
+        panel_visible=True,
+    )
+    attempt, _ = retry.schedule_attempt(
+        timestamp=0.4, get_confidence=0.99, get_confirmation_frames=6
+    )
+    assert attempt is not None
+    retry.record_execution(
+        attempt,
+        ActionExecutionResult(
+            attempt.attempt_id,
+            ActionIntent.COLLECT.value,
+            0.4,
+            0.4,
+            0.4,
+            True,
+            True,
+            2,
+            2,
+            10,
+            10,
+            os_input_emitted=True,
+        ),
+        timestamp=0.4,
+    )
+    retry.observe_panel(
+        opportunity_id="cycle:1:COLLECT",
+        timestamp=5.01,
+        panel_observed=True,
+        panel_visible=True,
+    )
+    runtime.fsm.force_state(RuntimeState.GET, 0.0, "test_get")
+    runtime.fsm.force_state(
+        RuntimeState.SYNC_REQUIRED, 5.01, "collect_visual_ack_timeout"
+    )
+    recovery = SimpleNamespace(
+        synchronized=True,
+        state=RuntimeState.GET,
+        reason="qualified_get_sync_recovery",
+    )
+    qualified_get = GetObservation(
+        True,
+        0.99,
+        2,
+        5.4,
+        evidence={"get_confirmation_frames": 6},
+    )
+
+    assert runtime._prepare_get_sync_recovery(
+        recovery=recovery,
+        qualified_get=qualified_get,
+        timestamp=5.4,
+        frame_index=2,
+    ) is False
+    assert runtime.fsm.state == RuntimeState.SYNC_REQUIRED
+    assert retry.episode_terminal is True
+    assert retry.summary()["collect_opportunity_count"] == 1
 
 
 def test_cast_collect_live_path_casts_once_then_waits_for_visual_ack(
