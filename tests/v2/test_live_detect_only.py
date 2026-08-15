@@ -22,6 +22,7 @@ from src.fishing_v2.domain.observations import (
     ResultBannerObservation,
 )
 from src.fishing_v2.domain.runtime_state import RuntimeState
+from src.fishing_v2.fusion.observation_fusion import StateEvidence
 from src.fishing_v2.runtime.detector_activation import DetectorActivationMode
 from src.fishing_v2.live.live_detect_only import (
     LiveDetectOnlyConfig,
@@ -1149,6 +1150,36 @@ def test_would_fire_deduplicates_repeated_proposals_per_cycle() -> None:
     tracker.finish_cycle()
     assert tracker.observe(request, frame_index=20, **kwargs) is not None
     assert tracker.unique_events == {"WOULD_HOOK_ACTION": 2}
+
+
+def test_start_hook_dedup_identity_stays_bounded_across_1000_ready_episodes() -> None:
+    tracker = WouldFireDeduplicator()
+    request = ActionRequest(ActionIntent.START_HOOK, 0.99, "ready")
+
+    for index in range(1000):
+        opportunity_id = f"ready:{index}:START_HOOK"
+        kwargs = {
+            "safety_reason": "action_emission_disabled",
+            "timestamp": float(index),
+            "runtime_state": RuntimeState.READY.value,
+            "prompt_evidence": {},
+            "specialized_evidence": {},
+            "identity_suffix": opportunity_id,
+        }
+        assert tracker.observe(
+            request,
+            frame_index=index * 2,
+            **kwargs,
+        ) is not None
+        assert tracker.observe(
+            request,
+            frame_index=index * 2 + 1,
+            **kwargs,
+        ) is None
+        tracker.finish_cycle()
+        assert tracker.retained_identity_count == 0
+
+    assert tracker.unique_events == {"WOULD_START_HOOK": 1000}
 
 
 def test_live_qualified_hook_emits_exactly_once_and_arms_result_flow(
@@ -2705,6 +2736,157 @@ def test_live_stable_ready_emits_exactly_one_start_hook_and_waits_for_ack(
         and row["reason"] == "start_hook_action_applied"
         for row in transitions
     )
+
+
+def test_live_ready_87_after_abnormal_press_recovery_emits_once(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    """Deterministic reconstruction of session_20260814_161753."""
+    class PersistentReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.996,
+                {PromptObservationKind.READY_BITE.value: 0.996},
+                "session_20260814_161753_ready_87",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    class CompleteStartHookSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["START_HOOK"],
+                "attempted_action_counts": {
+                    "START_HOOK": len(self.calls),
+                },
+                "applied_action_counts": {
+                    "START_HOOK": len(self.calls),
+                },
+            }
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteStartHookSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=0.8,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="START_HOOK",
+        action_sink_factory=factory,
+    )
+
+    # ready:86 emitted normally, then PRESS incomplete -> result ->
+    # authoritative IDLE recovery.  That path retained the legacy
+    # (READY, START_HOOK) marker which poisoned ready:87 in production.
+    runtime.fsm.force_state(RuntimeState.READY, 0.0, "ready_86")
+    prior_bundle = ObservationBundle(
+        1,
+        0.1,
+        PromptObservation(
+            PromptObservationKind.READY_BITE,
+            0.99,
+            {PromptObservationKind.READY_BITE.value: 0.99},
+            "ready_86",
+            1,
+            0.1,
+        ),
+    )
+    prior_evidence = StateEvidence(
+        {RuntimeState.READY: 0.99},
+        ("prompt_READY_BITE:0.990",),
+        (),
+        RuntimeState.READY,
+        0.99,
+        "ready_86",
+        1,
+        0.1,
+    )
+    prior = runtime.fsm.advance(prior_evidence, 0.1, prior_bundle)
+    assert runtime.fsm.commit_action(prior.action_request, 0.1).action_applied
+    runtime.fsm.force_state(RuntimeState.PRESS, 1.0, "press_incomplete_abstain")
+    runtime.fsm.force_state(
+        RuntimeState.RESULT_PENDING,
+        1.1,
+        "press_panel_disappeared",
+    )
+    runtime.controller.reset_action_history_for_authoritative_idle()
+    runtime.fsm.recover_to_authoritative_idle(
+        1.2,
+        physical_idle_id="physical_idle:87",
+    )
+    runtime.fsm.force_state(RuntimeState.WAITING, 1.3, "cast_ack")
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=PersistentReadyObserver(),
+    )
+
+    summary = runtime.run(max_frames=20)
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+
+    assert len(created[0].calls) == 1
+    assert created[0].calls[0][0].intent == ActionIntent.START_HOOK
+    assert summary["actions_applied"] == 1
+    assert summary["unique_would_fire"] == {"WOULD_START_HOOK": 1}
+    assert summary["ready_liveness_invariant_violation_count"] == 0
+    reconciled = next(
+        item for item in events
+        if item["event_type"] == "start_hook_opportunity_reconciled"
+    )
+    assert reconciled["physical_ready_episode_id"] == "ready:1"
+    assert reconciled["ready_certificate_id"] == "ready-cert:1"
+    assert reconciled["ready_certificate_created_at"] is not None
+    assert reconciled["ready_certificate_age"] >= 0.0
+    assert reconciled["runtime_state"] == RuntimeState.READY.value
+    assert reconciled["start_hook_opportunity_id"] == (
+        "ready:1:START_HOOK"
+    )
+    assert reconciled["start_hook_serviceable"] is True
+    assert reconciled["start_hook_terminal"] is False
 
 
 def test_live_failed_start_hook_emission_is_not_retried(

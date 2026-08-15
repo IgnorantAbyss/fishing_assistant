@@ -74,6 +74,7 @@ class ReadyRecoveryTracker:
         self._certificate_sequence = 0
         self._episode_id: str | None = None
         self._certificate: ReadyRecoveryCertificate | None = None
+        self._proposal_created = False
         self._awaiting_ready_clear = False
         self._emission_started = False
         self._emission_completed = False
@@ -87,6 +88,28 @@ class ReadyRecoveryTracker:
     @property
     def emission_started(self) -> bool:
         return self._emission_started
+
+    @property
+    def emission_completed(self) -> bool:
+        return self._emission_completed
+
+    @property
+    def proposal_created(self) -> bool:
+        return self._proposal_created
+
+    @property
+    def certificate(self) -> ReadyRecoveryCertificate | None:
+        return self._certificate
+
+    @property
+    def start_hook_opportunity_id(self) -> str | None:
+        if self._episode_id is None:
+            return None
+        return f"{self._episode_id}:START_HOOK"
+
+    @property
+    def terminal(self) -> bool:
+        return self._consumed or self._terminal_without_retry
 
     @property
     def consumed(self) -> bool:
@@ -108,11 +131,17 @@ class ReadyRecoveryTracker:
     def _end_episode(self) -> None:
         self._clear_candidate()
         self._episode_id = None
+        self._proposal_created = False
         self._emission_started = False
         self._emission_completed = False
         self._consumed = False
         self._terminal_without_retry = False
         self._awaiting_ready_clear = False
+
+    def record_proposal(self) -> None:
+        """Mark proposal service without consuming the physical opportunity."""
+        if self._certificate is not None and self.proposal_allowed:
+            self._proposal_created = True
 
     def record_emission(
         self,

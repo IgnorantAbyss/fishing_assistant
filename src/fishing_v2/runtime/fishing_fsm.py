@@ -95,6 +95,8 @@ class FishingFSM:
         self._conflict_since: float | None = None
         self._actions_applied: set[tuple[RuntimeState, ActionIntent]] = set()
         self._cast_opportunities_applied: set[str] = set()
+        self._start_hook_opportunity_id: str | None = None
+        self._start_hook_consumed_opportunity_id: str | None = None
         self._authoritative_physical_idle_id: str | None = None
         self._pending_request: ActionRequest | None = None
         self._press_waiting_for_clear = False
@@ -120,6 +122,14 @@ class FishingFSM:
     @property
     def cast_opportunities_applied(self) -> frozenset[str]:
         return frozenset(self._cast_opportunities_applied)
+
+    @property
+    def start_hook_opportunity_id(self) -> str | None:
+        return self._start_hook_opportunity_id
+
+    @property
+    def start_hook_consumed_opportunity_id(self) -> str | None:
+        return self._start_hook_consumed_opportunity_id
 
     @property
     def last_hook_action_decision(
@@ -205,6 +215,7 @@ class FishingFSM:
         # opportunity-owned set: an already emitted CAST must stay consumed.
         self._pending_request = None
         self._actions_applied.discard((RuntimeState.IDLE, ActionIntent.CAST))
+        self._start_hook_opportunity_id = None
         result = self.force_state(RuntimeState.IDLE, timestamp, reason)
         self._authoritative_physical_idle_id = resolved_physical_idle_id
         return result
@@ -219,6 +230,8 @@ class FishingFSM:
         self._conflict_since = None
         self._pending_request = None
         self._actions_applied.clear()
+        self._start_hook_opportunity_id = None
+        self._start_hook_consumed_opportunity_id = None
         self._press_waiting_for_clear = False
         self._press_intent_proposed = False
         self._hook_intent_proposed = False
@@ -295,6 +308,22 @@ class FishingFSM:
             visual_acknowledgement="HOOK_INSTRUCTION",
         )
 
+    def reconcile_start_hook_opportunity(self, opportunity_id: str) -> bool:
+        """Bind READY proposal ownership to one physical READY certificate.
+
+        Legacy state/action history remains available for diagnostics, but it
+        cannot suppress a distinct physical READY opportunity.  Only the
+        current and most recently consumed identities are retained.
+        """
+        resolved = str(opportunity_id).strip()
+        if self.state != RuntimeState.READY or not resolved:
+            return False
+        if self._start_hook_opportunity_id == resolved:
+            return False
+        self._pending_request = None
+        self._start_hook_opportunity_id = resolved
+        return True
+
     def _transition(
         self,
         target: RuntimeState,
@@ -347,10 +376,23 @@ class FishingFSM:
             return self._none("press_sequence_already_proposed_in_episode")
         if intent == ActionIntent.HOOK_ACTION and self._hook_intent_proposed:
             return self._none("hook_action_already_proposed_in_episode")
+        resolved_payload = dict(payload or {})
         key = (self.state, intent)
-        if key in self._actions_applied and intent != ActionIntent.COLLECT:
+        if intent == ActionIntent.START_HOOK:
+            opportunity_id = self._start_hook_opportunity_id
+            if opportunity_id is not None:
+                if opportunity_id == self._start_hook_consumed_opportunity_id:
+                    return self._none(
+                        "start_hook_opportunity_already_consumed"
+                    )
+                resolved_payload["start_hook_opportunity_id"] = (
+                    opportunity_id
+                )
+            elif key in self._actions_applied:
+                return self._none("action_already_applied_in_state")
+        elif key in self._actions_applied and intent != ActionIntent.COLLECT:
             return self._none("action_already_applied_in_state")
-        request = ActionRequest(intent, confidence, reason, payload or {})
+        request = ActionRequest(intent, confidence, reason, resolved_payload)
         self._pending_request = request
         if intent == ActionIntent.PRESS_SEQUENCE:
             self._press_intent_proposed = True
@@ -478,22 +520,47 @@ class FishingFSM:
         resolved = str(value).strip()
         return resolved or None
 
+    @staticmethod
+    def _start_hook_opportunity_identity(
+        request: ActionRequest,
+    ) -> str | None:
+        if request.intent != ActionIntent.START_HOOK:
+            return None
+        value = request.payload.get("start_hook_opportunity_id")
+        if value is None:
+            return None
+        resolved = str(value).strip()
+        return resolved or None
+
     def commit_action(self, request: ActionRequest, timestamp: float) -> ActionCommitResult:
         previous = self.state
         if request.intent == ActionIntent.NONE or self._pending_request != request:
             return ActionCommitResult(False, previous, previous, "no_matching_proposed_action")
         key = (self.state, request.intent)
         cast_opportunity_id = self._cast_opportunity_identity(request)
+        start_hook_opportunity_id = (
+            self._start_hook_opportunity_identity(request)
+        )
         duplicate_cast_opportunity = bool(
             cast_opportunity_id is not None
             and cast_opportunity_id in self._cast_opportunities_applied
         )
         duplicate_legacy_action = bool(
             cast_opportunity_id is None
+            and start_hook_opportunity_id is None
             and key in self._actions_applied
             and request.intent != ActionIntent.COLLECT
         )
-        if duplicate_cast_opportunity or duplicate_legacy_action:
+        duplicate_start_hook_opportunity = bool(
+            start_hook_opportunity_id is not None
+            and start_hook_opportunity_id
+            == self._start_hook_consumed_opportunity_id
+        )
+        if (
+            duplicate_cast_opportunity
+            or duplicate_start_hook_opportunity
+            or duplicate_legacy_action
+        ):
             self._pending_request = None
             return ActionCommitResult(
                 False,
@@ -502,11 +569,20 @@ class FishingFSM:
                 (
                     "cast_opportunity_already_applied"
                     if duplicate_cast_opportunity
-                    else "action_already_applied_in_state"
+                    else (
+                        "start_hook_opportunity_already_consumed"
+                        if duplicate_start_hook_opportunity
+                        else "action_already_applied_in_state"
+                    )
                 ),
             )
         if cast_opportunity_id is not None:
             self._cast_opportunities_applied.add(cast_opportunity_id)
+        elif start_hook_opportunity_id is not None:
+            self._start_hook_consumed_opportunity_id = (
+                start_hook_opportunity_id
+            )
+            self._actions_applied.add(key)
         else:
             self._actions_applied.add(key)
         self._pending_request = None

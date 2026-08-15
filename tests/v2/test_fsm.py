@@ -256,6 +256,102 @@ def test_waiting_ready_hook_pending_flow_arms_before_confirmation() -> None:
     assert fsm.commit_action(intent.action_request, 0.2).next_state == RuntimeState.HOOK_PENDING
 
 
+def test_new_ready_opportunity_is_not_poisoned_by_authoritative_idle_recovery() -> None:
+    """Regression for session_20260814_161753 ready:86 -> ready:87."""
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.READY)
+    assert fsm.reconcile_start_hook_opportunity("ready:86:START_HOOK")
+    prior = fsm.advance(
+        _evidence(RuntimeState.READY),
+        0.1,
+        _bundle(prompt=PromptObservationKind.READY_BITE),
+    )
+    assert fsm.commit_action(prior.action_request, 0.1).action_applied
+
+    # The preceding physical cycle ended through the abnormal PRESS/result
+    # recovery path, which uses force_state rather than the normal IDLE edge.
+    fsm.force_state(RuntimeState.PRESS, 1.0, "press_incomplete_abstain")
+    fsm.force_state(RuntimeState.RESULT_PENDING, 1.1, "press_panel_disappeared")
+    fsm.recover_to_authoritative_idle(
+        1.2,
+        physical_idle_id="physical_idle:87",
+    )
+    fsm.force_state(RuntimeState.WAITING, 1.3, "cast_visual_acknowledged")
+    fsm.force_state(RuntimeState.READY, 2.0, "stable_ready_bite")
+
+    assert fsm.reconcile_start_hook_opportunity("ready:87:START_HOOK")
+    fresh = fsm.advance(
+        _evidence(RuntimeState.READY, frame=11),
+        2.1,
+        _bundle(11, prompt=PromptObservationKind.READY_BITE),
+    )
+
+    assert fresh.action_request.intent == ActionIntent.START_HOOK
+    assert fresh.action_request.payload["start_hook_opportunity_id"] == (
+        "ready:87:START_HOOK"
+    )
+    assert fsm.commit_action(fresh.action_request, 2.1).action_applied
+
+
+def test_start_hook_opportunity_identity_stress_is_bounded_and_exactly_once() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.READY)
+
+    for index in range(1000):
+        opportunity_id = f"ready:{index}:START_HOOK"
+        fsm.force_state(RuntimeState.READY, float(index), "new_physical_ready")
+        assert fsm.reconcile_start_hook_opportunity(opportunity_id)
+        first = fsm.advance(
+            _evidence(RuntimeState.READY, frame=index + 1),
+            float(index) + 0.1,
+            _bundle(
+                index + 1,
+                prompt=PromptObservationKind.READY_BITE,
+            ),
+        )
+        assert first.action_request.intent == ActionIntent.START_HOOK
+        assert fsm.commit_action(
+            first.action_request,
+            float(index) + 0.1,
+        ).action_applied
+
+        # Replaying the same physical opportunity cannot commit twice.
+        fsm.force_state(RuntimeState.READY, float(index) + 0.2, "same_ready")
+        assert not fsm.reconcile_start_hook_opportunity(opportunity_id)
+        replay = fsm.advance(
+            _evidence(RuntimeState.READY, frame=index + 1),
+            float(index) + 0.2,
+            _bundle(
+                index + 1,
+                prompt=PromptObservationKind.READY_BITE,
+            ),
+        )
+        assert replay.action_request.intent == ActionIntent.NONE
+
+    assert fsm.start_hook_opportunity_id == "ready:999:START_HOOK"
+    assert fsm.start_hook_consumed_opportunity_id == "ready:999:START_HOOK"
+
+
+def test_unemitted_start_hook_proposal_remains_serviceable() -> None:
+    fsm = FishingFSM(CONFIG, initial_state=RuntimeState.READY)
+    assert fsm.reconcile_start_hook_opportunity("ready:87:START_HOOK")
+    first = fsm.advance(
+        _evidence(RuntimeState.READY),
+        0.1,
+        _bundle(prompt=PromptObservationKind.READY_BITE),
+    )
+    assert first.action_request.intent == ActionIntent.START_HOOK
+
+    # A proposal discarded before any OS emission does not consume ownership.
+    fsm.discard_proposal()
+    retried = fsm.advance(
+        _evidence(RuntimeState.READY, frame=2),
+        0.2,
+        _bundle(2, prompt=PromptObservationKind.READY_BITE),
+    )
+
+    assert retried.action_request.intent == ActionIntent.START_HOOK
+    assert fsm.commit_action(retried.action_request, 0.2).action_applied
+
+
 def test_hook_instruction_cannot_confirm_hook_without_bar() -> None:
     fsm = FishingFSM(CONFIG, initial_state=RuntimeState.HOOK_PENDING)
     result = fsm.advance(

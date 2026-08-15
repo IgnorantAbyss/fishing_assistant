@@ -106,6 +106,33 @@ def test_ready_episode_is_consumed_only_after_complete_emission_and_commit() -> 
     )
 
 
+def test_each_physical_ready_certificate_owns_one_bounded_opportunity() -> None:
+    tracker = ReadyRecoveryTracker(ReadyRecoveryConfig(1, 0.8))
+
+    for index in range(1000):
+        update = _observe(tracker, index * 2 + 1, float(index))
+        assert update.certificate is not None
+        expected = (
+            f"{update.certificate.physical_ready_episode_id}:START_HOOK"
+        )
+        assert tracker.start_hook_opportunity_id == expected
+        assert tracker.proposal_allowed
+        tracker.record_proposal()
+        assert tracker.proposal_created
+        tracker.record_emission(started=True, completed=True, committed=True)
+        assert tracker.consumed
+        _observe(
+            tracker,
+            index * 2 + 2,
+            float(index) + 0.1,
+            kind=PromptObservationKind.WAITING_IN_PROGRESS,
+        )
+
+    assert tracker.physical_ready_episode_id is None
+    assert tracker.start_hook_opportunity_id is None
+    assert not tracker.proposal_created
+
+
 def test_partial_emission_is_terminal_but_pre_emission_rejection_is_not() -> None:
     tracker = ReadyRecoveryTracker(ReadyRecoveryConfig(1, 0.8))
     assert _observe(tracker, 1, 0.0).certificate is not None
@@ -114,6 +141,25 @@ def test_partial_emission_is_terminal_but_pre_emission_rejection_is_not() -> Non
     tracker.record_emission(started=True, completed=False, committed=False)
     assert not tracker.proposal_allowed
     assert not tracker.consumed
+
+
+def test_disappeared_ready_certificate_cannot_emit_late() -> None:
+    tracker = ReadyRecoveryTracker(ReadyRecoveryConfig(1, 0.8))
+    certified = _observe(tracker, 1, 0.0)
+    assert certified.certificate is not None
+    assert tracker.start_hook_opportunity_id == "ready:1:START_HOOK"
+
+    cleared = _observe(
+        tracker,
+        2,
+        0.1,
+        kind=PromptObservationKind.WAITING_IN_PROGRESS,
+    )
+
+    assert cleared.certificate is None
+    assert tracker.certificate is None
+    assert tracker.start_hook_opportunity_id is None
+    assert not tracker.proposal_created
 
 
 def test_single_low_confidence_conflicting_or_panicked_ready_never_certifies() -> None:

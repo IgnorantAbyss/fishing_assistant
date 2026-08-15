@@ -139,6 +139,31 @@ from src.config_loader import load_roi_config
 
 
 EXPECTED_RESOLUTION = (2560, 1440)
+
+
+class _BoundedIdentitySet:
+    """Small insertion-ordered set for diagnostic episode identities."""
+
+    def __init__(self, max_size: int = 256) -> None:
+        self.max_size = max_size
+        self._values: dict[Any, None] = {}
+
+    def __contains__(self, value: object) -> bool:
+        return value in self._values
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def add(self, value: Any) -> None:
+        self._values.pop(value, None)
+        self._values[value] = None
+        while len(self._values) > self.max_size:
+            self._values.pop(next(iter(self._values)))
+
+    def discard(self, value: Any) -> None:
+        self._values.pop(value, None)
+
+
 RUNTIME_PROFILES = ("production", "diagnostic")
 WOULD_FIRE_NAMES = {
     ActionIntent.CAST: "WOULD_CAST",
@@ -285,14 +310,29 @@ class WouldFireDeduplicator:
     def has_cycle_activity(self) -> bool:
         return any(cycle == self.cycle_id for cycle, _, _ in self._seen)
 
+    @property
+    def retained_identity_count(self) -> int:
+        return len(self._seen) + len(self._recovered_cycles)
+
+    def _discard_finished_cycle_identities(self) -> None:
+        self._seen = {
+            item for item in self._seen if item[0] >= self.cycle_id
+        }
+        self._recovered_cycles = {
+            cycle for cycle in self._recovered_cycles
+            if cycle >= self.cycle_id
+        }
+
     def finish_cycle(self) -> None:
         if self.has_cycle_activity or self.cycle_id in self._recovered_cycles:
             self.cycle_id += 1
+            self._discard_finished_cycle_identities()
 
     def begin_recovered_cycle(self) -> int:
         """Reserve the current clean identity for a manually-started cycle."""
         if self.has_cycle_activity:
             self.cycle_id += 1
+            self._discard_finished_cycle_identities()
         self._recovered_cycles.add(self.cycle_id)
         return self.cycle_id
 
@@ -305,6 +345,10 @@ class WouldFireDeduplicator:
             self.cycle_id += 1
         if not preserve_cycle:
             self._seen.clear()
+            self._recovered_cycles = {
+                cycle for cycle in self._recovered_cycles
+                if cycle >= self.cycle_id
+            }
 
     def release(
         self,
@@ -633,11 +677,12 @@ class LiveDetectOnlyRuntime:
             min_confidence=fusion_config.prompt_min_confidence,
             freshness_seconds=0.25,
         ))
-        self._ready_rearmed_certificates: set[str] = set()
-        self._ready_applied_certificates: set[str] = set()
-        self._ready_blocked_certificates: set[tuple[str, str]] = set()
-        self._start_hook_blocked_reasons: set[tuple[str | None, str]] = set()
-        self._ready_visual_acknowledged_episodes: set[str] = set()
+        self._ready_rearmed_certificates = _BoundedIdentitySet()
+        self._ready_applied_certificates = _BoundedIdentitySet()
+        self._ready_blocked_certificates = _BoundedIdentitySet()
+        self._start_hook_blocked_reasons = _BoundedIdentitySet()
+        self._ready_visual_acknowledged_episodes = _BoundedIdentitySet()
+        self._ready_liveness_violation_keys = _BoundedIdentitySet()
         idle_recovery_config = IdleRecoveryConfig(
             window_size=self.live_config.idle_recovery_window_size,
             required_count=(
@@ -1734,6 +1779,17 @@ class LiveDetectOnlyRuntime:
         certificate: ReadyRecoveryCertificate | None,
         reason: str,
     ) -> dict[str, Any]:
+        opportunity_id = self._ready_recovery.start_hook_opportunity_id
+        certificate_age = (
+            max(0.0, timestamp - certificate.created_at)
+            if certificate is not None else None
+        )
+        serviceable = bool(
+            certificate is not None
+            and self.fsm.state == RuntimeState.READY
+            and self._ready_recovery.proposal_allowed
+            and self.fsm.start_hook_opportunity_id == opportunity_id
+        )
         return {
             "timestamp": timestamp,
             "frame_index": frame_index,
@@ -1752,17 +1808,91 @@ class LiveDetectOnlyRuntime:
                 if certificate is not None
                 else self._ready_recovery.physical_ready_episode_id
             ),
+            "ready_certificate_id": (
+                certificate.certificate_id
+                if certificate is not None else None
+            ),
+            "ready_certificate_created_at": (
+                certificate.created_at
+                if certificate is not None else None
+            ),
+            "ready_certificate_age": certificate_age,
+            "start_hook_opportunity_id": opportunity_id,
+            "start_hook_serviceable": serviceable,
+            "start_hook_proposed": self._ready_recovery.proposal_created,
+            "start_hook_emission_started": (
+                self._ready_recovery.emission_started
+            ),
+            "start_hook_emission_completed": (
+                self._ready_recovery.emission_completed
+            ),
+            "start_hook_terminal": self._ready_recovery.terminal,
+            "start_hook_block_reason": reason,
             "proposal_existed": self.fsm.pending_request is not None,
             "emission_started": self._ready_recovery.emission_started,
             "emission_completed": (
                 self._ready_recovery.consumed
             ),
             "dedupe_consumed": self.deduplicator.already_consumed(
-                ActionIntent.START_HOOK
+                ActionIntent.START_HOOK,
+                opportunity_id,
             ),
             "reason": reason,
             "action_applied": False,
         }
+
+    def _reconcile_ready_start_hook_opportunity(
+        self,
+        *,
+        certificate: ReadyRecoveryCertificate,
+        timestamp: float,
+        frame_index: int,
+        prompt: PromptObservation | None,
+        foreground: bool,
+    ) -> None:
+        """Service a fresh physical READY identity on every READY tick."""
+        if self.fsm.state != RuntimeState.READY:
+            return
+        opportunity_id = (
+            f"{certificate.physical_ready_episode_id}:START_HOOK"
+        )
+        changed = self.fsm.reconcile_start_hook_opportunity(opportunity_id)
+        if opportunity_id in self._ready_rearmed_certificates:
+            return
+        self.deduplicator.release(
+            ActionIntent.START_HOOK,
+            opportunity_id,
+        )
+        self._ready_rearmed_certificates.add(opportunity_id)
+        self.logger.event(
+            "start_hook_opportunity_reconciled",
+            {
+                **self._ready_event_payload(
+                    timestamp=timestamp,
+                    frame_index=frame_index,
+                    prompt=prompt,
+                    foreground=foreground,
+                    certificate=certificate,
+                    reason="fresh_physical_ready_opportunity",
+                ),
+                "ownership_changed": changed,
+            },
+        )
+        if certificate.foreground_generation > 0:
+            self.logger.event(
+                "start_hook_rearmed_after_foreground_restore",
+                self._ready_event_payload(
+                    timestamp=timestamp,
+                    frame_index=frame_index,
+                    prompt=prompt,
+                    foreground=foreground,
+                    certificate=certificate,
+                    reason=(
+                        "fresh_ready_certificate_reconciled_after_"
+                        "foreground_restore"
+                    ),
+                ),
+            )
 
     def _idle_conflicting_evidence(
         self,
@@ -2029,6 +2159,7 @@ class LiveDetectOnlyRuntime:
         captured = processed = actions_applied = 0
         completed_cycles = 0
         missed_ready_recovery_count = 0
+        ready_liveness_invariant_violation_count = 0
         evidence_episode_id = 1
         stop_after_completed_cycle = False
         stop_after_action_commit_failure = False
@@ -2653,7 +2784,9 @@ class LiveDetectOnlyRuntime:
                             previous_ready_state = self.fsm.state
                             self.controller.discard_external_proposal()
                             self.deduplicator.release(
-                                ActionIntent.START_HOOK
+                                ActionIntent.START_HOOK,
+                                self._ready_recovery
+                                .start_hook_opportunity_id,
                             )
                             recovered_ready = self.fsm.force_state(
                                 RuntimeState.READY,
@@ -2664,8 +2797,12 @@ class LiveDetectOnlyRuntime:
                             self._ready_applied_certificates.add(
                                 certificate_id
                             )
-                            self._ready_rearmed_certificates.add(
-                                certificate_id
+                            self._reconcile_ready_start_hook_opportunity(
+                                certificate=ready_certificate,
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                prompt=prompt,
+                                foreground=(foreground is True),
                             )
                             self.logger.event(
                                 "ready_recovery_applied",
@@ -2715,37 +2852,14 @@ class LiveDetectOnlyRuntime:
                                 )
                         elif (
                             self.fsm.state == RuntimeState.READY
-                            and certificate_id
-                            not in self._ready_rearmed_certificates
                             and self._ready_recovery.proposal_allowed
-                            and ready_certificate.foreground_generation > 0
                         ):
-                            proposal_existed = (
-                                self.fsm.pending_request is not None
-                            )
-                            self.controller.discard_external_proposal()
-                            self.deduplicator.release(
-                                ActionIntent.START_HOOK
-                            )
-                            self._ready_rearmed_certificates.add(
-                                certificate_id
-                            )
-                            self.logger.event(
-                                "start_hook_rearmed_after_foreground_restore",
-                                {
-                                    **self._ready_event_payload(
-                                        timestamp=elapsed,
-                                        frame_index=captured,
-                                        prompt=prompt,
-                                        foreground=(foreground is True),
-                                        certificate=ready_certificate,
-                                        reason=(
-                                            "fresh_ready_certificate_"
-                                            "released_unemitted_proposal"
-                                        ),
-                                    ),
-                                    "proposal_existed": proposal_existed,
-                                },
+                            self._reconcile_ready_start_hook_opportunity(
+                                certificate=ready_certificate,
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                prompt=prompt,
+                                foreground=(foreground is True),
                             )
 
                     cast_tracking_enabled = bool(
@@ -2817,6 +2931,43 @@ class LiveDetectOnlyRuntime:
                         )
                         if timed_out:
                             self._cast_arming.authorize_retry_after_visual_timeout()
+                    if (
+                        ready_certificate is not None
+                        and self.action_sink is not None
+                        and self.emit_actions
+                        and ActionIntent.START_HOOK in self.action_allowlist
+                        and self.fsm.state == RuntimeState.READY
+                        and self._ready_recovery.start_hook_opportunity_id
+                        in self._ready_rearmed_certificates
+                        and self._ready_recovery.proposal_allowed
+                        and last_result.fsm.action_request.intent
+                        == ActionIntent.NONE
+                    ):
+                        violation_key = (
+                            ready_certificate.certificate_id,
+                            last_result.fsm.action_request.reason,
+                        )
+                        if (
+                            violation_key
+                            not in self._ready_liveness_violation_keys
+                        ):
+                            self._ready_liveness_violation_keys.add(
+                                violation_key
+                            )
+                            ready_liveness_invariant_violation_count += 1
+                            self.logger.event(
+                                "ready_liveness_invariant_violation",
+                                self._ready_event_payload(
+                                    timestamp=elapsed,
+                                    frame_index=captured,
+                                    prompt=prompt,
+                                    foreground=(foreground is True),
+                                    certificate=ready_certificate,
+                                    reason=(
+                                        last_result.fsm.action_request.reason
+                                    ),
+                                ),
+                            )
                     sync_recovery_serviced_this_frame = False
                     if (
                         processing_from_sync_required
@@ -5131,6 +5282,7 @@ class LiveDetectOnlyRuntime:
                             )
                     elif request.intent == ActionIntent.START_HOOK:
                         self.deduplicator.record_raw_proposal(request)
+                        self._ready_recovery.record_proposal()
                         start_hook_safety_reason = (
                             last_result.safety.reason
                         )
@@ -5152,6 +5304,10 @@ class LiveDetectOnlyRuntime:
                                 prompt.evidence if prompt else None
                             ),
                             specialized_evidence=specialized,
+                            identity_suffix=(
+                                self._ready_recovery
+                                .start_hook_opportunity_id
+                            ),
                             count_raw=False,
                         )
                     else:
@@ -5250,12 +5406,19 @@ class LiveDetectOnlyRuntime:
                                 str(cast_attempt.opportunity_id)
                                 if cast_attempt is not None
                                 else (
-                                    str(request.payload.get("episode_index"))
-                                    if (
-                                        event_type
-                                        == "WOULD_PRESS_SEQUENCE"
+                                    str(
+                                        self._ready_recovery
+                                        .physical_ready_episode_id
                                     )
-                                    else str(would_fire["cycle_id"])
+                                    if event_type == "WOULD_START_HOOK"
+                                    else (
+                                        str(request.payload.get("episode_index"))
+                                        if (
+                                            event_type
+                                            == "WOULD_PRESS_SEQUENCE"
+                                        )
+                                        else str(would_fire["cycle_id"])
+                                    )
                                 )
                             )
                         )
@@ -5513,7 +5676,9 @@ class LiveDetectOnlyRuntime:
                                     # OS input. The current physical READY
                                     # opportunity remains eligible.
                                     self.deduplicator.release(
-                                        ActionIntent.START_HOOK
+                                        ActionIntent.START_HOOK,
+                                        self._ready_recovery
+                                        .start_hook_opportunity_id,
                                     )
                             if collect_attempt is not None:
                                 self._log_collect_events(
@@ -6020,6 +6185,9 @@ class LiveDetectOnlyRuntime:
                 "completed_cycles": completed_cycles,
                 "missed_ready_recovery_count": (
                     missed_ready_recovery_count
+                ),
+                "ready_liveness_invariant_violation_count": (
+                    ready_liveness_invariant_violation_count
                 ),
                 "press_initial_delay_range_ms": [
                     self.live_config.press_initial_delay_min_ms,
