@@ -312,28 +312,15 @@ class DetectorEvidenceQualifier:
                 sequence_qualification_reason="activation_off_diagnostic_only",
             )
 
-        post_input_excluded = bool(
+        visual_post_input_observed = bool(
             version == 3
             and observation.evidence.get("post_input_frame") is True
         )
-        if post_input_excluded:
-            path = "temporal_v3_post_input_excluded"
-            self._press_v3_post_input_excluded_count += 1
-            aggregation = self._press_last_aggregation
-            if aggregation is None:
-                aggregation = PressSequenceAggregation(
-                    False,
-                    0,
-                    0,
-                    (),
-                    False,
-                    0.0,
-                    (),
-                    "post_input_without_pre_input_consensus",
-                )
-        else:
-            aggregation = self.press_aggregator.update(observation)
-            self._press_last_aggregation = aggregation
+        # V3 post_input_frame is a visual inference from the input-effect
+        # tracker, not authoritative Runtime emission state.  Preserve it for
+        # telemetry, but never skip pre-freeze temporal qualification for it.
+        aggregation = self.press_aggregator.update(observation)
+        self._press_last_aggregation = aggregation
         self._press_path_counts[path] += 1
         strong_panel = observation.confidence >= self.config.press_strong_confidence
         qualified = bool(aggregation.panel_confirmed and observation.panel_present and strong_panel)
@@ -378,7 +365,8 @@ class DetectorEvidenceQualifier:
                 "frozen_sequence": list(
                     self.press_aggregator.frozen_clean_sequence
                 ),
-                "post_input_excluded": post_input_excluded,
+                "post_input_excluded": False,
+                "visual_post_input_observed": visual_post_input_observed,
                 "stable_panel_frames": aggregation.stable_panel_frames,
                 "per_key_aggregated_confidence": list(aggregation.per_key_confidence),
                 "selected_clean_frame": aggregation.selected_clean_frame,

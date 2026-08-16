@@ -291,10 +291,11 @@ def test_v3_production_post_input_frames_preserve_frozen_clean_sequence() -> Non
         assert observation.evidence["post_input_frame"] is True
         assert qualified is not None
         assert qualified.sequence == tuple("WSSDDWS")
-        assert qualified.evidence["post_input_excluded"] is True
-        assert (
-            qualified.evidence["press_completeness_certificate"]
-            == frozen_certificate
+        assert qualified.evidence["post_input_excluded"] is False
+        assert qualified.evidence["visual_post_input_observed"] is True
+        assert qualified.evidence["frozen_sequence"] == list("WSSDDWS")
+        assert qualified.evidence["selected_clean_frame"] == (
+            frozen_certificate["selected_clean_frame"]
         )
 
     clean_after_input = adapter.observe(
@@ -308,11 +309,13 @@ def test_v3_production_post_input_frames_preserve_frozen_clean_sequence() -> Non
     assert clean_after_input.evidence["post_input_frame"] is True
     assert qualified is not None
     assert qualified.sequence == tuple("WSSDDWS")
-    assert qualified.evidence["post_input_excluded"] is True
+    assert qualified.evidence["post_input_excluded"] is False
+    assert qualified.evidence["visual_post_input_observed"] is True
+    assert qualified.evidence["frozen_sequence"] == list("WSSDDWS")
 
     summary = qualifier.press_qualification_summary()
     assert summary["press_v3_simple_ready_count"] == 0
-    assert summary["press_v3_post_input_excluded_count"] == 3
+    assert summary["press_v3_post_input_excluded_count"] == 0
 
 
 def test_v3_panel_disappearance_resets_episode_and_allows_new_sequence() -> None:

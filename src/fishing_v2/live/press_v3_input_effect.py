@@ -1,9 +1,12 @@
 """Episode-local PRESS V3 input-effect tracking.
 
 The detector remains stateless.  This tracker owns the immutable clean-strip
-baseline and the monotonic input-started latch for one physical PRESS episode.
-It compares appearance, never key labels, so glyph classification cannot feed
-back into clean/input-effect qualification.
+baseline and a monotonic *visual* input-effect latch for one physical PRESS
+episode.  Its input_started/post_input_frame fields are backward-compatible
+visual inference telemetry only; they are not authoritative Runtime emission
+state and must not gate Production sequence qualification.  It compares
+appearance, never key labels, so glyph classification cannot feed back into
+the visual effect signal.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ class PressV3InputEffectConfig:
 
 
 class PressV3InputEffectTracker:
-    """Compare each frame with the first complete clean strip in an episode."""
+    """Report visual strip changes without claiming Runtime input ownership."""
 
     def __init__(
         self, config: PressV3InputEffectConfig | None = None

@@ -215,11 +215,16 @@ class PressSequenceTemporalAggregator:
                 ),
             )
             self._last_completeness = completeness
-            if observation.evidence.get("input_effect_detected") is True:
+            version = observation.evidence.get("press_evidence_version")
+            visual_effect_is_authoritative = version != 3
+            if (
+                visual_effect_is_authoritative
+                and observation.evidence.get("input_effect_detected") is True
+            ):
                 self._input_effect_seen = True
             if (
                 self._frozen_clean_sequence is None
-                and not self._input_effect_seen
+                and (not visual_effect_is_authoritative or not self._input_effect_seen)
                 and completeness.complete
             ):
                 self._frozen_clean_sequence = completeness.sequence

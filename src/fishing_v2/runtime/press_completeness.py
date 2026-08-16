@@ -267,11 +267,23 @@ def evaluate_press_completeness(
     """Prove that every occupied slot is decoded and every trailing slot is empty."""
     active = config or PressCompletenessConfig()
     observed_current = _snapshot(observation, active)
+
+    def authoritative_candidate(item: PressObservation) -> bool:
+        version = item.evidence.get("press_evidence_version")
+        if version == 3:
+            # V3 input-effect fields describe an appearance change only.  They
+            # are not authoritative evidence that Runtime emission started,
+            # so a structurally complete frame must remain eligible for the
+            # pre-freeze completeness consensus.
+            return item.evidence.get("frame_structurally_complete") is True
+        return bool(
+            item.evidence.get("input_effect_detected") is not True
+            and item.evidence.get("clean_frame_eligible", True) is True
+        )
+
     clean_observations = [
         item for item in history
-        if item.panel_present
-        and item.evidence.get("input_effect_detected") is not True
-        and item.evidence.get("clean_frame_eligible", True) is True
+        if item.panel_present and authoritative_candidate(item)
     ]
     snapshots = [_snapshot(item, active) for item in clean_observations]
     # Preserve the earliest frame with the highest decoded coverage.  Later
