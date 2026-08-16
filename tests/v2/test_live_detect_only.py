@@ -144,6 +144,7 @@ def _runtime(
     idle_recovery_cast_cooldown_seconds: float = 0.5,
     idle_cast_retry_min_interval_seconds: float = 3.0,
     idle_cast_liveness_timeout_seconds: float = 3.0,
+    press_anomaly_evidence: bool = False,
     runtime_profile: str = "diagnostic",
     session_logger=None,
 ) -> LiveDetectOnlyRuntime:
@@ -184,6 +185,7 @@ def _runtime(
             idle_cast_liveness_timeout_seconds=(
                 idle_cast_liveness_timeout_seconds
             ),
+            press_anomaly_evidence=press_anomaly_evidence,
             runtime_profile=runtime_profile,
         ),
         emit_actions=emit_actions,
@@ -198,6 +200,20 @@ def _runtime(
         clock=clock,
         sleep=clock.sleep,
     )
+
+
+def _transition_signature(path: Path) -> list[tuple[str, str, str]]:
+    with (path / "transitions.csv").open(
+        newline="", encoding="utf-8"
+    ) as handle:
+        return [
+            (
+                row["previous_state"],
+                row["next_state"],
+                row["reason"],
+            )
+            for row in csv.DictReader(handle)
+        ]
 
 
 class StubEvidenceRecorder:
@@ -4000,3 +4016,114 @@ def test_cast_pending_ack_window_blocks_recovery_and_duplicate_cast(
     runtime.run(max_frames=70)
     assert len(created[0].calls) == 1
     assert runtime.fsm.state == RuntimeState.CAST_PENDING
+
+
+def test_result_pending_timeout_recorder_is_behaviorally_equivalent_and_does_not_capture(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    summaries: dict[bool, dict[str, object]] = {}
+    captures: dict[bool, MockCapture] = {}
+    roots: dict[bool, Path] = {}
+    controller_traces: dict[bool, list[tuple[object, ...]]] = {}
+    sink_calls: dict[bool, list[tuple[object, object]]] = {}
+
+    for enabled in (False, True):
+        root = tmp_path / ("enabled" if enabled else "disabled")
+        capture = MockCapture(supported_frame, diagnostics={
+            "hwnd": 4242,
+            "window_title_prefix": "test-game",
+            "window_resolution_mode": "process_name",
+            "window_title": "test-game - 1",
+            "process": "BlackDesert64",
+            "process_id": 99,
+            "client_size": [2560, 1440],
+        })
+        calls: list[tuple[object, object]] = []
+
+        class EquivalenceSink:
+            def __init__(self, _kwargs):
+                pass
+
+            def poll_panic(self):
+                return False
+
+            def apply(self, request, context):
+                calls.append((request, context))
+                raise AssertionError("timeout recorder must not create action")
+
+            def summary(self):
+                return {
+                    "action_sink_type": "sendinput",
+                    "action_allowlist": ["COLLECT"],
+                }
+
+        def sink_factory(**kwargs):
+            return EquivalenceSink(kwargs)
+
+        runtime = _runtime(
+            root,
+            capture,
+            FakeClock(),
+            duration_seconds=11.0,
+            press_anomaly_evidence=enabled,
+            emit_actions=True,
+            action_sink_name="sendinput",
+            action_allowlist="COLLECT",
+            action_sink_factory=sink_factory,
+        )
+        runtime.fsm.force_state(
+            RuntimeState.RESULT_PENDING,
+            0.0,
+            "test_result_pending_window",
+        )
+        trace: list[tuple[object, ...]] = []
+        original_process = runtime.controller.process
+
+        def traced_process(*args, **kwargs):
+            result = original_process(*args, **kwargs)
+            trace.append((
+                result.fsm.previous_state,
+                result.fsm.next_state,
+                result.fsm.action_request.intent,
+                result.fsm.action_request.reason,
+                result.qualified.press.qualification_reason,
+                result.qualified.press.sequence_ready,
+                result.qualified.press.press_evidence_kind,
+            ))
+            return result
+
+        runtime.controller.process = traced_process
+        summaries[enabled] = runtime.run(max_frames=300)
+        captures[enabled] = capture
+        roots[enabled] = runtime.logger.path
+        controller_traces[enabled] = trace
+        sink_calls[enabled] = calls
+
+    disabled = summaries[False]
+    enabled = summaries[True]
+    for key in (
+        "final_state",
+        "raw_action_proposals",
+        "unique_would_fire",
+        "actions_applied",
+        "completed_cycles",
+        "captured_frames",
+        "processed_frames",
+        "detector_runs",
+        "press_evidence_version_counts",
+        "press_qualification_path_counts",
+    ):
+        assert enabled[key] == disabled[key]
+    assert _transition_signature(roots[True]) == _transition_signature(
+        roots[False]
+    )
+    assert captures[True].calls == captures[False].calls
+    assert controller_traces[True] == controller_traces[False]
+    assert sink_calls[True] == sink_calls[False] == []
+    assert enabled["result_pending_timeout_count"] == 1
+    assert enabled["result_pending_timeout_evidence_saved_count"] == 1
+    assert disabled["result_pending_timeout_count"] == 1
+    assert disabled["result_pending_timeout_evidence_saved_count"] == 0
+    assert next(roots[True].rglob("manifest.json")).is_file()
+    assert not (roots[False] / "result_pending_anomalies").exists()

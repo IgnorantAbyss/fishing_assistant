@@ -87,6 +87,10 @@ from src.fishing_v2.live.press_anomaly_evidence import (
     PressAnomalyEvidenceConfig,
     PressAnomalyEvidenceRecorder,
 )
+from src.fishing_v2.live.result_pending_timeout_evidence import (
+    ResultPendingTimeoutEvidenceConfig,
+    ResultPendingTimeoutEvidenceRecorder,
+)
 from src.fishing_v2.live.press_live_emission import (
     PressLiveEmissionConfig,
     PressLiveEmissionTracker,
@@ -759,6 +763,19 @@ class LiveDetectOnlyRuntime:
                 max_episodes=self.live_config.press_anomaly_max_episodes,
             ),
         )
+        self._result_pending_timeout_evidence = (
+            ResultPendingTimeoutEvidenceRecorder(
+                self.logger.path,
+                ResultPendingTimeoutEvidenceConfig(
+                    enabled=self.live_config.press_anomaly_evidence,
+                    sample_interval_seconds=0.2,
+                    max_samples=60,
+                    max_episodes=(
+                        self.live_config.press_anomaly_max_episodes
+                    ),
+                ),
+            )
+        )
         self._last_press_completeness_log_at = float("-inf")
         self._press_abstained_episodes: set[int] = set()
         self._press_live_emission = PressLiveEmissionTracker(
@@ -1293,6 +1310,7 @@ class LiveDetectOnlyRuntime:
         if (
             self.evidence_recorder is not None
             or self._press_anomaly_evidence.enabled
+            or self._result_pending_timeout_evidence.enabled
         ):
             self._diagnostic_roi_bounds = {
                 "prompt": self.prompt_bundle.roi.pixel_bounds(width, height),
@@ -2160,6 +2178,7 @@ class LiveDetectOnlyRuntime:
         completed_cycles = 0
         missed_ready_recovery_count = 0
         ready_liveness_invariant_violation_count = 0
+        result_pending_timeout_count = 0
         evidence_episode_id = 1
         stop_after_completed_cycle = False
         stop_after_action_commit_failure = False
@@ -2464,6 +2483,7 @@ class LiveDetectOnlyRuntime:
                 deferred_video_recorded = False
                 if should_process:
                     processing_started = self.clock()
+                    runtime_state_at_processing_start = self.fsm.state
                     context = FrameContext(captured, elapsed, metadata={"source": "live_detect_only"})
                     ready_burst_update = None
                     missed_ready_update = None
@@ -4755,6 +4775,88 @@ class LiveDetectOnlyRuntime:
                         unknown_started = None
                         unknown_saved = False
 
+                    result_pending_terminal = next(
+                        (
+                            item for item in reversed(transition_results)
+                            if item.previous_state == RuntimeState.RESULT_PENDING
+                            and item.next_state != RuntimeState.RESULT_PENDING
+                        ),
+                        None,
+                    )
+                    if (
+                        self._result_pending_timeout_evidence.enabled
+                        and not self._result_pending_timeout_evidence.active
+                        and self.fsm.state == RuntimeState.RESULT_PENDING
+                    ):
+                        self._result_pending_timeout_evidence.begin(
+                            runtime_state=RuntimeState.RESULT_PENDING,
+                            started_at=self.fsm.state_since,
+                            cycle_id=self.deduplicator.cycle_id,
+                            hook_action_identity=(
+                                self.deduplicator.opportunity_id(
+                                    ActionIntent.HOOK_ACTION
+                                )
+                            ),
+                        )
+                    if (
+                        self._result_pending_timeout_evidence.active
+                        and runtime_state_at_processing_start
+                        == RuntimeState.RESULT_PENDING
+                    ):
+                        x1, y1, x2, y2 = (
+                            self._diagnostic_roi_bounds["press"]
+                        )
+                        self._result_pending_timeout_evidence.record(
+                            frame_index=captured,
+                            timestamp=elapsed,
+                            runtime_state=RuntimeState.RESULT_PENDING,
+                            roi_pixels=frame[y1:y2, x1:x2],
+                            press_detector_executed=press is not None,
+                            detector_mode=activation.press,
+                            cadence={
+                                "detector_due": detector_due,
+                                "prompt_due": prompt_due,
+                                "run_detectors": run_detectors,
+                                "target_fps": activation.press_fps,
+                            },
+                            raw_observation=press,
+                            qualified_observation=(
+                                last_result.qualified.bundle.press
+                            ),
+                            qualification=last_result.qualified.press,
+                            get_evidence_seen=bool(
+                                (get is not None and get.detected)
+                                or (
+                                    qualified_get is not None
+                                    and qualified_get.detected
+                                )
+                            ),
+                        )
+                    if result_pending_terminal is not None:
+                        terminal_reason = (
+                            result_pending_terminal.transition_reason
+                        )
+                        if terminal_reason == "result_pending_maximum_timeout":
+                            result_pending_timeout_count += 1
+                        self._result_pending_timeout_evidence.finish(
+                            next_state=result_pending_terminal.next_state,
+                            timestamp=elapsed,
+                            reason=terminal_reason,
+                        )
+                    self._result_pending_timeout_evidence.poll_completed()
+                    for saved_event in (
+                        self._result_pending_timeout_evidence
+                        .drain_completed_events()
+                    ):
+                        self.logger.event(
+                            "result_pending_timeout_evidence_saved",
+                            {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                **saved_event,
+                            },
+                        )
+
                     cycle_completed_this_frame = any(
                         item.next_state == RuntimeState.IDLE
                         and item.previous_state not in {
@@ -5852,6 +5954,21 @@ class LiveDetectOnlyRuntime:
                             self.controller.discard_external_proposal()
                     elif self.action_sink is not None:
                         self.controller.discard_external_proposal()
+                    if (
+                        self._result_pending_timeout_evidence.enabled
+                        and not self._result_pending_timeout_evidence.active
+                        and self.fsm.state == RuntimeState.RESULT_PENDING
+                    ):
+                        self._result_pending_timeout_evidence.begin(
+                            runtime_state=RuntimeState.RESULT_PENDING,
+                            started_at=self.fsm.state_since,
+                            cycle_id=self.deduplicator.cycle_id,
+                            hook_action_identity=(
+                                self.deduplicator.opportunity_id(
+                                    ActionIntent.HOOK_ACTION
+                                )
+                            ),
+                        )
 
                 if (
                     defer_video_for_hook_fast_path
@@ -6110,6 +6227,21 @@ class LiveDetectOnlyRuntime:
                     ],
                 }
             press_anomaly_summary = self._press_anomaly_evidence.close()
+            result_pending_evidence_summary = (
+                self._result_pending_timeout_evidence.close()
+            )
+            for saved_event in (
+                self._result_pending_timeout_evidence
+                .drain_completed_events()
+            ):
+                self.logger.event(
+                    "result_pending_timeout_evidence_saved",
+                    {
+                        "timestamp": elapsed_total,
+                        "frame_index": captured,
+                        **saved_event,
+                    },
+                )
             if self.live_config.runtime_profile == "production":
                 self.console.emit(
                     f"shutdown: result={result_name} cycles={completed_cycles}"
@@ -6260,6 +6392,10 @@ class LiveDetectOnlyRuntime:
                 **press_shadow_summary,
                 **press_v3_summary,
                 **press_anomaly_summary,
+                **result_pending_evidence_summary,
+                "result_pending_timeout_count": (
+                    result_pending_timeout_count
+                ),
                 "preflight_passed": self._preflight_passed,
                 "preflight_failure_reason": self._preflight_failure_reason,
                 "preflight_failure_message": self._preflight_failure_message,
