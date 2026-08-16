@@ -1,94 +1,79 @@
-# Fishing Assistant Project Rules
+# PROJECT_RULES.md
 
-## Environment
+# Fishing Assistant — Project Rules
 
-- This is a Windows project.
-- Use the project-local `.venv`.
-- Prefer running Python with:
-  `.\.venv\Scripts\python.exe`
-- Do not migrate the project to Pipenv, Poetry, or another environment manager.
-- Do not assume another Python installation or version is available.
-- Keep application code under `src/`, command-line tools under `tools/`, configuration under `config/`, and tests under `tests/`.
+本文件是本 repository 所有 Codex / AI 修改工作的永久規則。
 
-## Change Scope
+任何任務開始前都必須先閱讀並遵守本文件。
 
-- Prefer the smallest change that completely fixes the requested problem.
-- When fixing one issue, do not proactively refactor unrelated modules.
-- Unless the task explicitly requires it, do not modify:
-  - PromptObserver
-  - model bundles
-  - detectors
-  - detector thresholds
-  - ROI
-  - Ground Truth
-  - datasets
-- Do not weaken safety conditions for test convenience.
-- Preserve existing recorded-observation and detect-only contracts when changing Live behavior.
+如果使用者當次 Prompt 與本文件衝突：
 
-## Action Safety
+1. 不得自行猜測。
+2. 明確指出衝突。
+3. 停止有風險的修改。
+4. 等待使用者決定。
 
-- Real input must fail closed.
-- Preserve and maintain:
-  - HWND validation
-  - PID validation
-  - process executable validation
-  - client-size validation
-  - foreground validation
-  - integrity-level preflight
-  - action allowlist
-  - one-shot/deduplication guards
-  - F12 panic latch
-- Detector `OFF` or `None` must not be inferred directly as absent.
-- `action_applied` means a complete OS input emission only; it does not mean the game visually accepted the action.
-- Record visual acknowledgement separately from OS input emission.
-- Tests and recorded-observation runs must not emit real input.
+除非當次 Prompt 明確要求修改本文件，否則不得自行改寫 PROJECT_RULES.md。
 
-## Forbidden Techniques
+---
 
-Unless the user explicitly requests otherwise, do not add:
+# 1. 工作原則
 
-- mouse automation
-- background input
-- `PostMessage`
-- automatic foreground-window switching
-- automatic elevation
-- process injection
-- driver injection
-- anti-cheat bypass
-- any technique intended to evade game protections
+優先順序：
 
-## Testing
+1. Correctness
+2. Safety
+3. Liveness
+4. Observability
+5. Performance
+6. Cleanup / elegance
 
-- Pytest must not send real keyboard or mouse input.
-- Win32 APIs must be mockable.
-- When fixing a Live bug, prefer a regression test that reproduces the affected session timeline.
-- Test multi-cycle behavior and retained state, not only a clean controller instance.
-- After modifications, run:
-  - `.\.venv\Scripts\python.exe -m pytest -q`
-  - `.\.venv\Scripts\python.exe tools\agent_check.py`
-- If the project's actual correct command differs, use the command supported by the current repository.
-- Use an isolated `--basetemp` when the local pytest cache or temp directory is unavailable.
+不得為了：
 
-## Git
+- 效能
+- 程式碼漂亮
+- 減少行數
+- cleanup
+- abstraction
+- refactor
 
-Unless the task explicitly requires them, do not commit:
+破壞 correctness、safety 或已驗證的 production behavior。
 
-- `reports/agent_check_latest.md`
-- Live sessions
-- diagnostic videos
-- caches
-- `.pytest_cache`
-- local absolute paths
-- temporary files
+修 bug 時優先：
 
-- Do not push.
-- Do not overwrite the user's existing uncommitted changes.
-- Run `git diff --check` before committing.
-- Report the commit hash and working-tree status in the final response.
+- 找出 precise root cause
+- 證明實際 code path
+- 做最小範圍修改
+- 建立 deterministic regression
+- 保留既有安全 invariant
 
-## Task Instructions
+不得只根據症狀猜測後直接 patch。
 
-- Read this file at the start of every task.
-- Explicit instructions in the current prompt take precedence over this file.
-- If the current request conflicts with this file, identify the conflict before proceeding instead of guessing.
-- Keep the final report focused on actual changes, test results, and incomplete items; do not repeat the full specification.
+---
+
+# 2. 語言與回報
+
+與使用者的 Final 回報使用繁體中文。
+
+程式碼、class、function、event、field、commit message 保留專案原本英文命名。
+
+對尚未證明的事情必須區分：
+
+- confirmed
+- high-confidence inference
+- hypothesis
+- unknown
+
+不得把推測寫成已證實事實。
+
+---
+
+# 3. Git 安全規則
+
+每個修改任務開始前至少確認：
+
+```powershell
+git status
+git branch --show-current
+git log -5 --oneline --decorate
+git remote -v
