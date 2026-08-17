@@ -58,7 +58,7 @@ fsm:
   sync_lost_timeout_sec: 2.0
 
 prompt_polling:
-  waiting_interval_seconds: 4.0
+  waiting_interval_seconds: 5.0
   waiting_min_seconds: 3.0
   waiting_max_seconds: 5.0
   ready_fps: 20

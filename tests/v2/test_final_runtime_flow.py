@@ -303,7 +303,7 @@ def test_waiting_polling_and_detector_frequencies_are_configured() -> None:
     config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     polling = config["prompt_polling"]
     assert polling["waiting_min_seconds"] == 3.0
-    assert polling["waiting_interval_seconds"] == 4.0
+    assert polling["waiting_interval_seconds"] == 5.0
     assert polling["waiting_max_seconds"] == 5.0
     assert config["hook_detector"]["burst_fps"] == 25
     assert config["press_detector"]["burst_fps"] == 20
@@ -313,7 +313,7 @@ def test_waiting_polling_and_detector_frequencies_are_configured() -> None:
     assert config["press_detector"]["per_key_min_aggregated_confidence"] == 0.68
     assert config["press_detector"]["sequence_min_aggregated_confidence"] == 0.68
     policy = RuntimeSchedulePolicy(PromptPollingConfig(**polling))
-    assert policy.prompt_interval_seconds(RuntimeState.WAITING) == 4.0
+    assert policy.prompt_interval_seconds(RuntimeState.WAITING) == 5.0
     assert policy.prompt_interval_seconds(RuntimeState.READY) == pytest.approx(0.05)
 
 

@@ -13,7 +13,7 @@ from src.fishing_v2.domain.runtime_state import RuntimeState
 
 @dataclass(frozen=True)
 class PromptPollingConfig:
-    waiting_interval_seconds: float = 4.0
+    waiting_interval_seconds: float = 5.0
     waiting_min_seconds: float = 3.0
     waiting_max_seconds: float = 5.0
     ready_fps: float = 20.0
@@ -251,3 +251,138 @@ class RuntimeSchedulePolicy:
         if state == RuntimeState.RESULT_PENDING:
             return 1.0 / self.config.result_pending_fps
         return None
+
+
+class QuietWaitingCaptureScheduler:
+    """Gate only capture work while the Runtime is stably waiting.
+
+    The outer control loop remains short and interruptible.  This scheduler
+    owns no sleeping and cannot delay panic or foreground polling.
+    """
+
+    def __init__(self, interval_seconds: float = 5.0) -> None:
+        if interval_seconds <= 0.0:
+            raise ValueError("quiet WAITING capture interval must be positive")
+        self.interval_seconds = float(interval_seconds)
+        self._quiet_episode_active = False
+        self._next_capture_due: float | None = None
+        self._last_tick_at: float | None = None
+        self._last_tick_state: RuntimeState | None = None
+        self._waiting_duration_seconds = 0.0
+        self._waiting_capture_count = 0
+        self._control_loop_iterations = 0
+
+    @staticmethod
+    def is_quiet_waiting(
+        state: RuntimeState,
+        *,
+        ready_candidate_active: bool,
+        recovery_escalation: bool,
+        critical_detector_active: bool,
+    ) -> bool:
+        return bool(
+            state == RuntimeState.WAITING
+            and not ready_candidate_active
+            and not recovery_escalation
+            and not critical_detector_active
+        )
+
+    @property
+    def next_capture_due(self) -> float | None:
+        return self._next_capture_due
+
+    def observe_control_tick(
+        self, timestamp: float, state: RuntimeState
+    ) -> None:
+        now = float(timestamp)
+        if self._last_tick_at is not None and self._last_tick_state == RuntimeState.WAITING:
+            self._waiting_duration_seconds += max(
+                0.0, now - self._last_tick_at
+            )
+        self._last_tick_at = now
+        self._last_tick_state = state
+        self._control_loop_iterations += 1
+
+    def should_capture(
+        self,
+        timestamp: float,
+        state: RuntimeState,
+        *,
+        ready_candidate_active: bool,
+        recovery_escalation: bool,
+        critical_detector_active: bool,
+    ) -> bool:
+        quiet = self.is_quiet_waiting(
+            state,
+            ready_candidate_active=ready_candidate_active,
+            recovery_escalation=recovery_escalation,
+            critical_detector_active=critical_detector_active,
+        )
+        if not quiet:
+            self._quiet_episode_active = False
+            self._next_capture_due = None
+            return True
+        if not self._quiet_episode_active:
+            self._quiet_episode_active = True
+            self._next_capture_due = None
+            return True
+        return bool(
+            self._next_capture_due is None
+            or float(timestamp) + 1e-9 >= self._next_capture_due
+        )
+
+    def record_capture(
+        self,
+        timestamp: float,
+        *,
+        state_at_capture: RuntimeState,
+        state_after_processing: RuntimeState,
+        ready_candidate_active: bool,
+        recovery_escalation: bool,
+        critical_detector_active: bool,
+    ) -> None:
+        now = float(timestamp)
+        if state_at_capture == RuntimeState.WAITING:
+            self._waiting_capture_count += 1
+        quiet = self.is_quiet_waiting(
+            state_after_processing,
+            ready_candidate_active=ready_candidate_active,
+            recovery_escalation=recovery_escalation,
+            critical_detector_active=critical_detector_active,
+        )
+        if not quiet:
+            self._quiet_episode_active = False
+            self._next_capture_due = None
+            return
+        if not self._quiet_episode_active or self._next_capture_due is None:
+            self._quiet_episode_active = True
+            self._next_capture_due = now + self.interval_seconds
+            return
+        if now + 1e-9 >= self._next_capture_due:
+            # Advance from the previous deadline, not from completion time, so
+            # a long deterministic WAITING run cannot accumulate drift.
+            overdue = max(0.0, now - self._next_capture_due)
+            periods = int(overdue // self.interval_seconds) + 1
+            self._next_capture_due += periods * self.interval_seconds
+
+    def finish(self, timestamp: float, state: RuntimeState) -> None:
+        now = float(timestamp)
+        if self._last_tick_at is not None and self._last_tick_state == RuntimeState.WAITING:
+            self._waiting_duration_seconds += max(
+                0.0, now - self._last_tick_at
+            )
+        self._last_tick_at = now
+        self._last_tick_state = state
+
+    def summary(self) -> dict[str, float | int]:
+        duration = self._waiting_duration_seconds
+        return {
+            "waiting_capture_interval_target_seconds": self.interval_seconds,
+            "waiting_capture_count": self._waiting_capture_count,
+            "waiting_duration_seconds": duration,
+            "waiting_effective_capture_fps": (
+                self._waiting_capture_count / duration
+                if duration > 0.0 else 0.0
+            ),
+            "control_loop_iterations": self._control_loop_iterations,
+        }

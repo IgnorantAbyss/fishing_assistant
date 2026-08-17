@@ -66,6 +66,16 @@ class FakeClock:
         self.value += max(seconds, 0.001)
 
 
+class RecordingFakeClock(FakeClock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sleeps: list[float] = []
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        super().sleep(seconds)
+
+
 class MockCapture:
     def __init__(
         self,
@@ -3140,6 +3150,10 @@ def test_live_foreground_restore_recertifies_ready_and_emits_once(
         RestoreCapture(supported_frame),
         FakeClock(),
         duration_seconds=1.2,
+        runtime_profile="production",
+        session_logger=ProductionSessionLogger(
+            tmp_path, bundle_version="test-bundle"
+        ),
         emit_actions=True,
         action_sink_name="sendinput",
         action_allowlist="START_HOOK",
@@ -3171,6 +3185,175 @@ def test_live_foreground_restore_recertifies_ready_and_emits_once(
     )
     assert certificate["frame_index"] > restored["frame_index"]
     assert event_types.count("start_hook_emission_completed") == 1
+
+
+def test_quiet_waiting_runtime_captures_at_point_two_fps_without_blocking_loop(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class WaitingObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.WAITING_IN_PROGRESS,
+                0.99,
+                {PromptObservationKind.WAITING_IN_PROGRESS.value: 0.99},
+                "quiet-waiting-regression",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    clock = RecordingFakeClock()
+    capture = MockCapture(supported_frame)
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        clock,
+        duration_seconds=60.0,
+        runtime_profile="production",
+        session_logger=ProductionSessionLogger(
+            tmp_path, bundle_version="test-bundle"
+        ),
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle, observer=WaitingObserver()
+    )
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+
+    summary = runtime.run()
+
+    # The runtime includes the initial boundary frame and may include the
+    # exact duration boundary; steady-state spacing remains five seconds.
+    assert summary["captured_frames"] in {12, 13}
+    assert capture.calls == summary["captured_frames"] + 1
+    assert summary["waiting_capture_count"] == summary["captured_frames"]
+    assert 0.19 <= summary["waiting_effective_capture_fps"] <= 0.22
+    assert summary["control_loop_iterations"] >= 1_499
+    assert clock.sleeps
+    assert max(clock.sleeps) <= (1.0 / 25.0) + 1e-9
+
+
+def test_ready_candidate_restores_normal_capture_and_confirmation_cadence(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    clock = RecordingFakeClock()
+
+    class TimestampCapture(MockCapture):
+        def __init__(self, frame):
+            super().__init__(frame)
+            self.timestamps: list[float] = []
+
+        def capture(self):
+            self.timestamps.append(clock())
+            return super().capture()
+
+    class WaitingThenReadyObserver:
+        def __init__(self) -> None:
+            self.timestamps: list[float] = []
+
+        def observe(self, _frame, context):
+            self.timestamps.append(context.timestamp)
+            kind = (
+                PromptObservationKind.WAITING_IN_PROGRESS
+                if len(self.timestamps) == 1
+                else PromptObservationKind.READY_BITE
+            )
+            return PromptObservation(
+                kind,
+                0.99,
+                {kind.value: 0.99},
+                "ready-escalation-regression",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    capture = TimestampCapture(supported_frame)
+    observer = WaitingThenReadyObserver()
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        clock,
+        duration_seconds=5.5,
+        runtime_profile="production",
+        session_logger=ProductionSessionLogger(
+            tmp_path, bundle_version="test-bundle"
+        ),
+    )
+    runtime.prompt_bundle = replace(runtime.prompt_bundle, observer=observer)
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+
+    summary = runtime.run()
+
+    candidate_at = observer.timestamps[1]
+    next_capture_at = next(
+        item for item in capture.timestamps if item > candidate_at + 1e-9
+    )
+    assert next_capture_at - candidate_at == pytest.approx(1.0 / 25.0)
+    assert observer.timestamps[2] - candidate_at <= 0.1
+    assert runtime.schedule.config.ready_fps == 20.0
+    assert summary["raw_action_proposals"]["START_HOOK"] >= 1
+
+
+def test_quiet_waiting_panic_polling_does_not_wait_for_next_capture(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class DelayedPanicSink:
+        def __init__(self, _kwargs) -> None:
+            self.polls = 0
+
+        def poll_panic(self) -> bool:
+            self.polls += 1
+            return self.polls == 10
+
+        def apply(self, _request, _context):
+            raise AssertionError("panic regression must not emit input")
+
+        def summary(self):
+            return {
+                "action_allowlist": ["CAST"],
+                "panic_triggered": self.polls >= 10,
+            }
+
+    clock = RecordingFakeClock()
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 101,
+        "window_title": "black desert test",
+        "process": "BlackDesert64",
+        "process_id": 202,
+        "client_size": [2560, 1440],
+    })
+    holder: dict[str, DelayedPanicSink] = {}
+
+    def factory(**kwargs):
+        sink = DelayedPanicSink(kwargs)
+        holder["sink"] = sink
+        return sink
+
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        clock,
+        duration_seconds=60.0,
+        runtime_profile="production",
+        session_logger=ProductionSessionLogger(
+            tmp_path, bundle_version="test-bundle"
+        ),
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="CAST",
+        action_sink_factory=factory,
+    )
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+
+    summary = runtime.run()
+
+    assert summary["result"] == "panic_shutdown"
+    assert holder["sink"].polls == 10
+    assert clock() < 0.5
+    assert summary["captured_frames"] == 1
+    assert capture.calls == 2  # existing preflight plus the first runtime frame
+    assert max(clock.sleeps) <= (1.0 / 25.0) + 1e-9
 
 
 def test_live_sync_required_uses_fresh_ready_certificate_before_start_hook(

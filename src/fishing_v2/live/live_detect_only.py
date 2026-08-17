@@ -130,6 +130,7 @@ from src.fishing_v2.runtime.safety_policy import SafetyPolicy
 from src.fishing_v2.runtime.scheduling import (
     MissedReadyRecoveryTracker,
     PromptPollingConfig,
+    QuietWaitingCaptureScheduler,
     RuntimeSchedulePolicy,
 )
 from src.fishing_v2.runtime.synchronization import StartupSynchronizer
@@ -2213,6 +2214,13 @@ class LiveDetectOnlyRuntime:
         activation = self.activation_policy.evaluate(
             RuntimeState.SYNCING, initial_bundle, recorded_observation=True
         )
+        waiting_capture_scheduler = QuietWaitingCaptureScheduler(
+            self.schedule.config.waiting_interval_seconds
+        )
+        production_waiting_throttle = (
+            self.live_config.runtime_profile == "production"
+        )
+        last_waiting_foreground: bool | None = None
         try:
             if self.live_config.runtime_profile == "production":
                 self.console.emit("startup: production fishing runtime")
@@ -2264,6 +2272,9 @@ class LiveDetectOnlyRuntime:
                     break
                 frame_loop_started = self.clock()
                 elapsed = frame_loop_started - started
+                waiting_capture_scheduler.observe_control_tick(
+                    elapsed, self.fsm.state
+                )
                 hook_critical_mode = bool(
                     self.fsm.state in {
                         RuntimeState.HOOK_PENDING,
@@ -2304,6 +2315,97 @@ class LiveDetectOnlyRuntime:
                                 "action_applied": False,
                             },
                         )
+                panic_triggered_this_frame = False
+                if self.action_sink is not None:
+                    poll_panic = getattr(self.action_sink, "poll_panic", None)
+                    if callable(poll_panic):
+                        panic_triggered_this_frame = bool(poll_panic())
+                if (
+                    panic_triggered_this_frame
+                    and self.live_config.runtime_profile == "production"
+                ):
+                    for press_event in self._press_live_emission.cancel_pending(
+                        timestamp=elapsed,
+                        reason="panic_triggered",
+                    ):
+                        self.logger.event(press_event.event_type, {
+                            **dict(press_event.payload),
+                            "frame_index": captured,
+                            "runtime_state": self.fsm.state.value,
+                        })
+                    self.logger.event("panic_stop", {
+                        "timestamp": elapsed,
+                        "frame_index": captured,
+                        "runtime_state": self.fsm.state.value,
+                        "reason": "panic_key_pressed",
+                        "action_applied": False,
+                    })
+                    self.console.emit(
+                        "PANIC: input disabled, shutting down"
+                    )
+                    result_name = "panic_shutdown"
+                    shutdown_reason = "panic_key"
+                    break
+
+                critical_detector_active = bool(
+                    hook_critical_mode
+                    or any(
+                        mode != DetectorActivationMode.OFF
+                        for mode in (
+                            activation.hook,
+                            activation.press,
+                            activation.get,
+                        )
+                    )
+                )
+                recovery_escalation = self.missed_ready_recovery.active
+                foreground_control_sample: bool | None = None
+                foreground_restore_escalation = False
+                quiet_waiting_candidate = (
+                    production_waiting_throttle
+                    and waiting_capture_scheduler.is_quiet_waiting(
+                        self.fsm.state,
+                        ready_candidate_active=(
+                            self.schedule.ready_candidate_active
+                        ),
+                        recovery_escalation=recovery_escalation,
+                        critical_detector_active=critical_detector_active,
+                    )
+                )
+                if quiet_waiting_candidate:
+                    foreground_control_sample = self.capture.is_foreground()
+                    foreground_restore_escalation = bool(
+                        last_waiting_foreground is False
+                        and foreground_control_sample is True
+                    )
+                    last_waiting_foreground = foreground_control_sample
+                    if foreground_restore_escalation:
+                        next_prompt_due = min(next_prompt_due, elapsed)
+                elif self.fsm.state != RuntimeState.WAITING:
+                    last_waiting_foreground = None
+
+                if not waiting_capture_scheduler.should_capture(
+                    elapsed,
+                    self.fsm.state,
+                    ready_candidate_active=(
+                        self.schedule.ready_candidate_active
+                    ),
+                    recovery_escalation=(
+                        recovery_escalation
+                        or foreground_restore_escalation
+                        or not production_waiting_throttle
+                    ),
+                    critical_detector_active=critical_detector_active,
+                ):
+                    control_interval = 1.0 / self.live_config.max_fps
+                    remaining = control_interval - (
+                        self.clock() - frame_loop_started
+                    )
+                    if remaining > 0.0:
+                        self.sleep(remaining)
+                    continue
+
+                state_at_capture = self.fsm.state
                 if hook_critical_mode:
                     if not self._hook_episode_telemetry.active:
                         self.console.emit(
@@ -2381,37 +2483,6 @@ class LiveDetectOnlyRuntime:
                     break
                 captured += 1
                 frame_captured_at = self.clock() - started
-                panic_triggered_this_frame = False
-                if self.action_sink is not None:
-                    poll_panic = getattr(self.action_sink, "poll_panic", None)
-                    if callable(poll_panic):
-                        panic_triggered_this_frame = bool(poll_panic())
-                if (
-                    panic_triggered_this_frame
-                    and self.live_config.runtime_profile == "production"
-                ):
-                    for press_event in self._press_live_emission.cancel_pending(
-                        timestamp=elapsed,
-                        reason="panic_triggered",
-                    ):
-                        self.logger.event(press_event.event_type, {
-                            **dict(press_event.payload),
-                            "frame_index": captured,
-                            "runtime_state": self.fsm.state.value,
-                        })
-                    self.logger.event("panic_stop", {
-                        "timestamp": elapsed,
-                        "frame_index": captured,
-                        "runtime_state": self.fsm.state.value,
-                        "reason": "panic_key_pressed",
-                        "action_applied": False,
-                    })
-                    self.console.emit(
-                        "PANIC: input disabled, shutting down"
-                    )
-                    result_name = "panic_shutdown"
-                    shutdown_reason = "panic_key"
-                    break
                 height, width = frame.shape[:2]
                 if (width, height) != EXPECTED_RESOLUTION:
                     result_name = "safe_stop_resolution_changed"
@@ -2693,7 +2764,11 @@ class LiveDetectOnlyRuntime:
                             transition_results.append(self.fsm.force_state(
                                 RuntimeState.SYNC_REQUIRED, elapsed, sync.reason
                             ))
-                    foreground = self.capture.is_foreground()
+                    foreground = (
+                        foreground_control_sample
+                        if foreground_control_sample is not None
+                        else self.capture.is_foreground()
+                    )
                     foreground_diagnostics = getattr(self.capture, "diagnostics", None)
                     current_capture_diagnostics = (
                         dict(foreground_diagnostics())
@@ -5970,6 +6045,47 @@ class LiveDetectOnlyRuntime:
                             ),
                         )
 
+                critical_detector_active_after = any(
+                    mode != DetectorActivationMode.OFF
+                    for mode in (
+                        activation.hook,
+                        activation.press,
+                        activation.get,
+                    )
+                )
+                waiting_capture_scheduler.record_capture(
+                    elapsed,
+                    state_at_capture=state_at_capture,
+                    state_after_processing=self.fsm.state,
+                    ready_candidate_active=(
+                        self.schedule.ready_candidate_active
+                    ),
+                    recovery_escalation=(
+                        self.missed_ready_recovery.active
+                        or not production_waiting_throttle
+                    ),
+                    critical_detector_active=(
+                        critical_detector_active_after
+                    ),
+                )
+                quiet_deadline = waiting_capture_scheduler.next_capture_due
+                if (
+                    quiet_deadline is not None
+                    and waiting_capture_scheduler.is_quiet_waiting(
+                        self.fsm.state,
+                        ready_candidate_active=(
+                            self.schedule.ready_candidate_active
+                        ),
+                        recovery_escalation=(
+                            self.missed_ready_recovery.active
+                        ),
+                        critical_detector_active=(
+                            critical_detector_active_after
+                        ),
+                    )
+                ):
+                    next_prompt_due = quiet_deadline
+
                 if (
                     defer_video_for_hook_fast_path
                     and not hook_critical_mode
@@ -6111,6 +6227,9 @@ class LiveDetectOnlyRuntime:
             })
         finally:
             elapsed_total = max(0.0, self.clock() - started)
+            waiting_capture_scheduler.finish(
+                elapsed_total, self.fsm.state
+            )
             if result_name == "interrupted_by_user":
                 for press_event in self._press_live_emission.cancel_pending(
                     timestamp=elapsed_total,
@@ -6289,6 +6408,7 @@ class LiveDetectOnlyRuntime:
                 "captured_frames": captured,
                 "processed_frames": processed,
                 "capture_fps": captured / elapsed_total if elapsed_total > 0 else 0.0,
+                **waiting_capture_scheduler.summary(),
                 "mean_processing_latency_ms": float(np.mean(latencies)) if latencies else 0.0,
                 "max_processing_latency_ms": max(latencies) if latencies else 0.0,
                 "detector_runs": dict(detector_runs),
