@@ -145,6 +145,22 @@ class PressLiveEmissionTracker:
     def pending(self) -> ScheduledPressEmission | None:
         return self._pending
 
+    def authoritative_episode_progress(
+        self, episode_index: int
+    ) -> dict[str, bool]:
+        """Expose existing one-shot ownership for anomaly classification."""
+        episode = int(episode_index)
+        terminal = self._terminal_outcomes.get(episode, "")
+        return {
+            "opportunity_scheduled": episode in self._reserved_episodes,
+            "emission_started": episode in self._attempted_episodes,
+            "action_applied": terminal in {
+                "completed_waiting_visual_ack",
+                "visual_acknowledged",
+                "visual_ack_timeout_not_retried",
+            },
+        }
+
     def _timing_plan(self, sequence: tuple[str, ...]) -> PressTimingPlan:
         initial = self.rng.randint(
             self.config.initial_delay_min_ms,

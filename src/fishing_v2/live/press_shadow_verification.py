@@ -137,6 +137,31 @@ class PressShadowVerifier:
     def frozen_sequence(self) -> tuple[str, ...]:
         return self._frozen_sequence
 
+    def authoritative_episode_progress(
+        self, episode_index: int
+    ) -> dict[str, bool]:
+        """Expose existing freeze/proposal ownership without mutating it."""
+        episode = int(episode_index)
+        if self._active and episode == self._episode_index:
+            return {
+                "sequence_frozen": bool(self._frozen_sequence),
+                "opportunity_created": self._proposal_created,
+            }
+        for review in reversed(self._review_items):
+            if int(review["episode_index"]) == episode:
+                return {
+                    "sequence_frozen": (
+                        review["frozen_timestamp"] is not None
+                    ),
+                    "opportunity_created": (
+                        int(review["exactly_once_proposal_count"]) > 0
+                    ),
+                }
+        return {
+            "sequence_frozen": False,
+            "opportunity_created": False,
+        }
+
     def cancel_for_authoritative_idle_recovery(self) -> None:
         if self._active:
             self._finish_episode("authoritative_idle_recovery")

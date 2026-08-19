@@ -136,6 +136,33 @@ def test_shadow_sorts_left_to_right_preserves_repeats_and_proposes_once(
     assert Path(summary["press_roi_clip_path"]).exists()
 
 
+def test_finished_episode_preserves_authoritative_freeze_and_proposal() -> None:
+    verifier = PressShadowVerifier()
+    ready = _press(1, "WASD", ready=True)
+    assert _observe(verifier, ready) is not None
+    disappeared = PressObservation(
+        **{
+            **ready.__dict__,
+            "frame_index": 2,
+            "timestamp": 0.1,
+            "sequence": (),
+            "sequence_ready": False,
+            "evidence": {
+                **ready.evidence,
+                "panel_disappeared": True,
+            },
+        }
+    )
+
+    _observe(verifier, disappeared)
+
+    assert verifier.active is False
+    assert verifier.authoritative_episode_progress(1) == {
+        "sequence_frozen": True,
+        "opportunity_created": True,
+    }
+
+
 def test_shadow_requires_press_state_and_active_activation() -> None:
     verifier = PressShadowVerifier()
     ready = _press(1, "WWAASSDD", ready=True)

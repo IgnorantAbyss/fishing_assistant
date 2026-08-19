@@ -61,6 +61,22 @@ class PressAnomalyEvidenceRecorder:
     def enabled(self) -> bool:
         return self.config.enabled
 
+    @staticmethod
+    def incomplete_episode_eligible(
+        authoritative_progress: Mapping[str, Any] | None,
+    ) -> bool:
+        progress = dict(authoritative_progress or {})
+        return not any(
+            bool(progress.get(boundary))
+            for boundary in (
+                "sequence_frozen",
+                "opportunity_created",
+                "opportunity_scheduled",
+                "emission_started",
+                "action_applied",
+            )
+        )
+
     def record(
         self,
         *,
@@ -163,6 +179,18 @@ class PressAnomalyEvidenceRecorder:
             },
         ))
         return True
+
+    def trigger_incomplete(
+        self,
+        *,
+        episode_index: int,
+        reason: str,
+        authoritative_progress: Mapping[str, Any] | None,
+    ) -> bool:
+        """Write only genuine pre-freeze incomplete PRESS episodes."""
+        if not self.incomplete_episode_eligible(authoritative_progress):
+            return False
+        return self.trigger(episode_index=episode_index, reason=reason)
 
     @staticmethod
     def _draw_occupied(sample: _Sample) -> np.ndarray:

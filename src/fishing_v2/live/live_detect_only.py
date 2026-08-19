@@ -1358,6 +1358,18 @@ class LiveDetectOnlyRuntime:
             "get_target_fps": snapshot.get_fps,
         }
 
+    def _press_authoritative_progress(
+        self, episode_index: int
+    ) -> dict[str, bool]:
+        return {
+            **self._press_shadow.authoritative_episode_progress(
+                episode_index
+            ),
+            **self._press_live_emission.authoritative_episode_progress(
+                episode_index
+            ),
+        }
+
     @staticmethod
     def _specialized_payload(result: Any) -> dict[str, Any]:
         hook = result.qualified.bundle.hook
@@ -3755,10 +3767,18 @@ class LiveDetectOnlyRuntime:
                         ) is True
                     )
                     press_episode_index = self._press_shadow.episode_index
+                    press_authoritative_progress = (
+                        self._press_authoritative_progress(
+                            press_episode_index
+                        )
+                    )
                     if (
                         panel_disappeared
                         and isinstance(press_completeness, Mapping)
                         and not bool(press_completeness.get("complete"))
+                        and self._press_anomaly_evidence.incomplete_episode_eligible(
+                            press_authoritative_progress
+                        )
                         and press_episode_index not in self._press_abstained_episodes
                     ):
                         self._press_abstained_episodes.add(press_episode_index)
@@ -3776,9 +3796,12 @@ class LiveDetectOnlyRuntime:
                         self.logger.event(
                             "press_sequence_abstained_incomplete", abstain_payload
                         )
-                        self._press_anomaly_evidence.trigger(
+                        self._press_anomaly_evidence.trigger_incomplete(
                             episode_index=press_episode_index,
                             reason="press_sequence_abstained_incomplete",
+                            authoritative_progress=(
+                                press_authoritative_progress
+                            ),
                         )
                     if pending_press is not None:
                         pending_cancel_reason = (

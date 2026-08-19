@@ -7,6 +7,7 @@ import threading
 
 import cv2
 import numpy as np
+import pytest
 
 from src.fishing_v2.domain.observations import PressObservation
 from src.fishing_v2.live.press_anomaly_evidence import (
@@ -39,16 +40,165 @@ def _observation(frame: int) -> PressObservation:
     )
 
 
-def _record(recorder: PressAnomalyEvidenceRecorder, count: int = 12) -> None:
+def _record(
+    recorder: PressAnomalyEvidenceRecorder,
+    count: int = 12,
+    *,
+    episode_index: int = 1,
+) -> None:
     for frame in range(1, count + 1):
         recorder.record(
-            episode_index=1,
+            episode_index=episode_index,
             frame_index=frame,
             timestamp=frame / 20.0,
             roi_pixels=np.zeros((24, 40, 3), dtype=np.uint8),
             observation=_observation(frame),
             certificate={"complete": False, "occupied_count": 7, "decoded_count": 1},
         )
+
+
+def test_genuine_pre_freeze_incomplete_episode_still_writes_evidence(
+    tmp_path: Path,
+) -> None:
+    recorder = PressAnomalyEvidenceRecorder(
+        tmp_path,
+        PressAnomalyEvidenceConfig(enabled=True),
+    )
+    _record(recorder)
+
+    assert recorder.incomplete_episode_eligible({}) is True
+    assert recorder.trigger_incomplete(
+        episode_index=1,
+        reason="press_sequence_abstained_incomplete",
+        authoritative_progress={},
+    ) is True
+    summary = recorder.close()
+
+    assert summary["press_anomaly_episode_count"] == 1
+    assert (tmp_path / "press_anomalies" / "episode_1").is_dir()
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [
+        {"sequence_frozen": True},
+        {"opportunity_created": True},
+        {"opportunity_scheduled": True},
+        {
+            "sequence_frozen": True,
+            "opportunity_created": True,
+            "opportunity_scheduled": True,
+        },
+        {"emission_started": True},
+        {"action_applied": True},
+    ],
+)
+def test_authoritative_press_progress_suppresses_incomplete_classification(
+    tmp_path: Path,
+    progress: dict[str, bool],
+) -> None:
+    recorder = PressAnomalyEvidenceRecorder(
+        tmp_path,
+        PressAnomalyEvidenceConfig(enabled=True),
+    )
+    _record(recorder)
+
+    assert recorder.incomplete_episode_eligible(progress) is False
+    assert recorder.trigger_incomplete(
+        episode_index=1,
+        reason="press_sequence_abstained_incomplete",
+        authoritative_progress=progress,
+    ) is False
+    summary = recorder.close()
+
+    assert summary["press_anomaly_episode_count"] == 0
+    assert not (tmp_path / "press_anomalies").exists()
+
+
+def test_completed_episode_does_not_hide_next_pre_freeze_failure(
+    tmp_path: Path,
+) -> None:
+    recorder = PressAnomalyEvidenceRecorder(
+        tmp_path,
+        PressAnomalyEvidenceConfig(enabled=True),
+    )
+    _record(recorder, episode_index=1)
+    _record(recorder, episode_index=2)
+
+    assert recorder.trigger_incomplete(
+        episode_index=1,
+        reason="press_sequence_abstained_incomplete",
+        authoritative_progress={
+            "sequence_frozen": True,
+            "opportunity_created": True,
+            "opportunity_scheduled": True,
+            "emission_started": True,
+            "action_applied": True,
+        },
+    ) is False
+    assert recorder.trigger_incomplete(
+        episode_index=2,
+        reason="press_sequence_abstained_incomplete",
+        authoritative_progress={},
+    ) is True
+    summary = recorder.close()
+
+    assert summary["press_anomaly_episode_count"] == 1
+    assert not (tmp_path / "press_anomalies" / "episode_1").exists()
+    assert (tmp_path / "press_anomalies" / "episode_2").is_dir()
+
+
+def test_action_applied_before_visual_ack_suppresses_disappearance_anomaly(
+    tmp_path: Path,
+) -> None:
+    recorder = PressAnomalyEvidenceRecorder(
+        tmp_path,
+        PressAnomalyEvidenceConfig(enabled=True),
+    )
+    _record(recorder)
+
+    assert recorder.trigger_incomplete(
+        episode_index=1,
+        reason="press_sequence_abstained_incomplete",
+        authoritative_progress={
+            "sequence_frozen": True,
+            "opportunity_created": True,
+            "opportunity_scheduled": True,
+            "emission_started": True,
+            "action_applied": True,
+        },
+    ) is False
+    summary = recorder.close()
+
+    assert summary["press_anomaly_episode_count"] == 0
+    assert not (tmp_path / "press_anomalies").exists()
+
+
+def test_anomaly_io_failure_does_not_escape_control_flow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = PressAnomalyEvidenceRecorder(
+        tmp_path,
+        PressAnomalyEvidenceConfig(enabled=True),
+    )
+    _record(recorder)
+
+    def fail_writer(*_args) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(recorder, "_write_episode", fail_writer)
+    assert recorder.trigger_incomplete(
+        episode_index=1,
+        reason="press_sequence_abstained_incomplete",
+        authoritative_progress={},
+    ) is True
+    summary = recorder.close()
+
+    assert summary["press_anomaly_episode_count"] == 1
+    assert summary["press_anomaly_evidence_failures"] == [
+        "OSError: disk full"
+    ]
 
 
 def test_disabled_anomaly_evidence_writes_nothing(tmp_path: Path) -> None:

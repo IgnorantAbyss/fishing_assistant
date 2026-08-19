@@ -1783,9 +1783,11 @@ def test_session_20260804_hook_watchdog_rearm_has_bounded_terminal(
     )
 
 
+@pytest.mark.parametrize("press_anomaly_evidence", [False, True])
 def test_live_press_shadow_proposes_once_without_calling_action_sink(
     tmp_path: Path,
     supported_frame: np.ndarray,
+    press_anomaly_evidence: bool,
 ) -> None:
     class StablePressDetector:
         def observe(self, _frame, context):
@@ -1878,6 +1880,7 @@ def test_live_press_shadow_proposes_once_without_calling_action_sink(
         action_sink_name="sendinput",
         action_allowlist="CAST",
         action_sink_factory=factory,
+        press_anomaly_evidence=press_anomaly_evidence,
     )
     runtime.press_detector = StablePressDetector()
     runtime.fsm.force_state(RuntimeState.PRESS, 0.0, "press_shadow_test")
@@ -1889,6 +1892,8 @@ def test_live_press_shadow_proposes_once_without_calling_action_sink(
     assert summary["raw_action_proposals"] == {"PRESS_SEQUENCE": 1}
     assert summary["unique_would_fire"] == {"WOULD_PRESS_SEQUENCE": 1}
     assert summary["actions_applied"] == 0
+    assert summary["press_anomaly_episode_count"] == 0
+    assert runtime.fsm.state == RuntimeState.PRESS
     events = [
         json.loads(line)
         for line in runtime.logger.events_path.read_text(
@@ -2057,6 +2062,7 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
         action_allowlist="PRESS_SEQUENCE",
         action_sink_factory=factory,
         enable_live_press_sequence=True,
+        press_anomaly_evidence=True,
         press_initial_delay_min_ms=40,
         press_initial_delay_max_ms=40,
     )
@@ -2088,6 +2094,23 @@ def test_guarded_live_press_sequence_applies_once_and_commits(
     assert summary["actions_applied"] == 1
     assert summary["press_live_emission_attempted_count"] == 1
     assert summary["press_live_emission_completed_count"] == 1
+    assert summary["press_anomaly_episode_count"] == 0
+    authoritative_progress = (
+        runtime._press_authoritative_progress(1)
+    )
+    assert authoritative_progress == {
+        "sequence_frozen": True,
+        "opportunity_created": True,
+        "opportunity_scheduled": True,
+        "emission_started": True,
+        "action_applied": True,
+    }
+    assert runtime._press_anomaly_evidence.trigger_incomplete(
+        episode_index=1,
+        reason="press_sequence_abstained_incomplete",
+        authoritative_progress=authoritative_progress,
+    ) is False
+    assert not (runtime.logger.path / "press_anomalies").exists()
     assert summary["unique_would_fire"] == {
         "WOULD_PRESS_SEQUENCE": 1
     }
