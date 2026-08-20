@@ -9,7 +9,10 @@ from src.fishing_v2.domain.observations import (
     PromptObservationKind,
 )
 from src.fishing_v2.domain.runtime_state import RuntimeState
-from src.fishing_v2.fusion.observation_fusion import ObservationFusion
+from src.fishing_v2.fusion.observation_fusion import (
+    ObservationFusion,
+    StateEvidence,
+)
 from src.fishing_v2.live.hook_action_lifecycle import HookActionLifecycle
 from src.fishing_v2.live.live_detect_only import WouldFireDeduplicator
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
@@ -60,6 +63,65 @@ def _controller(fsm: FishingFSM) -> RuntimeController:
     )
 
 
+def _commit_start_hook(
+    *,
+    config: FSMConfig,
+    opportunity_id: str = "ready:300:START_HOOK",
+) -> tuple[FishingFSM, RuntimeController]:
+    fsm = FishingFSM(
+        config,
+        initial_state=RuntimeState.READY,
+        initial_timestamp=-0.1,
+    )
+    controller = _controller(fsm)
+    assert fsm.reconcile_start_hook_opportunity(opportunity_id)
+    ready = ObservationBundle(
+        1,
+        -0.01,
+        PromptObservation(
+            PromptObservationKind.READY_BITE,
+            0.99,
+            {PromptObservationKind.READY_BITE.value: 0.99},
+            "start-hook-transition-race",
+            1,
+            -0.01,
+        ),
+    )
+    proposed = controller.process(
+        ready,
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert proposed.fsm.action_request.intent == ActionIntent.START_HOOK
+    committed = fsm.commit_action(proposed.fsm.action_request, 0.0)
+    assert committed.action_applied is True
+    assert committed.next_state == RuntimeState.HOOK_PENDING
+    return fsm, controller
+
+
+def _prompt_only(
+    frame: int,
+    timestamp: float,
+    kind: PromptObservationKind,
+    *,
+    confidence: float = 0.99,
+) -> ObservationBundle:
+    return ObservationBundle(
+        frame,
+        timestamp,
+        PromptObservation(
+            kind,
+            confidence,
+            {kind.value: confidence},
+            "start-hook-transition-race",
+            frame,
+            timestamp,
+        ),
+    )
+
+
 def _process(controller: RuntimeController, frame: int, timestamp: float):
     return controller.process(
         _qualified_crossing(frame, timestamp),
@@ -67,6 +129,176 @@ def _process(controller: RuntimeController, frame: int, timestamp: float):
         runtime_environment_supported=True,
         action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
         preserve_proposal=True,
+    )
+
+
+@pytest.mark.parametrize("ack_delay_seconds", [0.016, 0.018, 0.021])
+def test_live_style_start_hook_conflict_race_waits_for_next_frame_ack(
+    ack_delay_seconds: float,
+) -> None:
+    config = FSMConfig(
+        stable_frames=1,
+        sync_lost_timeout_sec=2.0,
+        hook_pending_timeout_sec=3.0,
+    )
+    fsm, controller = _commit_start_hook(config=config)
+
+    initial_conflict = controller.process(
+        _prompt_only(2, 0.09, PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert initial_conflict.fsm.next_state == RuntimeState.HOOK_PENDING
+
+    boundary = controller.process(
+        _prompt_only(3, 2.111, PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert boundary.fsm.next_state == RuntimeState.HOOK_PENDING
+    assert boundary.fsm.transition_reason == (
+        "start_hook_transition_conflict_grace"
+    )
+
+    acknowledgement_at = 2.111 + ack_delay_seconds
+    acknowledged = controller.process(
+        _prompt_only(
+            4,
+            acknowledgement_at,
+            PromptObservationKind.HOOK_INSTRUCTION,
+        ),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+    assert acknowledged.fsm.next_state == RuntimeState.HOOK_PENDING
+    assert acknowledged.fsm.visual_acknowledgement == "HOOK_INSTRUCTION"
+
+    hook_evidence_at = acknowledgement_at + 0.025
+    entered = _process(controller, 5, hook_evidence_at)
+    assert entered.fsm.previous_state == RuntimeState.HOOK_PENDING
+    assert entered.fsm.next_state == RuntimeState.HOOK
+    assert entered.fsm.action_request.intent == ActionIntent.HOOK_ACTION
+
+    committed = fsm.commit_action(
+        entered.fsm.action_request,
+        hook_evidence_at,
+    )
+    assert committed.action_applied is True
+    assert committed.next_state == RuntimeState.RESULT_PENDING
+    repeated = _process(controller, 6, hook_evidence_at + 0.026)
+    assert repeated.fsm.action_request.intent == ActionIntent.NONE
+
+
+def test_fresh_qualified_hook_wins_at_start_hook_conflict_boundary() -> None:
+    config = FSMConfig(
+        stable_frames=1,
+        sync_lost_timeout_sec=2.0,
+        hook_pending_timeout_sec=3.0,
+    )
+    fsm, controller = _commit_start_hook(config=config)
+    controller.process(
+        _prompt_only(2, 0.09, PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+
+    hook_bundle = _qualified_crossing(3, 2.111)
+    conflicting_bundle = ObservationBundle(
+        3,
+        2.111,
+        _prompt_only(
+            3,
+            2.111,
+            PromptObservationKind.READY_BITE,
+        ).prompt,
+        hook_bundle.hook,
+    )
+    crossed_fsm = fsm.advance(
+        StateEvidence(
+            {RuntimeState.HOOK: 0.90},
+            ("qualified_hook_bar",),
+            ("ready_prompt_overlaps_hook_bar",),
+            RuntimeState.HOOK,
+            0.90,
+            "qualified_hook_bar_with_prompt_overlap",
+            3,
+            2.111,
+        ),
+        2.111,
+        conflicting_bundle,
+        recorded_observation=True,
+    )
+
+    assert crossed_fsm.previous_state == RuntimeState.HOOK_PENDING
+    assert crossed_fsm.next_state == RuntimeState.HOOK
+    assert crossed_fsm.action_request.intent == ActionIntent.HOOK_ACTION
+
+
+def test_start_hook_transition_grace_remains_bounded() -> None:
+    config = FSMConfig(
+        stable_frames=1,
+        sync_lost_timeout_sec=2.0,
+        hook_pending_timeout_sec=3.0,
+    )
+    fsm, controller = _commit_start_hook(config=config)
+    controller.process(
+        _prompt_only(2, 0.09, PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+
+    timed_out = controller.process(
+        _prompt_only(3, 3.001, PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+
+    assert timed_out.fsm.next_state == RuntimeState.SYNC_REQUIRED
+    assert timed_out.fsm.transition_reason == "hook_pending_timeout"
+
+
+def test_non_emitted_hook_pending_conflict_keeps_generic_fail_closed() -> None:
+    fsm = FishingFSM(
+        FSMConfig(
+            stable_frames=1,
+            sync_lost_timeout_sec=2.0,
+            hook_pending_timeout_sec=3.0,
+        ),
+        initial_state=RuntimeState.HOOK_PENDING,
+        initial_timestamp=0.0,
+    )
+    controller = _controller(fsm)
+    controller.process(
+        _prompt_only(1, 0.09, PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+
+    failed_closed = controller.process(
+        _prompt_only(2, 2.111, PromptObservationKind.READY_BITE),
+        foreground=True,
+        runtime_environment_supported=True,
+        action_mode=ActionExecutionMode.RECORDED_OBSERVATION,
+        preserve_proposal=True,
+    )
+
+    assert failed_closed.fsm.next_state == RuntimeState.SYNC_REQUIRED
+    assert failed_closed.fsm.transition_reason == (
+        "persistent_conflicting_or_illegal_evidence"
     )
 
 

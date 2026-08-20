@@ -606,6 +606,21 @@ class FishingFSM:
     def _timeout(self, timestamp: float) -> float:
         return float(timestamp) - self.state_since
 
+    def _start_hook_transition_window_active(
+        self,
+        timestamp: float,
+    ) -> bool:
+        """Use the committed START_HOOK hand-off's existing bounded deadline."""
+        return bool(
+            self.state == RuntimeState.HOOK_PENDING
+            and (
+                RuntimeState.READY,
+                ActionIntent.START_HOOK,
+            ) in self._actions_applied
+            and self._timeout(timestamp)
+            < self.config.hook_pending_timeout_sec
+        )
+
     def _reset_get_retry(self, timestamp: float) -> None:
         self._get_started_at = float(timestamp)
         self._get_last_applied_at = None
@@ -922,7 +937,46 @@ class FishingFSM:
             elif bundle and bundle.press and not bundle.press.detected:
                 self._press_waiting_for_clear = False
 
-        if evidence.has_conflict or (target is not None and not self.policy.is_legal(self.state, target)):
+        conflicting_or_illegal = bool(
+            evidence.has_conflict
+            or (
+                target is not None
+                and not self.policy.is_legal(self.state, target)
+            )
+        )
+        start_hook_transition_window_active = (
+            self._start_hook_transition_window_active(timestamp)
+        )
+        fresh_qualified_hook_transition = bool(
+            start_hook_transition_window_active
+            and target == RuntimeState.HOOK
+            and self._specialized_confirmed(RuntimeState.HOOK, bundle)
+        )
+        if (
+            start_hook_transition_window_active
+            and conflicting_or_illegal
+            and not fresh_qualified_hook_transition
+        ):
+            # START_HOOK has already completed OS emission, so its dedicated
+            # HOOK_PENDING deadline owns this short visual hand-off. Do not let
+            # the shorter generic conflict timer win one capture frame before
+            # HOOK_INSTRUCTION / qualified Hook evidence. The state timeout
+            # above remains the bounded fail-closed terminal.
+            self._candidate = None
+            self._candidate_frames = 0
+            self._conflict_since = None
+            return self._held(
+                previous,
+                "start_hook_transition_conflict_grace",
+                failed_telemetry,
+            )
+        if fresh_qualified_hook_transition:
+            # Current qualified Hook evidence is the legal hand-off result;
+            # stale prompt overlap must not consume it as generic conflict.
+            self._conflict_since = None
+            conflicting_or_illegal = False
+
+        if conflicting_or_illegal:
             self._conflict_since = self._conflict_since or float(timestamp)
             if float(timestamp) - self._conflict_since >= self.config.sync_lost_timeout_sec:
                 if self.policy.is_legal(self.state, RuntimeState.SYNC_REQUIRED):
