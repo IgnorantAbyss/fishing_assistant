@@ -223,6 +223,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--hook-anomaly-evidence",
+        action="store_true",
+        help=(
+            "Save bounded raw Hook ROI evidence only after a "
+            "HOOK_PENDING timeout anomaly (default: disabled)"
+        ),
+    )
+    parser.add_argument(
         "--press-detector-mode",
         choices=PRESS_DETECTOR_MODES,
         default="legacy",
@@ -453,6 +461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             press_key_hold_ms=args.press_key_hold_ms,
             press_anomaly_evidence=args.press_anomaly_evidence,
+            hook_anomaly_evidence=args.hook_anomaly_evidence,
             press_anomaly_buffer_frames=(
                 args.press_anomaly_buffer_frames
             ),

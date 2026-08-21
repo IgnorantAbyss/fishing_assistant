@@ -65,6 +65,10 @@ from src.fishing_v2.live.hook_critical_loop import (
     LatestHookFrameSlot,
 )
 from src.fishing_v2.live.hook_action_lifecycle import HookActionLifecycle
+from src.fishing_v2.live.hook_pending_timeout_evidence import (
+    HookPendingTimeoutEvidenceConfig,
+    HookPendingTimeoutEvidenceRecorder,
+)
 from src.fishing_v2.live.idle_recovery import (
     CAST_SOURCE_POST_CYCLE,
     CAST_SOURCE_RECOVERY,
@@ -225,6 +229,9 @@ class LiveDetectOnlyConfig:
     press_anomaly_evidence: bool = False
     press_anomaly_buffer_frames: int = 12
     press_anomaly_max_episodes: int = 20
+    hook_anomaly_evidence: bool = False
+    hook_anomaly_max_samples: int = 140
+    hook_anomaly_max_episodes: int = 20
     press_detector_mode: str = "legacy"
     press_v3_debug_evidence: bool = False
     press_v3_debug_max_episodes: int = 20
@@ -266,6 +273,11 @@ class LiveDetectOnlyConfig:
             enabled=self.press_anomaly_evidence,
             buffer_frames=self.press_anomaly_buffer_frames,
             max_episodes=self.press_anomaly_max_episodes,
+        )
+        HookPendingTimeoutEvidenceConfig(
+            enabled=self.hook_anomaly_evidence,
+            max_samples=self.hook_anomaly_max_samples,
+            max_episodes=self.hook_anomaly_max_episodes,
         )
         if self.press_detector_mode not in PRESS_DETECTOR_MODES:
             raise ValueError(
@@ -774,6 +786,16 @@ class LiveDetectOnlyRuntime:
                     max_episodes=(
                         self.live_config.press_anomaly_max_episodes
                     ),
+                ),
+            )
+        )
+        self._hook_pending_timeout_evidence = (
+            HookPendingTimeoutEvidenceRecorder(
+                self.logger.path,
+                HookPendingTimeoutEvidenceConfig(
+                    enabled=self.live_config.hook_anomaly_evidence,
+                    max_samples=self.live_config.hook_anomaly_max_samples,
+                    max_episodes=self.live_config.hook_anomaly_max_episodes,
                 ),
             )
         )
@@ -1312,6 +1334,7 @@ class LiveDetectOnlyRuntime:
             self.evidence_recorder is not None
             or self._press_anomaly_evidence.enabled
             or self._result_pending_timeout_evidence.enabled
+            or self._hook_pending_timeout_evidence.enabled
         ):
             self._diagnostic_roi_bounds = {
                 "prompt": self.prompt_bundle.roi.pixel_bounds(width, height),
@@ -2192,6 +2215,7 @@ class LiveDetectOnlyRuntime:
         missed_ready_recovery_count = 0
         ready_liveness_invariant_violation_count = 0
         result_pending_timeout_count = 0
+        hook_pending_timeout_count = 0
         evidence_episode_id = 1
         stop_after_completed_cycle = False
         stop_after_action_commit_failure = False
@@ -4873,6 +4897,94 @@ class LiveDetectOnlyRuntime:
                         unknown_started = None
                         unknown_saved = False
 
+                    hook_pending_terminal = next(
+                        (
+                            item for item in reversed(transition_results)
+                            if item.previous_state == RuntimeState.HOOK_PENDING
+                            and item.next_state != RuntimeState.HOOK_PENDING
+                        ),
+                        None,
+                    )
+                    if (
+                        self._hook_pending_timeout_evidence.active
+                        and runtime_state_at_processing_start
+                        == RuntimeState.HOOK_PENDING
+                        and self._hook_critical_bounds is not None
+                    ):
+                        x1, y1, x2, y2 = self._hook_critical_bounds
+                        self._hook_pending_timeout_evidence.record(
+                            frame_index=captured,
+                            timestamp=elapsed,
+                            runtime_state=RuntimeState.HOOK_PENDING,
+                            roi_pixels=frame[y1:y2, x1:x2],
+                            hook_detector_executed=hook is not None,
+                            detector_mode=(
+                                last_result.qualified.hook.activation_mode
+                            ),
+                            cadence={
+                                "detector_due": detector_due,
+                                "prompt_due": prompt_due,
+                                "run_detectors": run_detectors,
+                                "hook_critical_mode": hook_critical_mode,
+                                "target_fps": (
+                                    self.live_config.hook_critical_target_fps
+                                    if hook_critical_mode
+                                    else activation.hook_fps
+                                ),
+                            },
+                            prompt=prompt,
+                            raw_observation=hook,
+                            qualified_observation=(
+                                last_result.qualified.bundle.hook
+                            ),
+                            qualification=last_result.qualified.hook,
+                            fsm_diagnostics={
+                                "previous_state": (
+                                    last_result.fsm.previous_state.value
+                                ),
+                                "committed_state": (
+                                    last_result.fsm.next_state.value
+                                ),
+                                "transition_reason": (
+                                    last_result.fsm.transition_reason
+                                ),
+                                "changed": last_result.fsm.changed,
+                                "recommended_state": (
+                                    last_result.evidence.recommended_state.value
+                                    if last_result.evidence.recommended_state
+                                    is not None else None
+                                ),
+                                "fusion_reason": last_result.evidence.reason,
+                                "fusion_confidence": (
+                                    last_result.evidence.confidence
+                                ),
+                            },
+                        )
+                    if hook_pending_terminal is not None:
+                        hook_terminal_reason = (
+                            hook_pending_terminal.transition_reason
+                        )
+                        if hook_terminal_reason == "hook_pending_timeout":
+                            hook_pending_timeout_count += 1
+                        self._hook_pending_timeout_evidence.finish(
+                            next_state=hook_pending_terminal.next_state,
+                            timestamp=elapsed,
+                            reason=hook_terminal_reason,
+                        )
+                    self._hook_pending_timeout_evidence.poll_completed()
+                    for saved_event in (
+                        self._hook_pending_timeout_evidence
+                        .drain_completed_events()
+                    ):
+                        self.logger.event(
+                            "hook_pending_timeout_evidence_saved",
+                            {
+                                "timestamp": elapsed,
+                                "frame_index": captured,
+                                **saved_event,
+                            },
+                        )
+
                     result_pending_terminal = next(
                         (
                             item for item in reversed(transition_results)
@@ -6024,6 +6136,35 @@ class LiveDetectOnlyRuntime:
                                             timestamp=elapsed,
                                             start_hook_applied=True,
                                         )
+                                        if (
+                                            commit.next_state
+                                            == RuntimeState.HOOK_PENDING
+                                        ):
+                                            self._hook_pending_timeout_evidence.begin(
+                                                runtime_state=commit.next_state,
+                                                cycle_id=(
+                                                    self.deduplicator.cycle_id
+                                                ),
+                                                ready_identity=(
+                                                    self._ready_recovery
+                                                    .physical_ready_episode_id
+                                                ),
+                                                start_hook_opportunity_id=(
+                                                    self._ready_recovery
+                                                    .start_hook_opportunity_id
+                                                ),
+                                                start_hook_action_id=action_id,
+                                                start_hook_emission_started_at=(
+                                                    execution.started_at
+                                                ),
+                                                start_hook_applied_at=(
+                                                    execution.completed_at
+                                                ),
+                                                hook_pending_started_at=(
+                                                    self.fsm.state_since
+                                                ),
+                                                start_hook_action_applied=True,
+                                            )
                                     if commit.previous_state != commit.next_state:
                                         self._log_transition(
                                             timestamp=elapsed,
@@ -6384,6 +6525,21 @@ class LiveDetectOnlyRuntime:
                         **saved_event,
                     },
                 )
+            hook_pending_evidence_summary = (
+                self._hook_pending_timeout_evidence.close()
+            )
+            for saved_event in (
+                self._hook_pending_timeout_evidence
+                .drain_completed_events()
+            ):
+                self.logger.event(
+                    "hook_pending_timeout_evidence_saved",
+                    {
+                        "timestamp": elapsed_total,
+                        "frame_index": captured,
+                        **saved_event,
+                    },
+                )
             if self.live_config.runtime_profile == "production":
                 self.console.emit(
                     f"shutdown: result={result_name} cycles={completed_cycles}"
@@ -6536,8 +6692,12 @@ class LiveDetectOnlyRuntime:
                 **press_v3_summary,
                 **press_anomaly_summary,
                 **result_pending_evidence_summary,
+                **hook_pending_evidence_summary,
                 "result_pending_timeout_count": (
                     result_pending_timeout_count
+                ),
+                "hook_pending_timeout_count": (
+                    hook_pending_timeout_count
                 ),
                 "preflight_passed": self._preflight_passed,
                 "preflight_failure_reason": self._preflight_failure_reason,

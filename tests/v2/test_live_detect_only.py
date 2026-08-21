@@ -155,6 +155,7 @@ def _runtime(
     idle_cast_retry_min_interval_seconds: float = 3.0,
     idle_cast_liveness_timeout_seconds: float = 3.0,
     press_anomaly_evidence: bool = False,
+    hook_anomaly_evidence: bool = False,
     runtime_profile: str = "diagnostic",
     session_logger=None,
 ) -> LiveDetectOnlyRuntime:
@@ -196,6 +197,7 @@ def _runtime(
                 idle_cast_liveness_timeout_seconds
             ),
             press_anomaly_evidence=press_anomaly_evidence,
+            hook_anomaly_evidence=hook_anomaly_evidence,
             runtime_profile=runtime_profile,
         ),
         emit_actions=emit_actions,
@@ -2785,6 +2787,127 @@ def test_live_stable_ready_emits_exactly_one_start_hook_and_waits_for_ack(
         and row["reason"] == "start_hook_action_applied"
         for row in transitions
     )
+
+
+@pytest.mark.parametrize("hook_anomaly_evidence", [False, True])
+def test_hook_pending_timeout_recorder_preserves_runtime_behavior(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+    hook_anomaly_evidence: bool,
+) -> None:
+    class PersistentReadyObserver:
+        def observe(self, _frame, context):
+            return PromptObservation(
+                PromptObservationKind.READY_BITE,
+                0.99,
+                {PromptObservationKind.READY_BITE.value: 0.99},
+                "hook_pending_timeout_test",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    class CompleteStartHookSink:
+        def __init__(self, _kwargs):
+            self.calls = []
+
+        def poll_panic(self):
+            return False
+
+        def apply(self, request, context):
+            self.calls.append((request, context))
+            return ActionExecutionResult(
+                context.action_id,
+                request.intent.value,
+                context.requested_at,
+                context.requested_at,
+                context.requested_at,
+                True,
+                True,
+                2,
+                2,
+                context.target_hwnd,
+                context.target_hwnd,
+                os_input_emitted=True,
+            )
+
+        def summary(self):
+            return {
+                "action_sink_type": "sendinput",
+                "action_allowlist": ["START_HOOK"],
+                "attempted_action_counts": {
+                    "START_HOOK": len(self.calls),
+                },
+                "applied_action_counts": {
+                    "START_HOOK": len(self.calls),
+                },
+            }
+
+    class CountingNullHookDetector:
+        def __init__(self):
+            self.calls = 0
+
+        def observe(self, _frame, context):
+            self.calls += 1
+            return HookObservation(
+                False, 0.0, context.frame_index, context.timestamp
+            )
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteStartHookSink(kwargs)
+        created.append(sink)
+        return sink
+
+    session = tmp_path / ("enabled" if hook_anomaly_evidence else "disabled")
+    capture = MockCapture(supported_frame, diagnostics={
+        "hwnd": 4242,
+        "window_title": "test-window",
+        "process": "BlackDesert64",
+        "process_id": 99,
+        "client_size": [2560, 1440],
+    })
+    runtime = _runtime(
+        session,
+        capture,
+        FakeClock(),
+        duration_seconds=3.6,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="START_HOOK",
+        action_sink_factory=factory,
+        hook_anomaly_evidence=hook_anomaly_evidence,
+    )
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=PersistentReadyObserver(),
+    )
+    counting_hook = CountingNullHookDetector()
+    runtime.hook_detector = counting_hook
+    runtime.fsm.force_state(RuntimeState.WAITING, 0.0, "test_waiting")
+    summary = runtime.run(max_frames=120)
+
+    assert len(created[0].calls) == 1
+    assert created[0].calls[0][0].intent == ActionIntent.START_HOOK
+    assert summary["actions_applied"] == 1
+    assert summary["hook_pending_timeout_count"] == 1
+    assert summary["hook_pending_timeout_evidence_saved_count"] == int(
+        hook_anomaly_evidence
+    )
+    assert capture.calls == summary["captured_frames"] + 1
+    assert counting_hook.calls == summary["detector_runs"]["hook"]
+    if hook_anomaly_evidence:
+        manifest = json.loads(
+            next(session.rglob("hook_pending_anomalies/*/manifest.json"))
+            .read_text(encoding="utf-8")
+        )
+        assert manifest["terminal_reason"] == "hook_pending_timeout"
+        assert manifest["episode_summary"][
+            "hook_detector_executed_count"
+        ] == manifest["sample_count"]
+        assert manifest["sample_count"] <= 140
+    else:
+        assert not list(session.rglob("hook_pending_anomalies"))
 
 
 def test_live_ready_87_after_abnormal_press_recovery_emits_once(

@@ -147,6 +147,7 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert default.idle_cast_retry_min_interval_seconds == 3.0
     assert default.idle_cast_liveness_timeout_seconds == 3.0
     assert default.press_anomaly_evidence is False
+    assert default.hook_anomaly_evidence is False
     assert default.press_anomaly_buffer_frames == 12
     assert default.press_anomaly_max_episodes == 20
     selected = parse_args([
@@ -166,6 +167,7 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
         "--idle-cast-liveness-timeout-seconds", "4.5",
         "--max-completed-cycles", "3",
         "--press-anomaly-evidence",
+        "--hook-anomaly-evidence",
         "--press-anomaly-buffer-frames", "18",
         "--press-anomaly-max-episodes", "7",
     ])
@@ -184,6 +186,7 @@ def test_capture_backend_cli_is_explicit_and_validated() -> None:
     assert selected.idle_cast_liveness_timeout_seconds == 4.5
     assert selected.max_completed_cycles == 3
     assert selected.press_anomaly_evidence is True
+    assert selected.hook_anomaly_evidence is True
     assert selected.press_anomaly_buffer_frames == 18
     assert selected.press_anomaly_max_episodes == 7
     assert CAPTURE_BACKENDS == ("mss-region", "windows-graphics-capture")
