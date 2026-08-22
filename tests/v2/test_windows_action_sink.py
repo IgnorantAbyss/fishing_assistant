@@ -179,6 +179,56 @@ def test_cli_defaults_to_detect_only_with_no_sink() -> None:
     assert args.press_inter_key_gap_max_ms == 170
 
 
+def test_press_sink_starts_immediately_at_v3_deadline_and_keeps_key_pacing() -> None:
+    clock = FakeClock()
+    clock.value = 10.150
+    api = FakeWindowsApi()
+    sequence = ("A", "S")
+    request = ActionRequest(
+        ActionIntent.PRESS_SEQUENCE,
+        0.99,
+        "frozen",
+        {
+            "sequence": sequence,
+            "slot_capacity": 8,
+            "active_press_episode": True,
+            "panel_confirmed": True,
+            "frozen_by_consensus": True,
+            "press_timing_plan": {
+                "sampled_initial_delay_ms": 150,
+                "key_hold_ms": [40, 40],
+                "inter_key_gap_ms": [90],
+                "planned_total_duration_ms": 320,
+            },
+        },
+    )
+    sink = _sink(
+        api,
+        clock,
+        allowlist="PRESS_SEQUENCE",
+        config=WindowsActionConfig(
+            press_initial_delay_min_ms=150,
+            press_initial_delay_max_ms=250,
+            press_inter_key_gap_min_ms=90,
+            press_inter_key_gap_max_ms=170,
+            key_hold_ms=40,
+        ),
+    )
+
+    result = sink.apply(
+        request,
+        _context("press:v3:1", intent="PRESS"),
+    )
+
+    assert result.applied is True
+    assert [timing["key"] for timing in result.key_timings] == ["A", "S"]
+    assert result.started_at == pytest.approx(10.150)
+    assert result.key_timings[0]["started_at"] == pytest.approx(10.150)
+    assert result.key_timings[0]["completed_at"] == pytest.approx(10.190)
+    assert result.key_timings[1]["started_at"] == pytest.approx(10.280)
+    assert result.key_timings[1]["completed_at"] == pytest.approx(10.320)
+
+
 def test_explicit_collect_only_cli_contract() -> None:
     args = parse_args([
         "--window-title", "exact-title", "--emit-actions", "true",

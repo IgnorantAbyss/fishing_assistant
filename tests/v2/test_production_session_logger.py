@@ -146,6 +146,18 @@ def test_cli_and_launcher_define_bounded_production_defaults() -> None:
     assert defaults[
         defaults.index("--idle-cast-liveness-timeout-seconds") + 1
     ] == "3.0"
+    assert defaults[
+        defaults.index("--press-initial-delay-min-ms") + 1
+    ] == "150"
+    assert defaults[
+        defaults.index("--press-initial-delay-max-ms") + 1
+    ] == "250"
+    assert defaults[
+        defaults.index("--press-inter-key-gap-min-ms") + 1
+    ] == "90"
+    assert defaults[
+        defaults.index("--press-inter-key-gap-max-ms") + 1
+    ] == "170"
     assert defaults[defaults.index("--press-key-hold-ms") + 1] == "40"
     assert defaults[defaults.index("--duration-seconds") + 1] == "0"
     assert defaults[defaults.index("--max-completed-cycles") + 1] == "0"

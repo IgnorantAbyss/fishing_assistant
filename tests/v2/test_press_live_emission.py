@@ -110,6 +110,62 @@ def test_press_schedule_samples_bounded_reproducible_pacing() -> None:
     )
 
 
+def test_production_v3_shortens_only_freeze_to_first_emission_deadline() -> None:
+    freeze_at = 10.0
+    legacy = PressLiveEmissionTracker(PressLiveEmissionConfig(
+        initial_delay_min_ms=300,
+        initial_delay_max_ms=300,
+        inter_key_gap_min_ms=90,
+        inter_key_gap_max_ms=90,
+        key_hold_ms=40,
+    ))
+    production_v3 = PressLiveEmissionTracker(PressLiveEmissionConfig(
+        initial_delay_min_ms=150,
+        initial_delay_max_ms=150,
+        inter_key_gap_min_ms=90,
+        inter_key_gap_max_ms=90,
+        key_hold_ms=40,
+    ))
+
+    legacy_pending, _ = legacy.schedule(
+        episode_index=1,
+        timestamp=freeze_at,
+        sequence=tuple("ASDWDAS"),
+        slot_capacity=8,
+    )
+    v3_pending, v3_events = production_v3.schedule(
+        episode_index=1,
+        timestamp=freeze_at,
+        sequence=tuple("ASDWDAS"),
+        slot_capacity=8,
+    )
+
+    assert legacy_pending is not None and v3_pending is not None
+    assert legacy_pending.scheduled_at == v3_pending.scheduled_at == freeze_at
+    assert legacy_pending.deadline == pytest.approx(10.300)
+    assert v3_pending.deadline == pytest.approx(10.150)
+    assert production_v3.due(10.149) is False
+    assert production_v3.due(10.150) is True
+    started, _ = production_v3.begin_scheduled_attempt(timestamp=10.150)
+    assert started is not None
+    assert started.sequence == tuple("ASDWDAS")
+    assert started.timing.key_hold_ms == (40,) * 7
+    assert started.timing.inter_key_gap_ms == (90,) * 6
+    assert v3_events[0].payload["timestamp"] == freeze_at
+    assert v3_events[0].payload["deadline"] == pytest.approx(10.150)
+
+    repeated, blocked = production_v3.schedule(
+        episode_index=1,
+        timestamp=10.151,
+        sequence=tuple("ASDWDAS"),
+        slot_capacity=8,
+    )
+    assert repeated is None
+    assert blocked[0].payload["reason"] == (
+        "press_episode_opportunity_already_reserved"
+    )
+
+
 class ScriptedTimingRng:
     def __init__(self, values: list[int]) -> None:
         self.values = iter(values)
