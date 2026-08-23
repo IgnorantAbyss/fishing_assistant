@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import random
 import threading
@@ -14,12 +15,14 @@ from src.detectors.press_background_subtraction_v3 import (
     PressBackgroundModel,
     PressBackgroundSubtractionDetectorV3,
     PressForegroundExtractor,
+    PressKeyStripLocation,
     PressKeyStripLocator,
 )
 from src.fishing_v2.domain.frame_context import FrameContext
 from src.fishing_v2.domain.observations import PressObservation
 from src.fishing_v2.legacy_adapters.press_background_subtraction_v3_adapter import (
     BackgroundSubtractionPressDetectorAdapter,
+    PressEpisodeGeometryContinuity,
 )
 from src.fishing_v2.live.press_v3_shadow import PressV3ShadowRunner
 from src.fishing_v2.live.press_v3_input_effect import (
@@ -74,6 +77,25 @@ def _full_frame_for_press_roi(roi: np.ndarray) -> np.ndarray:
     assert roi.shape[:2] == (y2 - y1, x2 - x1)
     full_frame[y1:y2, x1:x2] = roi
     return full_frame
+
+
+def _shift_grid_phase(
+    location: PressKeyStripLocation,
+    pitch_fraction: float,
+) -> PressKeyStripLocation:
+    assert location.key_strip_bbox is not None
+    offset = round(location.slot_width * pitch_fraction)
+    return replace(
+        location,
+        key_strip_bbox=tuple(
+            value + offset if index in (0, 2) else value
+            for index, value in enumerate(location.key_strip_bbox)
+        ),
+        slot_bboxes=tuple(
+            (x1 + offset, y1, x2 + offset, y2)
+            for x1, y1, x2, y2 in location.slot_bboxes
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -180,6 +202,220 @@ def test_v3_locator_excludes_instruction_and_progress_and_has_ten_slots() -> Non
     assert locator["key_strip_bbox"][1] > image.shape[0] * 0.45
     assert locator["progress_baseline_y"] >= locator["key_strip_bbox"][3]
     assert all(item["foreground_pixel_count"] == 0 for item in result["slots"][5:])
+
+
+@pytest.mark.parametrize("pitch_fraction", (-0.5, 0.5, -1.0, 1.0))
+def test_v3_episode_geometry_rejects_grid_phase_alias_relative_to_pitch(
+    pitch_fraction: float,
+) -> None:
+    image = _read(
+        STRUCTURAL / "session_20260802_145338_episode_1_dsddd.png"
+    )
+    detector = PressBackgroundSubtractionDetectorV3()
+    anchor = detector.locator.locate(image)
+    anchor_result = detector.detect(image, location=anchor)
+    continuity = PressEpisodeGeometryContinuity()
+    assert continuity.consider_anchor(anchor, anchor_result) is True
+
+    shifted = _shift_grid_phase(anchor, pitch_fraction)
+    resolved, diagnostic = continuity.resolve(shifted)
+
+    assert resolved == anchor
+    assert diagnostic["using_anchor"] is True
+    assert diagnostic["rejection_reason"] == "current_grid_phase_jump"
+    assert abs(diagnostic["origin_delta_pitch_fraction"]) >= 0.45
+
+
+def test_v3_episode_geometry_accepts_small_drift_without_moving_anchor() -> None:
+    image = _read(
+        STRUCTURAL / "session_20260802_145338_episode_1_dsddd.png"
+    )
+    detector = PressBackgroundSubtractionDetectorV3()
+    anchor = detector.locator.locate(image)
+    continuity = PressEpisodeGeometryContinuity()
+    assert continuity.consider_anchor(
+        anchor, detector.detect(image, location=anchor)
+    )
+    candidate = _shift_grid_phase(anchor, 0.10)
+
+    resolved, diagnostic = continuity.resolve(candidate)
+
+    assert resolved == candidate
+    assert continuity.anchor == anchor
+    assert diagnostic["decision"] == "current_geometry_within_episode_drift"
+
+
+def test_v3_discontinuous_panel_cannot_replace_active_episode_anchor() -> None:
+    image = _read(
+        STRUCTURAL / "session_20260802_145338_episode_1_dsddd.png"
+    )
+    detector = PressBackgroundSubtractionDetectorV3()
+    anchor = detector.locator.locate(image)
+    continuity = PressEpisodeGeometryContinuity()
+    assert continuity.consider_anchor(
+        anchor, detector.detect(image, location=anchor)
+    )
+    assert anchor.broad_panel_bbox is not None
+    broad_width = anchor.broad_panel_bbox[2] - anchor.broad_panel_bbox[0]
+    discontinuous = replace(
+        anchor,
+        broad_panel_bbox=tuple(
+            value + broad_width if index in (0, 2) else value
+            for index, value in enumerate(anchor.broad_panel_bbox)
+        ),
+    )
+
+    resolved, diagnostic = continuity.resolve(discontinuous)
+
+    assert resolved.geometry_stable is False
+    assert resolved.key_strip_bbox is None
+    assert continuity.anchor == anchor
+    assert diagnostic["rejection_reason"] == (
+        "broad_panel_continuity_not_confirmed"
+    )
+
+
+def test_v3_locator_miss_grace_requires_visible_panel_and_is_bounded() -> None:
+    image = _read(
+        STRUCTURAL / "session_20260802_145338_episode_1_dsddd.png"
+    )
+    detector = PressBackgroundSubtractionDetectorV3()
+    anchor = detector.locator.locate(image)
+    continuity = PressEpisodeGeometryContinuity()
+    assert continuity.consider_anchor(
+        anchor, detector.detect(image, location=anchor)
+    )
+    miss = replace(
+        anchor,
+        key_strip_bbox=None,
+        slot_width=0.0,
+        slot_height=0.0,
+        slot_bboxes=(),
+        geometry_stable=False,
+        rejection_reason="ten_slot_line_geometry_not_found",
+        broad_panel_present=True,
+    )
+
+    first, first_diagnostic = continuity.resolve(miss)
+    second, second_diagnostic = continuity.resolve(miss)
+    third, third_diagnostic = continuity.resolve(miss)
+
+    assert first == anchor
+    assert second == anchor
+    assert first_diagnostic["locator_miss_streak"] == 1
+    assert second_diagnostic["locator_miss_streak"] == 2
+    assert third == miss
+    assert third_diagnostic["decision"] == "locator_miss_grace_exhausted"
+
+    continuity.reset()
+    assert continuity.consider_anchor(
+        anchor, detector.detect(image, location=anchor)
+    )
+    visually_absent = replace(miss, broad_panel_present=False)
+    resolved, diagnostic = continuity.resolve(visually_absent)
+    assert resolved == visually_absent
+    assert diagnostic["decision"] == "broad_panel_not_continuous"
+
+
+def test_v3_episode_190_equivalent_geometry_freezes_exact_sequence() -> None:
+    roi = _read(
+        STRUCTURAL / "session_20260802_145338_episode_1_dsddd.png"
+    )
+    baseline_locator = PressKeyStripLocator().locate(roi)
+    miss = replace(
+        baseline_locator,
+        key_strip_bbox=None,
+        slot_width=0.0,
+        slot_height=0.0,
+        slot_bboxes=(),
+        geometry_stable=False,
+        rejection_reason="ten_slot_line_geometry_not_found",
+        broad_panel_present=True,
+    )
+
+    class ScriptedLocator:
+        def __init__(self) -> None:
+            self.values = iter((
+                baseline_locator,
+                _shift_grid_phase(baseline_locator, -0.5),
+                _shift_grid_phase(baseline_locator, 0.5),
+                miss,
+                miss,
+            ))
+            self.calls = 0
+
+        def locate(self, _image: np.ndarray) -> PressKeyStripLocation:
+            self.calls += 1
+            return next(self.values)
+
+    class CountingDetector(PressBackgroundSubtractionDetectorV3):
+        def __init__(self, locator: ScriptedLocator) -> None:
+            super().__init__(locator=locator)  # type: ignore[arg-type]
+            self.detect_calls = 0
+
+        def detect(
+            self,
+            press_roi: np.ndarray,
+            *,
+            location: PressKeyStripLocation | None = None,
+        ) -> dict[str, object]:
+            self.detect_calls += 1
+            return super().detect(press_roi, location=location)
+
+    locator = ScriptedLocator()
+    detector = CountingDetector(locator)
+    adapter = BackgroundSubtractionPressDetectorAdapter(detector=detector)
+    qualifier = DetectorEvidenceQualifier()
+    full_frame = _full_frame_for_press_roi(roi)
+    qualified = None
+    observations = []
+    for index in range(5):
+        observation = adapter.observe(
+            full_frame,
+            FrameContext(index + 1, index * 0.05, metadata={}),
+        )
+        observations.append(observation)
+        qualified, _ = qualifier._press(
+            observation, DetectorActivationMode.ACTIVE
+        )
+
+    assert qualified is not None
+    assert qualified.sequence_ready is True
+    assert qualified.sequence == tuple("DSDDD")
+    assert locator.calls == 5
+    assert detector.detect_calls == 5
+    decisions = [
+        item.evidence["v3"]["geometry_continuity"]["decision"]
+        for item in observations
+    ]
+    assert decisions == [
+        "episode_anchor_created",
+        "anchor_preserved_after_grid_phase_jump",
+        "anchor_preserved_after_grid_phase_jump",
+        "anchor_preserved_during_locator_miss",
+        "anchor_preserved_during_locator_miss",
+    ]
+
+
+def test_v3_episode_geometry_resets_on_disappearance_and_explicit_recovery() -> None:
+    roi = _read(
+        STRUCTURAL / "session_20260802_145338_episode_1_dsddd.png"
+    )
+    frame = _full_frame_for_press_roi(roi)
+    adapter = BackgroundSubtractionPressDetectorAdapter()
+    adapter.observe(frame, FrameContext(1, 0.0, metadata={}))
+    assert adapter.geometry_continuity.anchor is not None
+
+    blank = np.zeros_like(frame)
+    adapter.observe(blank, FrameContext(2, 0.1, metadata={}))
+    absent = adapter.observe(blank, FrameContext(3, 0.2, metadata={}))
+    assert absent.evidence["press_episode_id"] is None
+    assert adapter.geometry_continuity.anchor is None
+
+    adapter.observe(frame, FrameContext(4, 0.3, metadata={}))
+    assert adapter.geometry_continuity.anchor is not None
+    adapter.reset_temporal_state()
+    assert adapter.geometry_continuity.anchor is None
 
 
 def test_v3_valid_single_and_two_key_sequences_have_no_minimum_length() -> None:

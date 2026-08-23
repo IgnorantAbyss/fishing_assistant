@@ -2181,7 +2181,15 @@ class LiveDetectOnlyRuntime:
         self.missed_ready_recovery.reset()
         self.recovery_synchronizer.reset(started_at=timestamp)
         self.controller.reset_action_history_for_authoritative_idle()
+        self._reset_press_detector_temporal_state()
         self.deduplicator.begin_recovered_cycle()
+
+    def _reset_press_detector_temporal_state(self) -> None:
+        reset_press_state = getattr(
+            self.press_detector, "reset_temporal_state", None
+        )
+        if callable(reset_press_state):
+            reset_press_state()
 
     def _overlay_lines(
         self,
@@ -4567,6 +4575,7 @@ class LiveDetectOnlyRuntime:
                             self._hook_action_lifecycle.can_rearm_after_sync()
                         )
                         self.controller.reset_for_sync_recovery(elapsed)
+                        self._reset_press_detector_temporal_state()
                         self.recovery_synchronizer.reset(started_at=elapsed)
                         self.deduplicator.reset_for_sync_recovery(
                             preserve_cycle=preserve_hook_cycle
@@ -5086,6 +5095,23 @@ class LiveDetectOnlyRuntime:
                     for transition_result in transition_results:
                         if transition_result.previous_state == transition_result.next_state:
                             continue
+                        if (
+                            transition_result.previous_state
+                            in {
+                                RuntimeState.SYNCING,
+                                RuntimeState.SYNC_REQUIRED,
+                                RuntimeState.RESULT_PENDING,
+                                RuntimeState.PRESS,
+                            }
+                            and transition_result.next_state
+                            not in {
+                                RuntimeState.SYNCING,
+                                RuntimeState.SYNC_REQUIRED,
+                                RuntimeState.RESULT_PENDING,
+                                RuntimeState.PRESS,
+                            }
+                        ):
+                            self._reset_press_detector_temporal_state()
                         screenshot = (
                             self.logger.save_screenshot(frame, captured, "runtime_transition")
                             if self.live_config.save_transition_frames else None

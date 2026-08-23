@@ -104,6 +104,11 @@ class PressAnomalyEvidenceRecorder:
                 "sequence_confidence": float(observation.sequence_confidence),
                 "panel_phase": observation.evidence.get("panel_phase"),
                 "slots": list(observation.evidence.get("slots", ())),
+                "geometry_continuity": dict(
+                    observation.evidence.get("v3", {}).get(
+                        "geometry_continuity", {}
+                    )
+                ),
                 "press_completeness_certificate": dict(certificate or {}),
             },
         )

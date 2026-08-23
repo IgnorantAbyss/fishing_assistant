@@ -36,6 +36,12 @@ def _observation(frame: int) -> PressObservation:
                 "mapped_key": "D",
                 "arrow_confidence": 0.9931,
             }],
+            "v3": {
+                "geometry_continuity": {
+                    "decision": "anchor_preserved_after_grid_phase_jump",
+                    "origin_delta_pitch_fraction": 0.5,
+                },
+            },
         },
     )
 
@@ -75,7 +81,12 @@ def test_genuine_pre_freeze_incomplete_episode_still_writes_evidence(
     summary = recorder.close()
 
     assert summary["press_anomaly_episode_count"] == 1
-    assert (tmp_path / "press_anomalies" / "episode_1").is_dir()
+    episode = tmp_path / "press_anomalies" / "episode_1"
+    assert episode.is_dir()
+    sample = json.loads(next(episode.glob("frame_*.json")).read_text("utf-8"))
+    assert sample["geometry_continuity"]["decision"] == (
+        "anchor_preserved_after_grid_phase_jump"
+    )
 
 
 @pytest.mark.parametrize(

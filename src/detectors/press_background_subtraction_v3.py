@@ -36,6 +36,11 @@ class PressKeyStripLocation:
     geometry_stable: bool
     rejection_reason: str | None
     progress_baseline_y: int | None = None
+    broad_panel_candidate: bool = False
+    broad_panel_bbox: tuple[int, int, int, int] | None = None
+    broad_panel_confidence: float = 0.0
+    broad_grid_match_count: int = 0
+    broad_panel_present: bool = False
 
     def payload(self) -> dict[str, Any]:
         value = asdict(self)
@@ -44,6 +49,10 @@ class PressKeyStripLocation:
             if self.key_strip_bbox is not None else None
         )
         value["slot_bboxes"] = [list(item) for item in self.slot_bboxes]
+        value["broad_panel_bbox"] = (
+            list(self.broad_panel_bbox)
+            if self.broad_panel_bbox is not None else None
+        )
         return value
 
 
@@ -270,21 +279,32 @@ class PressKeyStripLocator:
             )
         legacy_geometry = _find_panel_geometry(press_roi)
         legacy_bbox = legacy_geometry.get("panel_bbox")
+        broad_bbox = (
+            tuple(int(value) for value in legacy_bbox)
+            if isinstance(legacy_bbox, (list, tuple))
+            and len(legacy_bbox) == 4
+            else None
+        )
+        broad_candidate = bool(
+            legacy_geometry.get("panel_candidate", False)
+            or broad_bbox is not None
+        )
+        broad_present = bool(legacy_geometry.get("panel_present", False))
+        broad_confidence = float(
+            legacy_geometry.get("panel_confidence", 0.0)
+        )
+        broad_grid_match_count = int(
+            legacy_geometry.get("grid_match_count", 0)
+        )
         bbox, grid_match_count = self._vertical_grid_geometry(
             press_roi,
-            fallback_bbox=(
-                tuple(int(value) for value in legacy_bbox)
-                if isinstance(legacy_bbox, tuple) and len(legacy_bbox) == 4
-                else None
-            ),
+            fallback_bbox=broad_bbox,
         )
         if bbox is None:
             bbox, grid_match_count = self._line_geometry(
             press_roi,
             fallback_bbox=(
-                tuple(int(value) for value in legacy_bbox)
-                if isinstance(legacy_bbox, tuple) and len(legacy_bbox) == 4
-                else None
+                broad_bbox
             ),
             )
         if bbox is None:
@@ -296,6 +316,11 @@ class PressKeyStripLocator:
                 (),
                 False,
                 "ten_slot_line_geometry_not_found",
+                broad_panel_candidate=broad_candidate,
+                broad_panel_bbox=broad_bbox,
+                broad_panel_confidence=round(broad_confidence, 4),
+                broad_grid_match_count=broad_grid_match_count,
+                broad_panel_present=broad_present,
             )
         height, width = press_roi.shape[:2]
         x1, fallback_y1, x2, fallback_y2 = (int(value) for value in bbox)
@@ -348,6 +373,11 @@ class PressKeyStripLocator:
             stable,
             None if stable else "ten_slot_geometry_unstable",
             progress_y,
+            broad_candidate,
+            broad_bbox,
+            round(broad_confidence, 4),
+            broad_grid_match_count,
+            broad_present,
         )
 
 
@@ -745,9 +775,14 @@ class PressBackgroundSubtractionDetectorV3:
             "input_effect_uses_classification": False,
         }
 
-    def detect(self, press_roi: np.ndarray) -> dict[str, Any]:
+    def detect(
+        self,
+        press_roi: np.ndarray,
+        *,
+        location: PressKeyStripLocation | None = None,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
-        location = self.locator.locate(press_roi)
+        location = location or self.locator.locate(press_roi)
         if not location.geometry_stable or location.key_strip_bbox is None:
             return {
                 "detected": False,
