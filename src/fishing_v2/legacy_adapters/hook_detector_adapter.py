@@ -34,6 +34,15 @@ class LegacyHookDetectorAdapter:
                     "adapter": "legacy_hook_detector",
                     "fallback_ratio_trustworthy": False,
                     "fallback_ratio_reason": "legacy_fill_ratio_not_action_calibrated",
+                    "context_score": result.get("context_score"),
+                    "context_ok": result.get("context_ok"),
+                    "structural_candidate": result.get("structural_candidate", False),
+                    "structural_reason": result.get("structural_reason"),
+                    "structural_features": list(result.get("structural_features", [])),
+                    "candidate_source": result.get("candidate_source"),
+                    "raw_detected": result.get(
+                        "raw_detected", result.get("detected", False)
+                    ),
                     **crossing.evidence(),
                 },
             )

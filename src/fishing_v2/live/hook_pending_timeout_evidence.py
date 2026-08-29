@@ -193,7 +193,24 @@ class HookPendingTimeoutEvidenceRecorder:
                 "crossing_geometry_version"
             ),
             "detected": observation.detected,
+            "raw_detected": evidence.get(
+                "raw_detected", observation.detected
+            ),
             "confidence": observation.confidence,
+            "context_score": evidence.get(
+                "context_score", raw_values.get("live_context_score")
+            ),
+            "context_ok": evidence.get(
+                "context_ok", raw_values.get("context_ok")
+            ),
+            "structural_candidate": evidence.get(
+                "structural_candidate", False
+            ),
+            "structural_reason": evidence.get("structural_reason"),
+            "structural_features": list(
+                evidence.get("structural_features", ())
+            ),
+            "candidate_source": evidence.get("candidate_source"),
             "hook_roi": debug.get("roi_name"),
             "bar_bbox": bar_bbox,
             "locator_success": bar_bbox is not None,

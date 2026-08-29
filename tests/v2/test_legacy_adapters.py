@@ -74,3 +74,39 @@ def test_adapter_preserves_frame_context() -> None:
     observation = LegacyGetDetectorAdapter(lambda frame: {"detected": False, "confidence": 0.2}).observe(None, CONTEXT)
     assert observation.frame_index == 7
     assert observation.timestamp == 1.2
+
+
+def test_hook_adapter_preserves_structural_candidate_observability() -> None:
+    detector_calls = 0
+    result = {
+        "detected": True,
+        "raw_detected": True,
+        "confidence": 1.0,
+        "fill_ratio": 0.88,
+        "divider_ratio": 0.88,
+        "matched_features": ["hook_bar_rect", "bar_fill", "divider_line"],
+        "context_score": 0.3141,
+        "context_ok": False,
+        "structural_candidate": True,
+        "structural_reason": "strong_hook_structural_evidence",
+        "structural_features": ["bar_shape_geometry", "divider_line"],
+        "candidate_source": "structural",
+        "debug": {},
+    }
+
+    def detector(*args, **kwargs):
+        nonlocal detector_calls
+        detector_calls += 1
+        return result
+
+    observation = LegacyHookDetectorAdapter(
+        detector
+    ).observe(None, CONTEXT)
+
+    assert detector_calls == 1
+    assert observation.detected is True
+    assert observation.evidence["raw_detected"] is True
+    assert observation.evidence["context_score"] == 0.3141
+    assert observation.evidence["context_ok"] is False
+    assert observation.evidence["structural_candidate"] is True
+    assert observation.evidence["candidate_source"] == "structural"

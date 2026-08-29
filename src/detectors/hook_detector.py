@@ -130,6 +130,54 @@ def _live_context_score(crop: np.ndarray, *, precise: bool) -> float | None:
     return _image_similarity(crop, template) if template is not None else None
 
 
+def _strong_structural_candidate(
+    *,
+    precise_bar: bool,
+    shape_geometry_ok: bool,
+    local_bar: tuple[int, int, int, int],
+    local_fill: tuple[int, int, int, int] | None,
+    local_divider: int | None,
+    red_mask: np.ndarray,
+    cyan_mask: np.ndarray,
+) -> tuple[bool, str, list[str]]:
+    """Validate same-frame Hook-specific structure below the context floor.
+
+    This is a raw-candidate path only. It deliberately has no temporal state
+    and does not decide whether the fill crossed the action threshold.
+    """
+    features: list[str] = []
+    if not precise_bar:
+        return False, "structural_fallback_requires_precise_hook_roi", features
+    features.append("precise_hook_roi")
+    if not shape_geometry_ok:
+        return False, "bar_shape_geometry_invalid", features
+    features.extend(("bar_shape_geometry", "expected_hook_roi_position"))
+    if local_fill is None:
+        return False, "bar_fill_missing", features
+    features.append("red_bar_fill")
+    if local_divider is None:
+        return False, "divider_line_missing", features
+    features.append("divider_line")
+
+    left, top, right, bottom = local_bar
+    fill_left, fill_top, fill_right, fill_bottom = local_fill
+    red_pixels = int(np.count_nonzero(red_mask[top:bottom, left:right]))
+    cyan_pixels = int(np.count_nonzero(cyan_mask[top:bottom, left:right]))
+    if red_pixels <= 0 or cyan_pixels <= 0:
+        return False, "red_cyan_bar_relationship_missing", features
+    features.append("red_cyan_bar_relationship")
+
+    fill_within_bar = bool(
+        left <= fill_left < fill_right <= right
+        and top <= fill_top < fill_bottom <= bottom
+    )
+    divider_within_bar = bool(left < local_divider < right)
+    if not fill_within_bar or not divider_within_bar:
+        return False, "divider_fill_geometry_conflict", features
+    features.append("divider_fill_geometry")
+    return True, "strong_hook_structural_evidence", features
+
+
 def _prompt_similarity(image_a: np.ndarray, image_b: np.ndarray) -> float:
     """Compare bright glyph and edge structure without OCR or scene colour."""
     size = (260, 54)
@@ -221,6 +269,13 @@ def detect_hook_bar(
             "perfect_zone_ratio": 0.95,
             "should_press_space": False,
             "matched_features": [],
+            "raw_detected": False,
+            "context_score": None,
+            "context_ok": None,
+            "structural_candidate": False,
+            "structural_reason": "bar_candidate_missing",
+            "structural_features": [],
+            "candidate_source": None,
             "debug": {
                 "roi_name": bar_roi_name,
                 "prompt_roi_name": prompt_roi_name,
@@ -245,16 +300,39 @@ def detect_hook_bar(
     # a modest context floor only rejects unrelated colourful UI.
     context_floor = 0.36 if precise_bar else 0.45
     context_ok = context_score is None or context_score >= context_floor
-    geometry_ok = (
+    shape_geometry_ok = (
         bar_width >= minimum_width
         and (10 if precise_bar else 12) <= bar_height <= (
             max(64, int(crop.shape[0] * 0.68)) if precise_bar else int(crop.shape[0] * 0.36)
         )
         and local_bar[1] >= (0 if precise_bar else int(crop.shape[0] * 0.60))
         and dark_ratio >= 0.08
-        and context_ok
     )
-    if not geometry_ok:
+    local_divider = (
+        _find_divider(hsv, local_bar, local_fill)
+        if shape_geometry_ok else None
+    )
+    structural_candidate, structural_reason, structural_features = (
+        _strong_structural_candidate(
+            precise_bar=precise_bar,
+            shape_geometry_ok=shape_geometry_ok,
+            local_bar=local_bar,
+            local_fill=local_fill,
+            local_divider=local_divider,
+            red_mask=red_mask,
+            cyan_mask=cyan_mask,
+        )
+    )
+    raw_detected = bool(
+        shape_geometry_ok and (context_ok or structural_candidate)
+    )
+    candidate_source = (
+        "both" if context_ok and structural_candidate
+        else "context" if context_ok and shape_geometry_ok
+        else "structural" if structural_candidate
+        else None
+    )
+    if not raw_detected:
         debug_path = _save_debug_image(frame, roi, None, None, None, source) if save_debug else None
         return {
             "detected": False,
@@ -265,6 +343,13 @@ def detect_hook_bar(
             "perfect_zone_ratio": 0.95,
             "should_press_space": False,
             "matched_features": [],
+            "raw_detected": False,
+            "context_score": context_score,
+            "context_ok": context_ok,
+            "structural_candidate": structural_candidate,
+            "structural_reason": structural_reason,
+            "structural_features": structural_features,
+            "candidate_source": candidate_source,
             "debug": {
                 "roi_name": bar_roi_name,
                 "prompt_roi_name": prompt_roi_name,
@@ -274,6 +359,13 @@ def detect_hook_bar(
                     "minimum_width_px": minimum_width,
                     "dark_ratio": round(dark_ratio, 4),
                     "live_context_score": round(context_score, 4) if context_score is not None else None,
+                    "context_floor": context_floor,
+                    "context_ok": context_ok,
+                    "shape_geometry_ok": shape_geometry_ok,
+                    "structural_candidate": structural_candidate,
+                    "structural_reason": structural_reason,
+                    "structural_features": structural_features,
+                    "candidate_source": candidate_source,
                     "hook_prompt_score": round(prompt_score, 4) if prompt_score is not None else None,
                 },
                 "debug_image_path": debug_path,
@@ -286,7 +378,6 @@ def detect_hook_bar(
         if local_fill is not None
         else None
     )
-    local_divider = _find_divider(hsv, local_bar, local_fill)
     divider_x = left + local_divider if local_divider is not None else None
     bar_width = max(1, bar_width)
     fill_ratio = (local_fill[2] - local_bar[0]) / bar_width if local_fill is not None else 0.0
@@ -312,6 +403,13 @@ def detect_hook_bar(
         "perfect_zone_ratio": 0.95,
         "should_press_space": False,
         "matched_features": features,
+        "raw_detected": True,
+        "context_score": context_score,
+        "context_ok": context_ok,
+        "structural_candidate": structural_candidate,
+        "structural_reason": structural_reason,
+        "structural_features": structural_features,
+        "candidate_source": candidate_source,
         "debug": {
             "roi_name": bar_roi_name,
             "prompt_roi_name": prompt_roi_name,
@@ -320,6 +418,13 @@ def detect_hook_bar(
                 "bar_height_px": bar_height,
                 "dark_ratio": round(dark_ratio, 4),
                 "live_context_score": round(context_score, 4) if context_score is not None else None,
+                "context_floor": context_floor,
+                "context_ok": context_ok,
+                "shape_geometry_ok": shape_geometry_ok,
+                "structural_candidate": structural_candidate,
+                "structural_reason": structural_reason,
+                "structural_features": structural_features,
+                "candidate_source": candidate_source,
                 "hook_prompt_score": round(prompt_score, 4) if prompt_score is not None else None,
                 "red_pixels": int(np.count_nonzero(red_mask)),
                 "cyan_pixels": int(np.count_nonzero(cyan_mask)),
