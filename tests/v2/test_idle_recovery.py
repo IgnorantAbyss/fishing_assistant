@@ -172,6 +172,12 @@ def test_cast_retry_is_delayed_and_bounded_to_one_retry() -> None:
     assert lifecycle.authorize_retry_after_visual_timeout() == "idle:1"
     retry = arm("recovery:2", 1.0)
     assert retry is not None
+    assert retry.recovery_generation == 1
+    assert retry.recovery_budget_consumed == 1
+    assert retry.recovery_budget_remaining == 1
+    assert retry.payload(1.0)["dedupe_key"] == (
+        "idle:1:generation:1"
+    )
     assert retry.eligible_at == pytest.approx(3.5)
     lifecycle.mark_cast_started("cast:2")
     lifecycle.record_execution(
@@ -192,6 +198,7 @@ def test_cast_retry_is_delayed_and_bounded_to_one_retry() -> None:
     assert events[0].payload["dedupe_reason"] == (
         "physical_idle_retry_limit_reached"
     )
+    assert events[0].payload["recovery_budget_remaining"] == 0
 
 
 def test_consumed_physical_idle_deduplicates_other_sources_without_timeout() -> None:

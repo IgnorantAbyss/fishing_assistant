@@ -20,6 +20,7 @@ CAST_SOURCE_TYPES = frozenset({
     CAST_SOURCE_RECOVERY,
     CAST_SOURCE_POST_CYCLE,
 })
+MAX_CAST_ATTEMPTS_PER_PHYSICAL_IDLE = 2
 
 
 @dataclass(frozen=True)
@@ -295,10 +296,17 @@ class CastArmingRecord:
     consumed: bool = False
     opportunity_id: str | None = None
     merged_source_ids: list[str] = field(default_factory=list)
+    recovery_generation: int = 0
+    recovery_budget_consumed: int = 0
+    recovery_budget_remaining: int = MAX_CAST_ATTEMPTS_PER_PHYSICAL_IDLE
 
     def payload(self, timestamp: float) -> dict[str, Any]:
         return {
             **asdict(self),
+            "dedupe_key": (
+                f"{self.physical_idle_id}:generation:"
+                f"{self.recovery_generation}"
+            ),
             "cooldown_age_seconds": max(
                 0.0, float(timestamp) - self.armed_at
             ),
@@ -324,6 +332,20 @@ class CastArmingLifecycle:
     @property
     def active(self) -> CastArmingRecord | None:
         return self._active
+
+    @property
+    def last_record(self) -> CastArmingRecord | None:
+        return self._last_record
+
+    def attempt_count(self, physical_idle_id: str) -> int:
+        return self._attempts_by_physical_idle.get(physical_idle_id, 0)
+
+    def recovery_budget_remaining(self, physical_idle_id: str) -> int:
+        return max(
+            0,
+            MAX_CAST_ATTEMPTS_PER_PHYSICAL_IDLE
+            - self.attempt_count(physical_idle_id),
+        )
 
     def recovery_physical_idle_id(self, default: str) -> str:
         if len(self._retry_authorized_physical_idle) == 1:
@@ -361,7 +383,7 @@ class CastArmingLifecycle:
             attempts = self._attempts_by_physical_idle.get(
                 physical_idle_id, 0
             )
-            if attempts >= 2:
+            if attempts >= MAX_CAST_ATTEMPTS_PER_PHYSICAL_IDLE:
                 dedupe_reason = "physical_idle_retry_limit_reached"
             elif attempts >= 1 and not (
                 source_type == CAST_SOURCE_RECOVERY
@@ -370,6 +392,7 @@ class CastArmingLifecycle:
             ):
                 dedupe_reason = "physical_idle_already_consumed"
         if dedupe_reason is not None:
+            attempts = self.attempt_count(physical_idle_id)
             return None, (IdleRecoveryEvent(
                 "cast_opportunity_deduplicated",
                 {
@@ -378,6 +401,14 @@ class CastArmingLifecycle:
                     "physical_idle_id": physical_idle_id,
                     "cycle_id": int(cycle_id),
                     "dedupe_reason": dedupe_reason,
+                    "dedupe_key": (
+                        f"{physical_idle_id}:generation:{attempts}"
+                    ),
+                    "recovery_generation": attempts,
+                    "recovery_budget_consumed": attempts,
+                    "recovery_budget_remaining": (
+                        self.recovery_budget_remaining(physical_idle_id)
+                    ),
                 },
             ),)
         eligible_at = float(timestamp) + float(cooldown_seconds)
@@ -394,6 +425,11 @@ class CastArmingLifecycle:
             int(cycle_id),
             float(timestamp),
             eligible_at,
+            recovery_generation=self.attempt_count(physical_idle_id),
+            recovery_budget_consumed=self.attempt_count(physical_idle_id),
+            recovery_budget_remaining=(
+                self.recovery_budget_remaining(physical_idle_id)
+            ),
         )
         self._seen_source_ids.add(source_id)
         if self._attempts_by_physical_idle.get(physical_idle_id, 0) >= 1:
@@ -522,5 +558,9 @@ class CastArmingLifecycle:
                 "cast_applied": False,
                 "terminal_outcome": None,
                 "consumed": False,
+                "recovery_generation": None,
+                "recovery_budget_consumed": None,
+                "recovery_budget_remaining": None,
+                "dedupe_key": None,
             }
         )

@@ -142,6 +142,10 @@ class FishingFSM:
         return self._hook_episode_active
 
     @property
+    def authoritative_physical_idle_id(self) -> str | None:
+        return self._authoritative_physical_idle_id
+
+    @property
     def pending_request(self) -> ActionRequest | None:
         """Expose proposal presence for lifecycle diagnostics only."""
         return self._pending_request

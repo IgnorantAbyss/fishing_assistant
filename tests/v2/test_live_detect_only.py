@@ -4456,3 +4456,152 @@ def test_result_pending_timeout_recorder_is_behaviorally_equivalent_and_does_not
     assert disabled["result_pending_timeout_evidence_saved_count"] == 0
     assert next(roots[True].rglob("manifest.json")).is_file()
     assert not (roots[False] / "result_pending_anomalies").exists()
+
+
+def test_session_20260829_cast_timeout_recovery_is_bounded_and_diagnosed(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    """Reproduce physical_idle:339 reuse without a silent long-run stall."""
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    runtime.live_config = replace(
+        runtime.live_config,
+        duration_seconds=65.0,
+    )
+    runtime._idle_recovery._episode_sequence = 338
+    runtime.cast_opportunity._sequence = 338
+
+    summary = runtime.run(max_frames=1700)
+
+    cast_calls = [
+        request for request, _context in created[0].calls
+        if request.intent == ActionIntent.CAST
+    ]
+    assert len(cast_calls) == 2
+    assert [
+        request.payload["cast_opportunity_id"] for request in cast_calls
+    ] == ["cast_opportunity:339", "cast_opportunity:340"]
+    assert {
+        request.payload["physical_idle_id"] for request in cast_calls
+    } == {"physical_idle:339"}
+    assert summary["actions_applied"] == 2
+    assert runtime.fsm.state == RuntimeState.SYNC_REQUIRED
+    # One preflight frame plus exactly one capture per runtime frame.
+    assert runtime.capture.calls == summary["captured_frames"] + 1
+
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    timeouts = [
+        item for item in events
+        if item["event_type"] == "cast_visual_timeout"
+    ]
+    starts = [
+        item for item in events
+        if item["event_type"] == "cast_timeout_reconciliation_started"
+    ]
+    exhausted = [
+        item for item in events
+        if item["event_type"] == "cast_recovery_exhausted"
+    ]
+    assert len(timeouts) == len(starts) == 2
+    assert [item["retry_authorized"] for item in starts] == [True, False]
+    assert [item["recovery_budget_remaining"] for item in starts] == [1, 0]
+    assert len(exhausted) == 1
+    assert exhausted[0]["recovery_budget_remaining"] == 0
+    assert exhausted[0]["liveness_outcome"] == (
+        "bounded_fail_closed_awaiting_fresh_non_idle_evidence"
+    )
+
+    recovery_events = [
+        item for item in events
+        if item["event_type"] == "authoritative_idle_recovery_applied"
+    ]
+    assert recovery_events
+    assert all(
+        item["timestamp"] != timeouts[0]["timestamp"]
+        for item in recovery_events
+    )
+    assert recovery_events[0]["new_physical_idle_episode_opened"] is False
+    assert recovery_events[0]["physical_idle_episode_id"] == (
+        cast_calls[0].payload["physical_idle_id"]
+    )
+
+    event_types = [item["event_type"] for item in events]
+    for lifecycle_event in (
+        "cast_opportunity_started",
+        "WOULD_CAST",
+        "cast_attempt_started",
+        "cast_commit_completed",
+    ):
+        assert event_types.count(lifecycle_event) == 2
+
+
+def test_cast_timeout_sync_recovery_services_fresh_hook_without_start_hook(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class FreshCrossedHookDetector:
+        def observe(self, _frame, context):
+            return HookObservation(
+                True,
+                0.90,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.75,
+                evidence={
+                    "matched_features": ["hook_bar_rect", "bar_fill"],
+                    "fallback_ratio_trustworthy": True,
+                },
+            )
+
+    created = []
+
+    def factory(**kwargs):
+        sink = CompleteCastSink(kwargs)
+        created.append(sink)
+        return sink
+
+    capture = MockCapture(
+        supported_frame,
+        diagnostics={
+            "hwnd": 4242,
+            "window_title": "test-window",
+            "process": "BlackDesert64",
+            "process_id": 99,
+            "client_size": [2560, 1440],
+        },
+    )
+    runtime = _runtime(
+        tmp_path,
+        capture,
+        FakeClock(),
+        duration_seconds=0.5,
+        emit_actions=True,
+        action_sink_name="sendinput",
+        action_allowlist="HOOK_ACTION",
+        action_sink_factory=factory,
+    )
+    runtime.hook_detector = FreshCrossedHookDetector()
+    runtime.fsm.force_state(
+        RuntimeState.SYNC_REQUIRED,
+        0.0,
+        "cast_visual_timeout",
+    )
+    runtime._cast_timeout_reconciliation_physical_idle_id = (
+        "physical_idle:339"
+    )
+
+    summary = runtime.run(max_frames=12)
+
+    assert [request.intent for request, _ in created[0].calls] == [
+        ActionIntent.HOOK_ACTION
+    ]
+    assert summary["unique_would_fire"] == {"WOULD_HOOK_ACTION": 1}
+    assert summary["actions_applied"] == 1
+    assert runtime.fsm.state == RuntimeState.RESULT_PENDING
+    # One preflight frame plus exactly one capture per runtime frame.
+    assert capture.calls == summary["captured_frames"] + 1

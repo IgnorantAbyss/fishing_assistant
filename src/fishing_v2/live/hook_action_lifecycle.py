@@ -160,19 +160,32 @@ class HookActionLifecycle:
             # Sink-side rejection before any OS input is not consumption.
             self._episode.hook_action_started = False
 
-    def can_rearm_after_sync(self) -> bool:
+    def can_rearm_after_sync(
+        self,
+        *,
+        authoritative_hook_evidence: bool = False,
+    ) -> bool:
         episode = self._episode
         return bool(
             episode is not None
-            and episode.start_hook_applied
+            and (
+                episode.start_hook_applied
+                or authoritative_hook_evidence
+            )
             and not episode.hook_action_emission_started
             and not episode.hook_action_applied
             and not episode.hook_action_consumed
             and episode.terminal_outcome is None
         )
 
-    def rearm_after_sync(self) -> bool:
-        if not self.can_rearm_after_sync():
+    def rearm_after_sync(
+        self,
+        *,
+        authoritative_hook_evidence: bool = False,
+    ) -> bool:
+        if not self.can_rearm_after_sync(
+            authoritative_hook_evidence=authoritative_hook_evidence
+        ):
             return False
         assert self._episode is not None
         if self._episode.sync_rearmed:

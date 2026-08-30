@@ -797,3 +797,19 @@ def test_new_physical_hook_episode_resets_terminal_watchdog_state() -> None:
     assert second.watchdog_phase == "NORMAL"
     assert second.terminal_outcome is None
     assert second.hard_liveness_deadline == 32.0
+
+
+def test_authoritative_hook_sync_can_rearm_without_observed_start_hook() -> None:
+    lifecycle = HookActionLifecycle()
+    lifecycle.begin_episode(
+        cycle_id=42,
+        timestamp=1.0,
+        start_hook_applied=False,
+    )
+
+    assert lifecycle.rearm_after_sync() is False
+    assert lifecycle.rearm_after_sync(
+        authoritative_hook_evidence=True
+    ) is True
+    assert lifecycle.episode is not None
+    assert lifecycle.episode.hook_action_opportunity_created is True
