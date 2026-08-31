@@ -74,6 +74,7 @@ from src.fishing_v2.live.idle_recovery import (
     CAST_SOURCE_RECOVERY,
     CAST_SOURCE_STARTUP,
     CastArmingLifecycle,
+    CastArmingPreparationStatus,
     IdleRecoveryCertificate,
     IdleRecoveryConfig,
     IdleRecoveryTracker,
@@ -735,6 +736,10 @@ class LiveDetectOnlyRuntime:
         self._cast_timeout_reconciliation_physical_idle_id: str | None = None
         self._cast_recovery_exhausted_physical_idle_ids = _BoundedIdentitySet()
         self._cast_recovery_exhausted_logged = _BoundedIdentitySet()
+        self._idle_recovery_rejection_keys = _BoundedIdentitySet()
+        self._sync_epoch_sequence = 0
+        self._sync_epoch_id: str | None = None
+        self._sync_epoch_started_at: float | None = None
         self._action_emission_in_progress = False
         self._press_action_emission_active = False
         self._hook_roi_clip_samples: list[HookROIFrame] | None = (
@@ -2009,7 +2014,7 @@ class LiveDetectOnlyRuntime:
         frame_index: int,
         cooldown_seconds: float,
         previous_state: RuntimeState,
-    ) -> None:
+    ) -> Any | None:
         record, events = self._cast_arming.request_cast_opportunity(
             source_type=source_type,
             source_id=source_id,
@@ -2062,6 +2067,122 @@ class LiveDetectOnlyRuntime:
                     certificate, timestamp=timestamp
                 ),
             })
+        return record
+
+    def _start_cast_timeout_reconciliation(
+        self,
+        *,
+        timestamp: float,
+        frame_index: int,
+        terminal_reason: str,
+    ) -> None:
+        """Authorize at most one retry after CAST lifecycle terminalization."""
+        retry_physical_idle_id = (
+            self._cast_arming.authorize_retry_after_visual_timeout()
+        )
+        last_cast_record = self._cast_arming.last_record
+        physical_idle_id = retry_physical_idle_id or (
+            last_cast_record.physical_idle_id
+            if last_cast_record is not None else None
+        )
+        self._cast_timeout_reconciliation_physical_idle_id = physical_idle_id
+        if (
+            physical_idle_id is not None
+            and retry_physical_idle_id is None
+            and self._cast_arming.recovery_budget_remaining(
+                physical_idle_id
+            ) == 0
+        ):
+            self._cast_recovery_exhausted_physical_idle_ids.add(
+                physical_idle_id
+            )
+        self.logger.event(
+            "cast_timeout_reconciliation_started",
+            {
+                "timestamp": timestamp,
+                "frame_index": frame_index,
+                "physical_idle_id": physical_idle_id,
+                "last_cast_opportunity_id": (
+                    last_cast_record.opportunity_id
+                    if last_cast_record is not None else None
+                ),
+                "terminal_reason": terminal_reason,
+                "recovery_generation": (
+                    self._cast_arming.attempt_count(physical_idle_id)
+                    if physical_idle_id is not None else None
+                ),
+                "recovery_budget_consumed": (
+                    self._cast_arming.attempt_count(physical_idle_id)
+                    if physical_idle_id is not None else None
+                ),
+                "recovery_budget_remaining": (
+                    self._cast_arming.recovery_budget_remaining(
+                        physical_idle_id
+                    )
+                    if physical_idle_id is not None else None
+                ),
+                "retry_authorized": retry_physical_idle_id is not None,
+                "final_chosen_recovery_state": (
+                    RuntimeState.SYNC_REQUIRED.value
+                ),
+            },
+        )
+
+    def _emit_cast_recovery_exhausted(
+        self,
+        *,
+        physical_idle_id: str,
+        timestamp: float,
+        frame_index: int,
+        blocker: str,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._cast_recovery_exhausted_physical_idle_ids.add(
+            physical_idle_id
+        )
+        if physical_idle_id in self._cast_recovery_exhausted_logged:
+            return
+        self._cast_recovery_exhausted_logged.add(physical_idle_id)
+        last_record = self._cast_arming.last_record
+        attempts = self._cast_arming.attempt_count(physical_idle_id)
+        self.logger.event("cast_recovery_exhausted", {
+            "timestamp": timestamp,
+            "frame_index": frame_index,
+            "physical_idle_id": physical_idle_id,
+            "last_cast_opportunity_id": (
+                last_record.opportunity_id
+                if last_record is not None
+                and last_record.physical_idle_id == physical_idle_id
+                else None
+            ),
+            "attempted_generations": list(range(attempts)),
+            "recovery_budget_consumed": attempts,
+            "recovery_budget_remaining": 0,
+            "dedupe_key": f"{physical_idle_id}:generation:{attempts}",
+            "terminal_reason": blocker,
+            "blocker": blocker,
+            "final_state": RuntimeState.SYNC_REQUIRED.value,
+            "final_chosen_recovery_state": RuntimeState.SYNC_REQUIRED.value,
+            "liveness_outcome": (
+                "bounded_fail_closed_awaiting_fresh_non_idle_evidence"
+            ),
+            **dict(extra or {}),
+        })
+
+    def _idle_certificate_fresh_for_current_sync_epoch(
+        self,
+        certificate: IdleRecoveryCertificate,
+    ) -> bool:
+        return bool(
+            self._sync_epoch_started_at is not None
+            and certificate.is_fresh_after(self._sync_epoch_started_at)
+        )
+
+    def _begin_sync_epoch(self, timestamp: float) -> None:
+        self._sync_epoch_sequence += 1
+        self._sync_epoch_id = f"sync_epoch:{self._sync_epoch_sequence}"
+        self._sync_epoch_started_at = float(timestamp)
+        self.recovery_synchronizer.reset(started_at=timestamp)
 
     def _service_idle_liveness_arm(
         self,
@@ -2139,9 +2260,14 @@ class LiveDetectOnlyRuntime:
         *,
         timestamp: float,
         frame_index: int,
+        preserve_cast_arm: bool = False,
     ) -> None:
-        cancelled_cast_arm = self._cast_arming.cancel(
-            "authoritative_idle_prompt_recovery"
+        cancelled_cast_arm = (
+            None
+            if preserve_cast_arm
+            else self._cast_arming.cancel(
+                "authoritative_idle_prompt_recovery"
+            )
         )
         if cancelled_cast_arm is not None:
             self.logger.event("cast_arming_cancelled", {
@@ -2751,9 +2877,14 @@ class LiveDetectOnlyRuntime:
                     )
                     sync_reason = None
                     processing_from_sync_required = self.fsm.state == RuntimeState.SYNC_REQUIRED
+                    if (
+                        processing_from_sync_required
+                        and self._sync_epoch_started_at is None
+                    ):
+                        self._begin_sync_epoch(elapsed)
                     transition_results: list[Any] = []
                     authoritative_idle_applied_this_frame = False
-                    cast_timed_out_this_frame = False
+                    cast_terminal_barrier_this_frame = False
                     sync_idle_recovery_ready = False
                     if (
                         missed_ready_update is not None
@@ -3032,7 +3163,7 @@ class LiveDetectOnlyRuntime:
                             item.event_type == "cast_visual_timeout"
                             for item in cast_visual_events
                         )
-                        cast_timed_out_this_frame = timed_out
+                        cast_terminal_barrier_this_frame = timed_out
                         if acknowledged:
                             if self.fsm.state == RuntimeState.SYNC_REQUIRED:
                                 transition_results.append(
@@ -3055,74 +3186,50 @@ class LiveDetectOnlyRuntime:
                                     elapsed,
                                     "cast_visual_timeout",
                                 ))
-                            retry_physical_idle_id = (
-                                self._cast_arming
-                                .authorize_retry_after_visual_timeout()
-                            )
-                            last_cast_record = self._cast_arming.last_record
-                            physical_idle_id = (
-                                retry_physical_idle_id
-                                or (
-                                    last_cast_record.physical_idle_id
-                                    if last_cast_record is not None
-                                    else None
-                                )
-                            )
-                            self._cast_timeout_reconciliation_physical_idle_id = (
-                                physical_idle_id
-                            )
-                            if (
-                                physical_idle_id is not None
-                                and retry_physical_idle_id is None
-                                and self._cast_arming
-                                .recovery_budget_remaining(
-                                    physical_idle_id
-                                ) == 0
-                            ):
-                                self._cast_recovery_exhausted_physical_idle_ids.add(
-                                    physical_idle_id
-                                )
-                            self.logger.event(
-                                "cast_timeout_reconciliation_started",
-                                {
-                                    "timestamp": elapsed,
-                                    "frame_index": captured,
-                                    "physical_idle_id": physical_idle_id,
-                                    "recovery_generation": (
-                                        self._cast_arming.attempt_count(
-                                            physical_idle_id
-                                        )
-                                        if physical_idle_id is not None
-                                        else None
-                                    ),
-                                    "recovery_budget_consumed": (
-                                        self._cast_arming.attempt_count(
-                                            physical_idle_id
-                                        )
-                                        if physical_idle_id is not None
-                                        else None
-                                    ),
-                                    "recovery_budget_remaining": (
-                                        self._cast_arming
-                                        .recovery_budget_remaining(
-                                            physical_idle_id
-                                        )
-                                        if physical_idle_id is not None
-                                        else None
-                                    ),
-                                    "retry_authorized": (
-                                        retry_physical_idle_id is not None
-                                    ),
-                                    "final_chosen_recovery_state": (
-                                        RuntimeState.SYNC_REQUIRED.value
-                                    ),
-                                },
+                            self._start_cast_timeout_reconciliation(
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                terminal_reason="cast_visual_timeout",
                             )
                         self._log_cast_events(
                             cast_visual_events,
                             timestamp=elapsed,
                             frame_index=captured,
                             runtime_state=self.fsm.state.value,
+                        )
+
+                    fsm_cast_timeout_due = bool(
+                        self.fsm.state == RuntimeState.CAST_PENDING
+                        and elapsed - self.fsm.state_since
+                        >= self.fsm.config.cast_pending_timeout_sec
+                    )
+                    if fsm_cast_timeout_due:
+                        # CAST terminalization is intentionally outside and
+                        # before controller.process(): otherwise the FSM could
+                        # commit SYNC_REQUIRED and the later IDLE scheduler could
+                        # overwrite it in this same control tick.
+                        cast_terminal_barrier_this_frame = True
+                        fsm_timeout_events = (
+                            self.cast_opportunity.terminalize_timeout(
+                                timestamp=elapsed,
+                                reason="cast_pending_timeout",
+                            )
+                        )
+                        self._log_cast_events(
+                            fsm_timeout_events,
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            runtime_state=self.fsm.state.value,
+                        )
+                        transition_results.append(self.fsm.force_state(
+                            RuntimeState.SYNC_REQUIRED,
+                            elapsed,
+                            "cast_pending_timeout",
+                        ))
+                        self._start_cast_timeout_reconciliation(
+                            timestamp=elapsed,
+                            frame_index=captured,
+                            terminal_reason="cast_pending_timeout",
                         )
 
                     runtime_state_before_controller = self.fsm.state
@@ -3136,6 +3243,20 @@ class LiveDetectOnlyRuntime:
                     if last_result.action_applied:
                         raise RuntimeError(
                             "Recorded-observation controller invariant violated: action_applied=true"
+                        )
+                    fsm_cast_timeout_this_frame = bool(
+                        last_result.fsm.changed
+                        and last_result.fsm.previous_state
+                        == RuntimeState.CAST_PENDING
+                        and last_result.fsm.next_state
+                        == RuntimeState.SYNC_REQUIRED
+                        and last_result.fsm.transition_reason
+                        == "cast_pending_timeout"
+                    )
+                    if fsm_cast_timeout_this_frame:
+                        raise RuntimeError(
+                            "CAST_PENDING timeout bypassed the terminal tick "
+                            "barrier"
                         )
                     if (
                         ready_certificate is not None
@@ -3214,50 +3335,12 @@ class LiveDetectOnlyRuntime:
                             and self._cast_timeout_reconciliation_physical_idle_id
                             is not None
                         )
-                        cast_recovery_exhausted = bool(
-                            cast_recovery_idle_candidate
-                            and self._cast_timeout_reconciliation_physical_idle_id
-                            in self._cast_recovery_exhausted_physical_idle_ids
-                        )
                         if cast_recovery_idle_candidate:
-                            sync_idle_recovery_ready = not cast_recovery_exhausted
-                            if cast_recovery_exhausted:
-                                exhausted_id = (
-                                    self._cast_timeout_reconciliation_physical_idle_id
-                                )
-                                if (
-                                    exhausted_id
-                                    not in self._cast_recovery_exhausted_logged
-                                ):
-                                    self._cast_recovery_exhausted_logged.add(
-                                        exhausted_id
-                                    )
-                                    self.logger.event(
-                                        "cast_recovery_exhausted",
-                                        {
-                                            **recovery_payload,
-                                            "physical_idle_id": exhausted_id,
-                                            "dedupe_key": (
-                                                f"{exhausted_id}:generation:"
-                                                f"{self._cast_arming.attempt_count(exhausted_id)}"
-                                            ),
-                                            "recovery_budget_consumed": (
-                                                self._cast_arming
-                                                .attempt_count(exhausted_id)
-                                            ),
-                                            "recovery_budget_remaining": 0,
-                                            "final_chosen_recovery_state": (
-                                                RuntimeState.SYNC_REQUIRED.value
-                                            ),
-                                            "liveness_outcome": (
-                                                "bounded_fail_closed_awaiting_"
-                                                "fresh_non_idle_evidence"
-                                            ),
-                                        },
-                                    )
-                                self.recovery_synchronizer.reset(
-                                    started_at=elapsed
-                                )
+                            # The synchronizer only certifies that the screen is
+                            # IDLE.  CAST serviceability is decided transactionally
+                            # below before the FSM can commit IDLE, including the
+                            # retry-limit terminal outcome.
+                            sync_idle_recovery_ready = True
                         if terminal_hook_recovery_blocked:
                             self.logger.event(
                                 "hook_sync_recovery_blocked_terminal",
@@ -3567,6 +3650,47 @@ class LiveDetectOnlyRuntime:
                         and self._cast_arming.active is None
                         and self.cast_clearance.current(elapsed) is None
                     )
+                    sync_idle_certificate_fresh = bool(
+                        self.fsm.state != RuntimeState.SYNC_REQUIRED
+                        or (
+                            idle_certificate is not None
+                            and self
+                            ._idle_certificate_fresh_for_current_sync_epoch(
+                                idle_certificate
+                            )
+                        )
+                    )
+                    if (
+                        idle_certificate is not None
+                        and self.fsm.state == RuntimeState.SYNC_REQUIRED
+                        and not sync_idle_certificate_fresh
+                    ):
+                        rejection_key = (
+                            self._sync_epoch_id,
+                            idle_certificate.certificate_id,
+                            "stale_certificate",
+                        )
+                        if rejection_key not in self._idle_recovery_rejection_keys:
+                            self._idle_recovery_rejection_keys.add(
+                                rejection_key
+                            )
+                            self.logger.event(
+                                "authoritative_idle_recovery_rejected",
+                                {
+                                    "timestamp": elapsed,
+                                    "frame_index": captured,
+                                    "runtime_state": self.fsm.state.value,
+                                    "reason": "stale_certificate",
+                                    "sync_epoch_id": self._sync_epoch_id,
+                                    "sync_epoch_started_at": (
+                                        self._sync_epoch_started_at
+                                    ),
+                                    **self._idle_certificate_payload(
+                                        idle_certificate,
+                                        timestamp=elapsed,
+                                    ),
+                                },
+                            )
                     if startup_idle:
                         previous_idle_state = self.fsm.state
                         startup_transition = (
@@ -3617,7 +3741,8 @@ class LiveDetectOnlyRuntime:
                             or idle_arrived_before_certificate
                         )
                         and not cast_pending_protected
-                        and not cast_timed_out_this_frame
+                        and not cast_terminal_barrier_this_frame
+                        and sync_idle_certificate_fresh
                         and not (
                             self.fsm.state == RuntimeState.SYNC_REQUIRED
                             and self._cast_timeout_reconciliation_physical_idle_id
@@ -3651,106 +3776,244 @@ class LiveDetectOnlyRuntime:
                         previous_cast_terminal_outcome = (
                             self.cast_opportunity.terminal_outcome.value
                         )
-                        self._clear_stale_cycle_for_idle_recovery(
-                            timestamp=elapsed,
-                            frame_index=captured,
+                        next_recovery_sequence = (
+                            self._idle_recovery_sequence + 1
                         )
-                        authoritative = self.fsm.recover_to_authoritative_idle(
-                            elapsed,
-                            physical_idle_id=(
-                                idle_certificate.physical_idle_id
-                            ),
-                            reason="authoritative_idle_prompt_recovery",
-                        )
-                        if authoritative.changed:
-                            transition_results.append(authoritative)
-                        new_physical_idle_episode_opened = bool(
-                            previous_physical_idle_id
-                            != idle_certificate.physical_idle_id
-                        )
-                        authoritative_idle_applied_this_frame = True
-                        self.controller.discard_external_proposal()
-                        request = ActionRequest(
-                            ActionIntent.NONE,
-                            0.0,
-                            "authoritative_idle_recovery_frame_blocks_actions",
-                        )
-                        self._idle_candidate_origin_state = None
-                        self._idle_recovery_sequence += 1
                         recovery_source_id = (
                             f"idle_recovery:{idle_certificate.certificate_id}:"
-                            f"{self._idle_recovery_sequence}"
+                            f"{next_recovery_sequence}"
                         )
-                        self.logger.event(
-                            "authoritative_idle_recovery_applied",
-                            {
-                                "timestamp": elapsed,
-                                "frame_index": captured,
-                                "previous_state": (
-                                    recovery_event_previous_state.value
+                        recovery_physical_idle_id = (
+                            self._cast_arming.recovery_physical_idle_id(
+                                idle_certificate.physical_idle_id
+                            )
+                        )
+                        preparation = (
+                            self._cast_arming.prepare_cast_opportunity(
+                                source_type=CAST_SOURCE_RECOVERY,
+                                source_id=recovery_source_id,
+                                physical_idle_id=(
+                                    recovery_physical_idle_id
                                 ),
-                                "authoritative_previous_state": (
-                                    previous_idle_state.value
-                                ),
-                                "recovery_origin_state": (
-                                    recovery_origin_state.value
-                                ),
-                                "next_state": RuntimeState.IDLE.value,
-                                "reason": (
-                                    "authoritative_idle_prompt_recovery"
-                                ),
-                                "cycle_id": self.deduplicator.cycle_id,
-                                "physical_idle_episode_id": (
-                                    idle_certificate.physical_idle_id
-                                ),
-                                "previous_cast_opportunity_id": (
-                                    previous_cast_opportunity_id
-                                ),
-                                "old_opportunity_terminal_reason": (
-                                    "authoritative_idle_prompt_recovery"
-                                    if previous_cast_was_open
-                                    else previous_cast_terminal_outcome
-                                ),
-                                "new_physical_idle_episode_opened": (
-                                    new_physical_idle_episode_opened
-                                ),
-                                **self._idle_certificate_payload(
-                                    idle_certificate,
+                                cycle_id=self.deduplicator.cycle_id,
+                            )
+                        )
+                        if not preparation.serviceable:
+                            # Preserve the dedupe event contract, but do not
+                            # mutate FSM state or clear the old cycle unless a
+                            # matching CAST arm can actually be established.
+                            rejection_key = (
+                                self._sync_epoch_id,
+                                recovery_physical_idle_id,
+                                preparation.status.value,
+                                preparation.blocker,
+                            )
+                            if (
+                                rejection_key
+                                not in self._idle_recovery_rejection_keys
+                            ):
+                                self._idle_recovery_rejection_keys.add(
+                                    rejection_key
+                                )
+                                self._request_idle_cast_arm(
+                                    source_type=CAST_SOURCE_RECOVERY,
+                                    source_id=recovery_source_id,
+                                    certificate=idle_certificate,
                                     timestamp=elapsed,
+                                    frame_index=captured,
+                                    cooldown_seconds=(
+                                        self.live_config
+                                        .idle_recovery_cast_cooldown_seconds
+                                    ),
+                                    previous_state=previous_idle_state,
+                                )
+                                self.logger.event(
+                                    "authoritative_idle_recovery_rejected",
+                                    {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "runtime_state": (
+                                            self.fsm.state.value
+                                        ),
+                                        "reason": preparation.blocker,
+                                        "sync_epoch_id": self._sync_epoch_id,
+                                        "sync_epoch_started_at": (
+                                            self._sync_epoch_started_at
+                                        ),
+                                        **preparation.payload(),
+                                        **self._idle_certificate_payload(
+                                            idle_certificate,
+                                            timestamp=elapsed,
+                                        ),
+                                    },
+                                )
+                            if (
+                                preparation.status
+                                == CastArmingPreparationStatus
+                                .RETRY_LIMIT_REACHED
+                            ):
+                                self._emit_cast_recovery_exhausted(
+                                    physical_idle_id=(
+                                        recovery_physical_idle_id
+                                    ),
+                                    timestamp=elapsed,
+                                    frame_index=captured,
+                                    blocker=(
+                                        "physical_idle_retry_limit_reached"
+                                    ),
+                                    extra={
+                                        "sync_epoch_id": self._sync_epoch_id,
+                                        "sync_epoch_started_at": (
+                                            self._sync_epoch_started_at
+                                        ),
+                                    },
+                                )
+                                if self.fsm.state != RuntimeState.SYNC_REQUIRED:
+                                    transition_results.append(
+                                        self.fsm.force_state(
+                                            RuntimeState.SYNC_REQUIRED,
+                                            elapsed,
+                                            "cast_recovery_exhausted",
+                                        )
+                                    )
+                            # A rejected prepare is intentionally terminal for
+                            # this tick.  No IDLE commit and no lifecycle reset.
+                            authoritative_idle_applied_this_frame = False
+                        else:
+                            self._clear_stale_cycle_for_idle_recovery(
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                preserve_cast_arm=(
+                                    preparation.existing_active
                                 ),
-                            },
-                        )
-                        self._request_idle_cast_arm(
-                            source_type=CAST_SOURCE_RECOVERY,
-                            source_id=recovery_source_id,
-                            certificate=idle_certificate,
-                            timestamp=elapsed,
-                            frame_index=captured,
-                            cooldown_seconds=(
-                                self.live_config
-                                .idle_recovery_cast_cooldown_seconds
-                            ),
-                            previous_state=previous_idle_state,
-                        )
-                        if sync_idle_recovery_ready:
+                            )
+                            armed_record = self._request_idle_cast_arm(
+                                source_type=CAST_SOURCE_RECOVERY,
+                                source_id=recovery_source_id,
+                                certificate=idle_certificate,
+                                timestamp=elapsed,
+                                frame_index=captured,
+                                cooldown_seconds=(
+                                    self.live_config
+                                    .idle_recovery_cast_cooldown_seconds
+                                ),
+                                previous_state=previous_idle_state,
+                            )
+                            serviceable_arm = (
+                                armed_record or self._cast_arming.active
+                            )
+                            if (
+                                serviceable_arm is None
+                                or serviceable_arm.physical_idle_id
+                                != recovery_physical_idle_id
+                                or serviceable_arm.cast_started
+                            ):
+                                raise RuntimeError(
+                                    "authoritative IDLE recovery prepared "
+                                    "without a serviceable CAST arm"
+                                )
+                            authoritative = (
+                                self.fsm.recover_to_authoritative_idle(
+                                    elapsed,
+                                    physical_idle_id=(
+                                        idle_certificate.physical_idle_id
+                                    ),
+                                    reason=(
+                                        "authoritative_idle_prompt_recovery"
+                                    ),
+                                )
+                            )
+                            if authoritative.changed:
+                                transition_results.append(authoritative)
+                            new_physical_idle_episode_opened = bool(
+                                previous_physical_idle_id
+                                != idle_certificate.physical_idle_id
+                            )
+                            authoritative_idle_applied_this_frame = True
+                            self.controller.discard_external_proposal()
+                            request = ActionRequest(
+                                ActionIntent.NONE,
+                                0.0,
+                                (
+                                    "authoritative_idle_recovery_frame_"
+                                    "blocks_actions"
+                                ),
+                            )
+                            self._idle_candidate_origin_state = None
+                            self._idle_recovery_sequence = (
+                                next_recovery_sequence
+                            )
                             self.logger.event(
-                                "sync_recovered",
+                                "authoritative_idle_recovery_applied",
                                 {
                                     "timestamp": elapsed,
                                     "frame_index": captured,
-                                    "recovery_target": RuntimeState.IDLE.value,
-                                    "reason": "prompt_consensus_sync_recovery",
-                                    "authoritative_recovery_source": (
-                                        recovery_source_id
+                                    "previous_state": (
+                                        recovery_event_previous_state.value
                                     ),
-                                    "final_chosen_recovery_state": (
-                                        RuntimeState.IDLE.value
+                                    "authoritative_previous_state": (
+                                        previous_idle_state.value
                                     ),
-                                    "action_intent": ActionIntent.NONE.value,
-                                    "action_applied": False,
+                                    "recovery_origin_state": (
+                                        recovery_origin_state.value
+                                    ),
+                                    "next_state": RuntimeState.IDLE.value,
+                                    "reason": (
+                                        "authoritative_idle_prompt_recovery"
+                                    ),
+                                    "cycle_id": self.deduplicator.cycle_id,
+                                    "physical_idle_episode_id": (
+                                        idle_certificate.physical_idle_id
+                                    ),
+                                    "previous_cast_opportunity_id": (
+                                        previous_cast_opportunity_id
+                                    ),
+                                    "old_opportunity_terminal_reason": (
+                                        "authoritative_idle_prompt_recovery"
+                                        if previous_cast_was_open
+                                        else previous_cast_terminal_outcome
+                                    ),
+                                    "new_physical_idle_episode_opened": (
+                                        new_physical_idle_episode_opened
+                                    ),
+                                    "cast_serviceability": (
+                                        preparation.status.value
+                                    ),
+                                    "sync_epoch_id": self._sync_epoch_id,
+                                    "sync_epoch_started_at": (
+                                        self._sync_epoch_started_at
+                                    ),
+                                    **self._idle_certificate_payload(
+                                        idle_certificate,
+                                        timestamp=elapsed,
+                                    ),
                                 },
                             )
-                        self._cast_timeout_reconciliation_physical_idle_id = None
+                            if sync_idle_recovery_ready:
+                                self.logger.event(
+                                    "sync_recovered",
+                                    {
+                                        "timestamp": elapsed,
+                                        "frame_index": captured,
+                                        "recovery_target": (
+                                            RuntimeState.IDLE.value
+                                        ),
+                                        "reason": (
+                                            "prompt_consensus_sync_recovery"
+                                        ),
+                                        "authoritative_recovery_source": (
+                                            recovery_source_id
+                                        ),
+                                        "final_chosen_recovery_state": (
+                                            RuntimeState.IDLE.value
+                                        ),
+                                        "action_intent": (
+                                            ActionIntent.NONE.value
+                                        ),
+                                        "action_applied": False,
+                                    },
+                                )
+                            self._cast_timeout_reconciliation_physical_idle_id = None
                     active_cast_arm = self._cast_arming.active
                     if (
                         active_cast_arm is not None
@@ -4755,7 +5018,7 @@ class LiveDetectOnlyRuntime:
                         )
                         self.controller.reset_for_sync_recovery(elapsed)
                         self._reset_press_detector_temporal_state()
-                        self.recovery_synchronizer.reset(started_at=elapsed)
+                        self._begin_sync_epoch(elapsed)
                         self.deduplicator.reset_for_sync_recovery(
                             preserve_cycle=preserve_hook_cycle
                         )
@@ -4766,6 +5029,10 @@ class LiveDetectOnlyRuntime:
                         self.logger.event("sync_recovery_started", {
                             "timestamp": elapsed,
                             "frame_index": captured,
+                            "sync_epoch_id": self._sync_epoch_id,
+                            "sync_epoch_started_at": (
+                                self._sync_epoch_started_at
+                            ),
                             "recovery_target": None,
                             "support_frames": 0,
                             "duration_seconds": 0.0,

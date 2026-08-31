@@ -5,6 +5,10 @@ from src.fishing_v2.domain.observations import (
 )
 from src.fishing_v2.domain.runtime_state import RuntimeState
 from src.fishing_v2.fusion.observation_fusion import ObservationFusion, StateEvidence
+from src.fishing_v2.live.idle_recovery import (
+    CAST_SOURCE_RECOVERY,
+    CastArmingLifecycle,
+)
 from src.fishing_v2.perception.observation_bundle import ObservationBundle
 from src.fishing_v2.runtime.detector_activation import (
     DetectorActivationMode,
@@ -431,6 +435,81 @@ def test_sync_required_specialized_states_require_qualified_evidence() -> None:
             assert second.synchronized and second.state == RuntimeState.GET
         else:
             assert first.synchronized and first.state == expected
+
+
+def test_exhausted_cast_budget_does_not_disable_non_idle_reconciliation() -> None:
+    lifecycle = CastArmingLifecycle()
+    for generation in range(2):
+        if generation:
+            assert lifecycle.authorize_retry_after_visual_timeout() == "idle:1"
+        record, _ = lifecycle.request_cast_opportunity(
+            source_type=CAST_SOURCE_RECOVERY,
+            source_id=f"recovery:{generation}",
+            physical_idle_id="idle:1",
+            cycle_id=1,
+            timestamp=float(generation),
+            cooldown_seconds=0.0,
+        )
+        assert record is not None
+        lifecycle.mark_cast_started(f"cast:{generation}")
+        lifecycle.record_execution(
+            timestamp=float(generation),
+            emission_started=True,
+            applied=True,
+            terminal_outcome="applied",
+        )
+    assert lifecycle.recovery_budget_remaining("idle:1") == 0
+
+    for kind, expected in (
+        (PromptObservationKind.WAITING_IN_PROGRESS, RuntimeState.WAITING),
+        (PromptObservationKind.READY_BITE, RuntimeState.READY),
+    ):
+        sync = StartupSynchronizer(SynchronizationConfig(observation_frames=3))
+        result = None
+        for frame in range(1, 4):
+            result = sync.observe_recovery(
+                _recovery_qualified(_recovery_bundle(frame, kind)),
+                has_conflict=False,
+            )
+        assert result is not None and result.synchronized
+        assert result.state == expected
+
+    qualifier = DetectorEvidenceQualifier()
+    press_result = StartupSynchronizer().observe_recovery(
+        _recovery_qualified(
+            _recovery_bundle(
+                1,
+                PromptObservationKind.PRESS_INSTRUCTION,
+                press=PressObservation(
+                    True, 0.95, 1, 0.2, sequence=("W",)
+                ),
+            ),
+            qualifier,
+        ),
+        has_conflict=False,
+    )
+    assert press_result.synchronized
+    assert press_result.state == RuntimeState.PRESS
+
+    get_sync = StartupSynchronizer()
+    get_qualifier = DetectorEvidenceQualifier()
+    get_result = None
+    for frame in (1, 2):
+        get_result = get_sync.observe_recovery(
+            _recovery_qualified(
+                _recovery_bundle(
+                    frame,
+                    PromptObservationKind.UNKNOWN,
+                    get=GetObservation(
+                        True, 0.95, frame, frame * 0.2
+                    ),
+                ),
+                get_qualifier,
+            ),
+            has_conflict=False,
+        )
+    assert get_result is not None and get_result.synchronized
+    assert get_result.state == RuntimeState.GET
 
 
 def test_sync_required_activation_is_armed_and_recovery_frame_has_no_action() -> None:

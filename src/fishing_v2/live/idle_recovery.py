@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from typing import Any, Mapping
 
 from src.fishing_v2.domain.observations import (
@@ -63,6 +64,15 @@ class IdleRecoveryCertificate:
 
     def payload(self) -> dict[str, Any]:
         return asdict(self)
+
+    def is_fresh_after(self, sync_epoch_started_at: float) -> bool:
+        """Require every supporting observation to belong to the sync epoch."""
+        epoch = float(sync_epoch_started_at)
+        return bool(
+            self.window_start > epoch
+            and self.window_end > epoch
+            and self.created_at >= self.window_end
+        )
 
 
 @dataclass(frozen=True)
@@ -182,7 +192,7 @@ class IdleRecoveryTracker:
                 return None, tuple(events)
 
         certificate = self._build_certificate(float(timestamp))
-        if certificate is not None and self._certificate is None:
+        if certificate is not None:
             self._certificate = certificate
         return self.current(
             timestamp=float(timestamp),
@@ -218,7 +228,10 @@ class IdleRecoveryTracker:
         ):
             return None
         return IdleRecoveryCertificate(
-            certificate_id=f"idle_certificate:{self._physical_idle_id}",
+            certificate_id=(
+                f"idle_certificate:{self._physical_idle_id}:"
+                f"frame:{values[-1].frame_index}"
+            ),
             physical_idle_id=self._physical_idle_id,
             created_at=timestamp,
             window_start=window_start,
@@ -247,16 +260,11 @@ class IdleRecoveryTracker:
         candidate = self._build_certificate(float(timestamp))
         if candidate is None:
             return None
-        if self._certificate is None:
-            self._certificate = candidate
-        return IdleRecoveryCertificate(
-            **{
-                **asdict(self._certificate),
-                "latest_observation_age_ms": (
-                    candidate.latest_observation_age_ms
-                ),
-            }
-        )
+        # A certificate is a snapshot of its actual supporting window.  Never
+        # splice the freshness of a new window into timestamps from an older
+        # certificate: that made stale pre-SYNC evidence appear age=0.
+        self._certificate = candidate
+        return candidate
 
     def summary(self, timestamp: float) -> dict[str, Any]:
         values = tuple(self._observations)
@@ -313,6 +321,41 @@ class CastArmingRecord:
         }
 
 
+class CastArmingPreparationStatus(str, Enum):
+    SERVICEABLE = "SERVICEABLE"
+    RETRY_LIMIT_REACHED = "RETRY_LIMIT_REACHED"
+    DUPLICATE = "DUPLICATE"
+    NOT_SERVICEABLE = "NOT_SERVICEABLE"
+
+
+@dataclass(frozen=True)
+class CastArmingPreparation:
+    status: CastArmingPreparationStatus
+    source_type: str
+    source_id: str
+    physical_idle_id: str
+    cycle_id: int
+    recovery_generation: int
+    recovery_budget_consumed: int
+    recovery_budget_remaining: int
+    blocker: str | None = None
+    existing_active: bool = False
+
+    @property
+    def serviceable(self) -> bool:
+        return self.status == CastArmingPreparationStatus.SERVICEABLE
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "status": self.status.value,
+            "dedupe_key": (
+                f"{self.physical_idle_id}:generation:"
+                f"{self.recovery_generation}"
+            ),
+        }
+
+
 class CastArmingLifecycle:
     """Serialize every CAST source into one bounded physical-IDLE gate."""
 
@@ -352,6 +395,58 @@ class CastArmingLifecycle:
             return next(iter(self._retry_authorized_physical_idle))
         return default
 
+    def prepare_cast_opportunity(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        physical_idle_id: str,
+        cycle_id: int,
+    ) -> CastArmingPreparation:
+        """Evaluate CAST serviceability without mutating lifecycle state."""
+        if source_type not in CAST_SOURCE_TYPES:
+            raise ValueError(f"Unsupported CAST source: {source_type}")
+        attempts = self.attempt_count(physical_idle_id)
+        status = CastArmingPreparationStatus.SERVICEABLE
+        blocker: str | None = None
+        existing_active = False
+        if source_id in self._seen_source_ids:
+            status = CastArmingPreparationStatus.DUPLICATE
+            blocker = "source_id_already_seen"
+        elif self._active is not None:
+            if (
+                self._active.physical_idle_id == physical_idle_id
+                and not self._active.cast_started
+            ):
+                existing_active = True
+                blocker = "physical_idle_source_merged"
+            else:
+                status = CastArmingPreparationStatus.NOT_SERVICEABLE
+                blocker = "physical_idle_already_armed"
+        elif attempts >= MAX_CAST_ATTEMPTS_PER_PHYSICAL_IDLE:
+            status = CastArmingPreparationStatus.RETRY_LIMIT_REACHED
+            blocker = "physical_idle_retry_limit_reached"
+        elif attempts >= 1 and not (
+            source_type == CAST_SOURCE_RECOVERY
+            and physical_idle_id in self._retry_authorized_physical_idle
+        ):
+            status = CastArmingPreparationStatus.NOT_SERVICEABLE
+            blocker = "physical_idle_already_consumed"
+        return CastArmingPreparation(
+            status=status,
+            source_type=source_type,
+            source_id=source_id,
+            physical_idle_id=physical_idle_id,
+            cycle_id=int(cycle_id),
+            recovery_generation=attempts,
+            recovery_budget_consumed=attempts,
+            recovery_budget_remaining=self.recovery_budget_remaining(
+                physical_idle_id
+            ),
+            blocker=blocker,
+            existing_active=existing_active,
+        )
+
     def request_cast_opportunity(
         self,
         *,
@@ -366,33 +461,17 @@ class CastArmingLifecycle:
             raise ValueError(f"Unsupported CAST source: {source_type}")
         if cooldown_seconds < 0:
             raise ValueError("CAST cooldown must be non-negative")
-        dedupe_reason: str | None = None
-        if source_id in self._seen_source_ids:
-            dedupe_reason = "source_id_already_seen"
-        elif self._active is not None:
-            if (
-                self._active.physical_idle_id == physical_idle_id
-                and not self._active.cast_started
-            ):
-                self._seen_source_ids.add(source_id)
-                self._active.merged_source_ids.append(source_id)
-                dedupe_reason = "physical_idle_source_merged"
-            else:
-                dedupe_reason = "physical_idle_already_armed"
-        else:
-            attempts = self._attempts_by_physical_idle.get(
-                physical_idle_id, 0
-            )
-            if attempts >= MAX_CAST_ATTEMPTS_PER_PHYSICAL_IDLE:
-                dedupe_reason = "physical_idle_retry_limit_reached"
-            elif attempts >= 1 and not (
-                source_type == CAST_SOURCE_RECOVERY
-                and physical_idle_id
-                in self._retry_authorized_physical_idle
-            ):
-                dedupe_reason = "physical_idle_already_consumed"
-        if dedupe_reason is not None:
-            attempts = self.attempt_count(physical_idle_id)
+        preparation = self.prepare_cast_opportunity(
+            source_type=source_type,
+            source_id=source_id,
+            physical_idle_id=physical_idle_id,
+            cycle_id=cycle_id,
+        )
+        if preparation.existing_active:
+            assert self._active is not None
+            self._seen_source_ids.add(source_id)
+            self._active.merged_source_ids.append(source_id)
+        if not preparation.serviceable or preparation.existing_active:
             return None, (IdleRecoveryEvent(
                 "cast_opportunity_deduplicated",
                 {
@@ -400,15 +479,18 @@ class CastArmingLifecycle:
                     "source_id": source_id,
                     "physical_idle_id": physical_idle_id,
                     "cycle_id": int(cycle_id),
-                    "dedupe_reason": dedupe_reason,
-                    "dedupe_key": (
-                        f"{physical_idle_id}:generation:{attempts}"
+                    "dedupe_reason": preparation.blocker,
+                    "dedupe_key": preparation.payload()["dedupe_key"],
+                    "recovery_generation": (
+                        preparation.recovery_generation
                     ),
-                    "recovery_generation": attempts,
-                    "recovery_budget_consumed": attempts,
+                    "recovery_budget_consumed": (
+                        preparation.recovery_budget_consumed
+                    ),
                     "recovery_budget_remaining": (
-                        self.recovery_budget_remaining(physical_idle_id)
+                        preparation.recovery_budget_remaining
                     ),
+                    "preparation_status": preparation.status.value,
                 },
             ),)
         eligible_at = float(timestamp) + float(cooldown_seconds)

@@ -3980,8 +3980,10 @@ class PersistentIdleObserver:
 class CompleteCastSink:
     def __init__(self, _kwargs):
         self.calls = []
+        self.panic_polls = 0
 
     def poll_panic(self):
+        self.panic_polls += 1
         return False
 
     def apply(self, request, context):
@@ -4012,7 +4014,13 @@ class CompleteCastSink:
         }
 
 
-def _idle_action_runtime(tmp_path, supported_frame, *, initial_state=None):
+def _idle_action_runtime(
+    tmp_path,
+    supported_frame,
+    *,
+    initial_state=None,
+    clock=None,
+):
     created = []
 
     def factory(**kwargs):
@@ -4030,10 +4038,11 @@ def _idle_action_runtime(tmp_path, supported_frame, *, initial_state=None):
             "client_size": [2560, 1440],
         },
     )
+    runtime_clock = clock or FakeClock()
     runtime = _runtime(
         tmp_path,
         capture,
-        FakeClock(),
+        runtime_clock,
         duration_seconds=3.0,
         emit_actions=True,
         action_sink_name="sendinput",
@@ -4538,6 +4547,232 @@ def test_session_20260829_cast_timeout_recovery_is_bounded_and_diagnosed(
         "cast_commit_completed",
     ):
         assert event_types.count(lifecycle_event) == 2
+
+
+def test_session_20260830_cast_pending_timeout_is_atomic_before_idle_recovery(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    """Reproduce frame 75569 where the FSM deadline beats visual timeout."""
+    runtime, created = _idle_action_runtime(tmp_path, supported_frame)
+    runtime.live_config = replace(
+        runtime.live_config,
+        duration_seconds=9.0,
+    )
+    runtime.fsm.config = replace(
+        runtime.fsm.config,
+        cast_pending_timeout_sec=0.20,
+    )
+    runtime._idle_recovery._episode_sequence = 343
+
+    summary = runtime.run(max_frames=260)
+
+    cast_calls = [
+        request for request, _context in created[0].calls
+        if request.intent == ActionIntent.CAST
+    ]
+    assert len(cast_calls) == 2
+    assert {
+        request.payload["physical_idle_id"] for request in cast_calls
+    } == {"physical_idle:344"}
+    assert [
+        request.payload["recovery_generation"] for request in cast_calls
+    ] == [0, 1]
+    assert runtime.fsm.state == RuntimeState.SYNC_REQUIRED
+    assert summary["actions_applied"] == 2
+
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    transitions = [
+        item for item in events
+        if item["event_type"] == "runtime_transition"
+    ]
+    timeout_transitions = [
+        item for item in transitions
+        if item["reason"] == "cast_pending_timeout"
+    ]
+    assert len(timeout_transitions) == 2
+    applied_idle = [
+        item for item in events
+        if item["event_type"] == "authoritative_idle_recovery_applied"
+    ]
+    assert all(
+        recovery["timestamp"] != timeout["timestamp"]
+        for recovery in applied_idle
+        for timeout in timeout_transitions
+    )
+    sync_idle_recoveries = [
+        item for item in applied_idle
+        if item["previous_state"] == RuntimeState.SYNC_REQUIRED.value
+    ]
+    assert sync_idle_recoveries
+    for recovery in sync_idle_recoveries:
+        certificate = recovery["prompt_certificate"]
+        assert certificate["window_start"] > recovery["sync_epoch_started_at"]
+        assert certificate["window_end"] > recovery["sync_epoch_started_at"]
+        assert certificate["created_at"] >= certificate["window_end"]
+    exhausted = [
+        item for item in events
+        if item["event_type"] == "cast_recovery_exhausted"
+    ]
+    assert len(exhausted) == 1
+    assert exhausted[0]["physical_idle_id"] == "physical_idle:344"
+    assert exhausted[0]["attempted_generations"] == [0, 1]
+    assert exhausted[0]["recovery_budget_remaining"] == 0
+    assert exhausted[0]["final_state"] == RuntimeState.SYNC_REQUIRED.value
+    rejections = [
+        item for item in events
+        if item["event_type"] == "authoritative_idle_recovery_rejected"
+        and item.get("reason") == "physical_idle_retry_limit_reached"
+    ]
+    assert len(rejections) == 1
+    assert not any(
+        item["timestamp"] >= exhausted[0]["timestamp"]
+        for item in applied_idle
+    )
+    assert runtime.capture.calls == summary["captured_frames"] + 1
+
+
+def test_cast_exhaustion_persistent_idle_remains_explicit_for_two_hours(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class AdaptiveTwoHourClock(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            minimum_step = 0.04 if self.value < 10.0 else 60.0
+            self.value += max(seconds, minimum_step)
+
+    runtime, created = _idle_action_runtime(
+        tmp_path,
+        supported_frame,
+        clock=AdaptiveTwoHourClock(),
+    )
+    runtime.live_config = replace(
+        runtime.live_config,
+        duration_seconds=7200.0,
+    )
+
+    summary = runtime.run(max_frames=400)
+
+    cast_calls = [
+        request for request, _ in created[0].calls
+        if request.intent == ActionIntent.CAST
+    ]
+    assert len(cast_calls) == 2
+    assert [
+        request.payload["recovery_generation"] for request in cast_calls
+    ] == [0, 1]
+    assert runtime.fsm.state == RuntimeState.SYNC_REQUIRED
+    assert summary["captured_frames"] >= 120
+    assert created[0].panic_polls >= summary["captured_frames"]
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    exhausted = [
+        item for item in events
+        if item["event_type"] == "cast_recovery_exhausted"
+    ]
+    assert len(exhausted) == 1
+    exhausted_at = exhausted[0]["timestamp"]
+    assert not any(
+        item["event_type"] == "authoritative_idle_recovery_applied"
+        and item["timestamp"] >= exhausted_at
+        for item in events
+    )
+    assert not any(
+        request.payload.get("recovery_generation") == 2
+        for request in cast_calls
+    )
+
+
+def test_cast_exhaustion_keeps_fresh_hook_reconciliation_serviceable(
+    tmp_path: Path,
+    supported_frame: np.ndarray,
+) -> None:
+    class AdaptiveHookClock(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            minimum_step = 0.04 if self.value < 10.0 else 1.0
+            self.value += max(seconds, minimum_step)
+
+    class IdleThenHookObserver:
+        def observe(self, _frame, context):
+            kind = (
+                PromptObservationKind.IDLE_CAST
+                if context.timestamp < 30.0
+                else PromptObservationKind.HOOK_INSTRUCTION
+            )
+            return PromptObservation(
+                kind,
+                0.99,
+                {kind.value: 0.99},
+                "idle_then_hook",
+                context.frame_index,
+                context.timestamp,
+            )
+
+    class DelayedCrossedHookDetector:
+        def observe(self, _frame, context):
+            detected = context.timestamp >= 30.0
+            return HookObservation(
+                detected,
+                0.90 if detected else 0.0,
+                context.frame_index,
+                context.timestamp,
+                fill_ratio=0.75 if detected else 0.0,
+                evidence=(
+                    {
+                        "matched_features": ["hook_bar_rect", "bar_fill"],
+                        "fallback_ratio_trustworthy": True,
+                    }
+                    if detected else {}
+                ),
+            )
+
+    clock = AdaptiveHookClock()
+    runtime, created = _idle_action_runtime(
+        tmp_path,
+        supported_frame,
+        clock=clock,
+    )
+    runtime.live_config = replace(
+        runtime.live_config,
+        duration_seconds=50.0,
+    )
+    runtime.action_allowlist = frozenset({
+        ActionIntent.CAST,
+        ActionIntent.HOOK_ACTION,
+    })
+    runtime.prompt_bundle = replace(
+        runtime.prompt_bundle,
+        observer=IdleThenHookObserver(),
+    )
+    runtime.hook_detector = DelayedCrossedHookDetector()
+
+    summary = runtime.run(max_frames=300)
+
+    intents = [request.intent for request, _ in created[0].calls]
+    assert intents.count(ActionIntent.CAST) == 2
+    assert intents.count(ActionIntent.HOOK_ACTION) == 1
+    assert runtime.fsm.state != RuntimeState.IDLE
+    assert summary["unique_would_fire"]["WOULD_HOOK_ACTION"] == 1
+    events = [
+        json.loads(line)
+        for line in runtime.logger.events_path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert any(
+        item["event_type"] == "sync_recovered"
+        and item["recovery_target"] == RuntimeState.HOOK.value
+        for item in events
+    )
 
 
 def test_cast_timeout_sync_recovery_services_fresh_hook_without_start_hook(

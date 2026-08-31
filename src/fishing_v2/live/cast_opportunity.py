@@ -977,6 +977,36 @@ class CastOpportunityController:
             }),)
         return ()
 
+    def terminalize_timeout(
+        self,
+        *,
+        timestamp: float,
+        reason: str,
+    ) -> tuple[CastOpportunityEvent, ...]:
+        """Close an emitted CAST when the FSM timeout wins the same tick.
+
+        CAST_PENDING starts before OS emission completes, so its FSM deadline
+        can precede the visual-ack deadline by a small amount.  The runtime
+        must still terminalize the visual lifecycle before beginning recovery.
+        """
+        if not self._input_completed or self._terminal:
+            return ()
+        self._terminal = True
+        self._terminal_outcome = CastTerminalOutcome.TIMEOUT
+        self._open = False
+        self._timeout_count += 1
+        self._count_terminal(CastTerminalOutcome.TIMEOUT)
+        return (CastOpportunityEvent("cast_visual_timeout", {
+            "opportunity_id": self._opportunity_id,
+            "timestamp": float(timestamp),
+            "cast_visual_acknowledged": False,
+            "visual_ack_deadline": self._deadline,
+            "terminal_outcome": CastTerminalOutcome.TIMEOUT.value,
+            "terminal_reason": reason,
+            "retry_scheduled": False,
+            "os_input_emitted": False,
+        }),)
+
     def cancel(self, *, timestamp: float, reason: str) -> tuple[CastOpportunityEvent, ...]:
         if not self._open or self._terminal:
             return ()

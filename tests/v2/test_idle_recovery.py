@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from src.fishing_v2.domain.observations import (
@@ -9,6 +11,7 @@ from src.fishing_v2.live.idle_recovery import (
     CAST_SOURCE_RECOVERY,
     CAST_SOURCE_STARTUP,
     CastArmingLifecycle,
+    CastArmingPreparationStatus,
     IdleRecoveryConfig,
     IdleRecoveryTracker,
 )
@@ -61,6 +64,33 @@ def test_idle_certificate_requires_four_of_five_over_half_second() -> None:
     assert certificate.observation_count == 5
     assert certificate.idle_count == 4
     assert certificate.window_end - certificate.window_start >= 0.5
+
+
+def test_idle_certificate_refreshes_window_and_rejects_pre_sync_snapshot() -> None:
+    tracker = IdleRecoveryTracker()
+    certificate = None
+    for frame, timestamp in enumerate(
+        (0.0, 0.13, 0.26, 0.39, 0.52), start=1
+    ):
+        certificate, _ = _observe(
+            tracker, _prompt(frame, timestamp), timestamp
+        )
+    assert certificate is not None
+    stale = replace(certificate, latest_observation_age_ms=0.0)
+    assert not stale.is_fresh_after(10.0)
+
+    refreshed = None
+    for frame, timestamp in enumerate(
+        (10.1, 10.23, 10.36, 10.49, 10.62), start=6
+    ):
+        refreshed, _ = _observe(
+            tracker, _prompt(frame, timestamp), timestamp
+        )
+    assert refreshed is not None
+    assert refreshed.certificate_id != certificate.certificate_id
+    assert refreshed.window_start == pytest.approx(10.1)
+    assert refreshed.window_end == pytest.approx(10.62)
+    assert refreshed.is_fresh_after(10.0)
 
 
 @pytest.mark.parametrize(
@@ -199,6 +229,52 @@ def test_cast_retry_is_delayed_and_bounded_to_one_retry() -> None:
         "physical_idle_retry_limit_reached"
     )
     assert events[0].payload["recovery_budget_remaining"] == 0
+
+
+def test_cast_recovery_prepare_is_transactional_and_reports_retry_limit() -> None:
+    lifecycle = CastArmingLifecycle(retry_min_interval_seconds=3.0)
+
+    for generation in range(2):
+        if generation:
+            assert lifecycle.authorize_retry_after_visual_timeout() == "idle:1"
+        source_id = f"recovery:{generation}"
+        prepared = lifecycle.prepare_cast_opportunity(
+            source_type=CAST_SOURCE_RECOVERY,
+            source_id=source_id,
+            physical_idle_id="idle:1",
+            cycle_id=7,
+        )
+        assert prepared.status == CastArmingPreparationStatus.SERVICEABLE
+        record, _ = lifecycle.request_cast_opportunity(
+            source_type=CAST_SOURCE_RECOVERY,
+            source_id=source_id,
+            physical_idle_id="idle:1",
+            cycle_id=7,
+            timestamp=float(generation * 4),
+            cooldown_seconds=0.0,
+        )
+        assert record is not None
+        lifecycle.mark_cast_started(f"cast:{generation}")
+        lifecycle.record_execution(
+            timestamp=float(generation * 4),
+            emission_started=True,
+            applied=True,
+            terminal_outcome="applied",
+        )
+
+    exhausted = lifecycle.prepare_cast_opportunity(
+        source_type=CAST_SOURCE_RECOVERY,
+        source_id="recovery:2",
+        physical_idle_id="idle:1",
+        cycle_id=7,
+    )
+    assert exhausted.status == (
+        CastArmingPreparationStatus.RETRY_LIMIT_REACHED
+    )
+    assert not exhausted.serviceable
+    assert exhausted.blocker == "physical_idle_retry_limit_reached"
+    assert exhausted.recovery_budget_remaining == 0
+    assert lifecycle.active is None
 
 
 def test_consumed_physical_idle_deduplicates_other_sources_without_timeout() -> None:
