@@ -1,8 +1,64 @@
 """Same-frame bar-local divider/fill measurements shared by Hook consumers."""
 from dataclasses import dataclass
+from time import perf_counter
 
 import cv2
 import numpy as np
+from src.hook_right_geometry import discover_right, anchor_pixels
+
+
+class PassiveRightObservation(dict):
+    """JSON-visible telemetry plus RAM-only packed identity (never serialized)."""
+    identity: dict
+
+
+def passive_right_observation(crop, hsv, geometry, roi, resolution):
+    """Canonical owner, same crop/HSV/geometry; failure cannot alter crossing.
+
+    Inclusive right pixel centres use screen coordinates in public telemetry;
+    private identity uses native ROI coordinates like the offline prototype.
+    No calls back into the detector or capture infrastructure.
+    """
+    started = perf_counter()
+    observation = PassiveRightObservation(
+        fillable_right_x=None, fillable_right_confidence=0.0,
+        fillable_right_reason='unavailable', source='canonical_bar_local_structural',
+        fill_endpoint_x=(roi[0]+geometry.fill_endpoint_x
+                         if geometry.fill_endpoint_x is not None else None),
+        distance_to_right=None,
+    )
+    observation.identity = {}
+    try:
+        edge = discover_right(crop, geometry, structural=True)
+        identity = dict(roi_dimensions=[crop.shape[1],crop.shape[0]],
+                        resolution=tuple(resolution), roi_bounds=tuple(roi),
+                        anchor_bbox=geometry.anchor, divider_x=geometry.divider_x,
+                        bar_local_y_top=geometry.anchor[1] if geometry.anchor else None,
+                        bar_local_y_bottom=geometry.anchor[3] if geometry.anchor else None,
+                        fill_endpoint_x=geometry.fill_endpoint_x,
+                        fillable_right_x=edge['fillable_right_x'],
+                        bar_right_confidence=edge['bar_right_confidence'])
+        identity.update(anchor_pixels(hsv,geometry.anchor))
+        observation.identity = identity
+        right = edge['fillable_right_x']
+        observation.update(
+            fillable_right_x=roi[0]+right if right is not None else None,
+            fillable_right_confidence=edge['bar_right_confidence'],
+            fillable_right_reason=edge.get('structural_reason',edge['bar_right_reason']),
+            distance_to_right=(right-geometry.fill_endpoint_x
+                               if right is not None and geometry.fill_endpoint_x is not None else None),
+            right_edge_support={key:edge.get(key) for key in (
+                'edge_support_rows','total_rows','rail_endpoints','structural_corners')},
+            geometry_identity={key:identity[key] for key in (
+                'roi_dimensions','resolution','roi_bounds','anchor_bbox','divider_x',
+                'bar_local_y_top','bar_local_y_bottom')},
+        )
+    except Exception as exc:
+        observation.identity = {}
+        observation.update(fillable_right_x=None, fillable_right_confidence=0.0,
+                           fillable_right_reason=f'passive_error:{type(exc).__name__}')
+    observation['measurement_cost_ms'] = (perf_counter()-started)*1000
+    return observation
 
 
 @dataclass(frozen=True)

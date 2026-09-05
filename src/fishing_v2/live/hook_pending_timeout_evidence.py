@@ -239,6 +239,7 @@ class HookPendingTimeoutEvidenceRecorder:
             "fill_start_x": None,
             "fill_end_x": fill_endpoint,
             "fill_endpoint_x": fill_endpoint,
+            "passive_right": evidence.get("passive_right"),
             "fill_ratio": observation.fill_ratio,
             "fill_rejection_reason": (
                 None if fill_found else "fill_not_detected"

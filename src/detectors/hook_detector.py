@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from src.config_loader import ROIConfig, ThresholdConfig, load_roi_config, load_thresholds_config, normalized_to_pixel_roi
-from src.hook_bar_geometry import measure_bar_local_geometry
+from src.hook_bar_geometry import measure_bar_local_geometry, passive_right_observation
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -241,6 +241,7 @@ def detect_hook_bar(
     thresholds: ThresholdConfig | None = None,
     *,
     save_debug: bool = True,
+    passive_right_enabled: bool = True,
 ) -> dict[str, Any]:
     """Detect a coloured hook bar, fill ratio, and optional divider line.
 
@@ -268,6 +269,14 @@ def detect_hook_bar(
         canonical_band_height=max(16, round(frame.shape[0] * 32 / 1440)),
     ) if precise_bar else None
     crossing_evidence = geometry.evidence(left, top) if geometry else None
+    if geometry is not None and passive_right_enabled:
+        # Telemetry only: not read by any detection/qualification/action gate.
+        try:
+            crossing_evidence['passive_right'] = passive_right_observation(
+                crop, hsv, geometry, roi, (frame.shape[1], frame.shape[0]),
+            )
+        except Exception:
+            pass  # Including injected failures: preserve the original result.
     prompt_score = _hook_prompt_score(prompt_crop)
     prompt_match = prompt_score is not None and prompt_score >= 0.52
     if local_bar is None:

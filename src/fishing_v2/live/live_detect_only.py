@@ -65,6 +65,7 @@ from src.fishing_v2.live.hook_critical_loop import (
     LatestHookFrameSlot,
 )
 from src.fishing_v2.live.hook_action_lifecycle import HookActionLifecycle
+from src.fishing_v2.live.hook_right_telemetry import HookRightTelemetry
 from src.fishing_v2.live.hook_pending_timeout_evidence import (
     HookPendingTimeoutEvidenceConfig,
     HookPendingTimeoutEvidenceRecorder,
@@ -681,6 +682,7 @@ class LiveDetectOnlyRuntime:
             raise ValueError("evidence_recorder requires evidence_mode='diagnostic'")
         self._diagnostic_roi_bounds: dict[str, tuple[int, int, int, int]] = {}
         self._hook_critical_bounds: tuple[int, int, int, int] | None = None
+        self._passive_hook_right = HookRightTelemetry()
         self._hook_frame_assembler: HookCriticalFrameAssembler | None = None
         self._latest_hook_frame = LatestHookFrameSlot()
         self._hook_episode_telemetry = HookEpisodeTelemetry()
@@ -2179,6 +2181,10 @@ class LiveDetectOnlyRuntime:
         )
 
     def _begin_sync_epoch(self, timestamp: float) -> None:
+        try:
+            self._passive_hook_right.finish('sync_boundary')
+        except Exception:
+            pass
         self._sync_epoch_sequence += 1
         self._sync_epoch_id = f"sync_epoch:{self._sync_epoch_sequence}"
         self._sync_epoch_started_at = float(timestamp)
@@ -5272,6 +5278,17 @@ class LiveDetectOnlyRuntime:
                         })
                         last_activation = activation
 
+                    # AFTER the existing critical action dispatch. Pure RAM
+                    # telemetry; never feed it back into FSM/qualification.
+                    try:
+                        self._passive_hook_right.observe(
+                            episode=self._hook_action_lifecycle.episode,
+                            observation=hook,
+                            state_before=runtime_state_at_processing_start.value,
+                            state_after=self.fsm.state.value,
+                        )
+                    except Exception:
+                        pass  # Observability must not stop Production control.
                     qualified_hook = last_result.qualified.bundle.hook
                     crossed_now = bool(qualified_hook and qualified_hook.evidence.get("divider_margin_passed"))
                     if crossed_now and not hook_crossed:
@@ -6894,6 +6911,10 @@ class LiveDetectOnlyRuntime:
             })
         finally:
             elapsed_total = max(0.0, self.clock() - started)
+            try:
+                self._passive_hook_right.finish('session_shutdown')
+            except Exception:
+                pass
             waiting_capture_scheduler.finish(
                 elapsed_total, self.fsm.state
             )
@@ -7137,6 +7158,7 @@ class LiveDetectOnlyRuntime:
                 "hook_critical_target_fps": (
                     self.live_config.hook_critical_target_fps
                 ),
+                "passive_hook_right": self._passive_hook_right.summary(),
                 "hook_critical_state_invariant_violations": (
                     self._hook_critical_invariant_violations
                 ),

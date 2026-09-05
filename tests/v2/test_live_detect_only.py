@@ -2265,9 +2265,11 @@ def test_live_press_deadline_emits_original_snapshot_after_detector_drift(
     assert summary["actions_applied"] == 1
 
 
+@pytest.mark.parametrize('passive_mode', ['enabled','disabled','failure'])
 def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
     tmp_path: Path,
     supported_frame: np.ndarray,
+    passive_mode: str,
 ) -> None:
     order: list[str] = []
     clock = FakeClock()
@@ -2401,11 +2403,21 @@ def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
 
     runtime._flush_hook_decision_trace = ordered_trace_flush
 
+    original_passive = runtime._passive_hook_right.observe
+    runtime._passive_hook_right.enabled = passive_mode != 'disabled'
+    def ordered_passive(**kwargs):
+        order.append('passive_confirmation')
+        if passive_mode == 'failure':
+            raise OSError('injected passive telemetry failure')
+        return original_passive(**kwargs)
+    runtime._passive_hook_right.observe = ordered_passive
+
     summary = runtime.run(max_frames=1)
 
     assert summary["actions_applied"] == 1
     apply_index = order.index("apply")
     assert order.index("safety") < apply_index
+    assert apply_index < order.index('passive_confirmation')
     for deferred in (
         "video",
         "evidence",
@@ -2433,6 +2445,19 @@ def test_hook_action_fast_path_runs_before_all_diagnostic_writes(
     assert would["sendinput_completed_at"] is not None
     assert would["capture_to_sendinput_start_ms"] >= 0.0
     assert would["action_ready_to_sendinput_start_ms"] <= 1.0
+
+
+def test_passive_hook_target_resets_at_sync_epoch_without_changing_actions(tmp_path,supported_frame):
+    from src.hook_right_geometry import EpisodeRightTarget
+    runtime = _runtime(tmp_path,MockCapture(supported_frame),FakeClock())
+    target = runtime._passive_hook_right.target
+    target.confirmed = 503
+    previous = runtime.fsm.state
+    runtime._begin_sync_epoch(1.0)
+    assert runtime._passive_hook_right.target is not target
+    assert isinstance(runtime._passive_hook_right.target,EpisodeRightTarget)
+    assert runtime._passive_hook_right.target.confirmed is None
+    assert runtime.fsm.state == previous
 
 
 def test_hook_critical_roi_loop_sustains_source_rate_despite_slow_diagnostics(
