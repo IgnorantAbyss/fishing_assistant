@@ -258,8 +258,51 @@ class HookPendingTimeoutEvidenceRecorder:
                 "divider_margin_passed"
             ),
             "geometry_valid": geometry_valid,
+            "detector_frame_timestamp": observation.timestamp,
+            "bar_local_geometry": {
+                key: evidence.get(key) for key in (
+                    "bar_local_anchor_bbox", "divider_measurement_roi",
+                    "fill_measurement_roi", "bar_inner_left", "bar_inner_right",
+                    "bar_inner_top", "bar_inner_bottom", "bar_right_reason",
+                    "bar_local_geometry_reason", "divider_candidates",
+                )
+            },
             "legacy_debug_raw_values": raw_values,
         })
+
+    @staticmethod
+    def _motion_payload(current: Mapping[str, Any], previous: Mapping[str, Any]) -> dict[str, Any]:
+        """Passive sample-to-sample motion, never a control/prediction input.
+
+        Only adjacent samples of this recorder's physical episode may contribute.
+        Missing geometry breaks the pair; no stale endpoint is carried forward.
+        The estimate is a secant, not a guarantee of instantaneous direction.
+        """
+        endpoint = current.get("fill_endpoint_x")
+        prior_endpoint = previous.get("fill_endpoint_x")
+        now = current.get("detector_frame_timestamp")
+        before = previous.get("detector_frame_timestamp")
+        compatible = bool(
+            current.get("geometry_valid") and previous.get("geometry_valid")
+            and endpoint is not None and prior_endpoint is not None
+            and now is not None and before is not None and now > before
+            and current.get("divider_x") == previous.get("divider_x")
+            and current.get("bar_local_geometry") == previous.get("bar_local_geometry")
+        )
+        delta = float(endpoint) - float(prior_endpoint) if compatible else None
+        return {
+            "previous_fill_endpoint_x": prior_endpoint if compatible else None,
+            "previous_detector_timestamp": before if compatible else None,
+            "fill_direction": (
+                "expanding" if delta is not None and delta > 0
+                else "retracting" if delta is not None and delta < 0
+                else "unknown"
+            ),
+            "sample_interval_seconds": now - before if compatible else None,
+            "estimated_fill_velocity_px_per_sec": delta / (now-before) if compatible else None,
+            "motion_basis": "adjacent_sample_secant" if compatible else "unavailable",
+            "distance_to_bar_right": None,
+        }
 
     @staticmethod
     def _qualification_payload(
@@ -380,6 +423,13 @@ class HookPendingTimeoutEvidenceRecorder:
                 fsm_diagnostics=fsm_diagnostics,
             ),
         }
+        previous_raw = (
+            episode.samples[-1].metadata["raw_observation"]
+            if episode.samples else {}
+        )
+        metadata["raw_observation"]["motion"] = self._motion_payload(
+            metadata["raw_observation"], previous_raw,
+        )
         episode.samples.append(_Sample(
             frame_index=int(frame_index),
             timestamp=float(timestamp),

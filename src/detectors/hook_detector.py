@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from src.config_loader import ROIConfig, ThresholdConfig, load_roi_config, load_thresholds_config, normalized_to_pixel_roi
+from src.hook_bar_geometry import measure_bar_local_geometry
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -75,7 +76,13 @@ def _find_coloured_bar(
         if not groups:
             groups.append([box])
             continue
-        previous = groups[-1][-1]
+        # Interior hatch components must not shrink the accumulated extent.
+        previous = (
+            min(item[0] for item in groups[-1]),
+            min(item[1] for item in groups[-1]),
+            max(item[2] for item in groups[-1]),
+            max(item[3] for item in groups[-1]),
+        )
         overlaps_y = min(previous[3], box[3]) - max(previous[1], box[1]) >= 0
         if box[0] - previous[2] <= 24 and overlaps_y:
             groups[-1].append(box)
@@ -256,12 +263,18 @@ def detect_hook_bar(
     local_bar, local_fill, red_mask, cyan_mask = _find_coloured_bar(
         hsv, candidate_y_fraction=0.0 if precise_bar else 0.60
     )
+    geometry = measure_bar_local_geometry(
+        hsv, local_fill,
+        canonical_band_height=max(16, round(frame.shape[0] * 32 / 1440)),
+    ) if precise_bar else None
+    crossing_evidence = geometry.evidence(left, top) if geometry else None
     prompt_score = _hook_prompt_score(prompt_crop)
     prompt_match = prompt_score is not None and prompt_score >= 0.52
     if local_bar is None:
         debug_path = _save_debug_image(frame, roi, None, None, None, source) if save_debug else None
         return {
             "detected": False,
+            "crossing_geometry": crossing_evidence,
             "confidence": 0.0,
             "bar_bbox": None,
             "fill_ratio": None,
@@ -308,10 +321,20 @@ def detect_hook_bar(
         and local_bar[1] >= (0 if precise_bar else int(crop.shape[0] * 0.60))
         and dark_ratio >= 0.08
     )
-    local_divider = (
-        _find_divider(hsv, local_bar, local_fill)
-        if shape_geometry_ok else None
-    )
+    if precise_bar:
+        local_divider = (
+            int(geometry.divider_x)
+            if shape_geometry_ok and geometry.divider_x is not None
+            and geometry.divider_confidence >= active_thresholds.min_confidence_for("HOOK")
+            else None
+        )
+        # A tiny first cyan sample may not satisfy the legacy component width,
+        # but the canonical same-frame fill still supplies its measured extent.
+        if local_fill is not None and geometry.fill_endpoint_x is not None:
+            local_bar = (local_fill[0], local_fill[1],
+                         max(local_bar[2], int(geometry.fill_endpoint_x)+1), local_fill[3])
+    else:
+        local_divider = _find_divider(hsv, local_bar, local_fill) if shape_geometry_ok else None
     structural_candidate, structural_reason, structural_features = (
         _strong_structural_candidate(
             precise_bar=precise_bar,
@@ -323,6 +346,8 @@ def detect_hook_bar(
             cyan_mask=cyan_mask,
         )
     )
+    if precise_bar and structural_candidate and geometry.fill_endpoint_x is None:
+        structural_candidate, structural_reason = False, "bar_fill_missing"
     raw_detected = bool(
         shape_geometry_ok and (context_ok or structural_candidate)
     )
@@ -336,6 +361,7 @@ def detect_hook_bar(
         debug_path = _save_debug_image(frame, roi, None, None, None, source) if save_debug else None
         return {
             "detected": False,
+            "crossing_geometry": crossing_evidence,
             "confidence": round(min(0.59, 0.25 + bar_width / max(1, crop.shape[1]) * 0.35), 4),
             "bar_bbox": None,
             "fill_ratio": None,
@@ -396,6 +422,7 @@ def detect_hook_bar(
     debug_path = _save_debug_image(frame, roi, bar, fill, divider_x, source) if save_debug else None
     return {
         "detected": True,
+        "crossing_geometry": crossing_evidence,
         "confidence": confidence,
         "bar_bbox": list(bar),
         "fill_ratio": round(float(np.clip(fill_ratio, 0.0, 1.0)), 4),

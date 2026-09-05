@@ -16,7 +16,10 @@ class LegacyHookDetectorAdapter:
     def observe(self, frame: Any, context: FrameContext) -> HookObservation:
         try:
             result = self.detector(frame, save_debug=False)
-            crossing = measure_hook_crossing_geometry(frame)
+            crossing = result.get("crossing_geometry")
+            if crossing is None:
+                # Compatibility for injected/legacy detector implementations.
+                crossing = measure_hook_crossing_geometry(frame).evidence()
             return HookObservation(
                 detected=bool(result.get("detected", False)),
                 confidence=float(result.get("confidence", 0.0)),
@@ -43,7 +46,7 @@ class LegacyHookDetectorAdapter:
                     "raw_detected": result.get(
                         "raw_detected", result.get("detected", False)
                     ),
-                    **crossing.evidence(),
+                    **crossing,
                 },
             )
         except Exception as exc:

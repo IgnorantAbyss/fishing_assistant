@@ -169,7 +169,7 @@ def test_normal_context_path_does_not_require_structural_fallback(
 @pytest.mark.parametrize(
     ("frame_factory", "reason"),
     [
-        (lambda: _structural_frame(cyan=False), "divider_line_missing"),
+        (lambda: _structural_frame(cyan=False), "red_cyan_bar_relationship_missing"),
         (lambda: _structural_frame(divider=False), "divider_line_missing"),
         (lambda: _structural_frame(fill=False), "bar_fill_missing"),
     ],

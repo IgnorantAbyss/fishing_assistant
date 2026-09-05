@@ -1,8 +1,9 @@
 """Action-specific Hook crossing geometry measured from the original frame.
 
-This deliberately does not change the legacy Hook detector.  The detector's
-historical ``fill_ratio`` describes its coloured component, while operation
-timing needs the cyan progress endpoint relative to the fixed white divider.
+Precise-ROI callers share the detector's bar-local geometry implementation.
+Production reuses the detector result rather than invoking this compatibility
+wrapper for a second measurement. Historical ``fill_ratio`` is not the cyan
+progress endpoint relative to the fixed white divider.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import cv2
 import numpy as np
 
 from src.config_loader import ROIConfig, load_roi_config
+from src.hook_bar_geometry import measure_bar_local_geometry
 
 
 @dataclass(frozen=True)
@@ -54,9 +56,9 @@ def measure_hook_crossing_geometry(
 ) -> HookCrossingGeometry:
     """Measure the fixed divider and cyan fill endpoint in ``hook_bar_precise``.
 
-    The narrow upper band excludes prompt text below the bar.  A cyan segment is
-    accepted only when it begins immediately to the right of the divider, which
-    rejects unrelated water/UI cyan elsewhere in the ROI.
+    The current red anchor supplies the vertical measurement band. A cyan
+    segment must begin immediately right of its divider. Wide-ROI compatibility
+    callers keep their original upper-band measurement.
     """
     image = _load_frame(frame)
     if image is None:
@@ -68,7 +70,19 @@ def measure_hook_crossing_geometry(
     if crop.size == 0:
         return HookCrossingGeometry()
 
-    # The live bar occupies the upper ~24 px of the 58 px precise ROI at 1440p.
+    if roi_name == "hook_bar_precise":
+        geometry = measure_bar_local_geometry(
+            cv2.cvtColor(crop, cv2.COLOR_BGR2HSV),
+            canonical_band_height=max(16, round(image.shape[0] * 32 / 1440)),
+        )
+        return HookCrossingGeometry(
+            divider_line_detected=geometry.divider_x is not None,
+            divider_line_x=left + geometry.divider_x if geometry.divider_x is not None else None,
+            divider_confidence=geometry.divider_confidence,
+            fill_endpoint_x=left + geometry.fill_endpoint_x if geometry.fill_endpoint_x is not None else None,
+        )
+
+    # Legacy wide-ROI callers retain their historical measurement contract.
     band_height = min(crop.shape[0], max(16, round(image.shape[0] * 32 / 1440)))
     band = crop[:band_height]
     hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
