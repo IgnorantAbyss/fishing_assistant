@@ -153,11 +153,55 @@ def structural_fallback(pixels, geometry, start, rail_rows, rail_ends, noise, re
     return result
 
 
+def anchor_pixels(hsv, anchor):
+    """Audit the EXACT canonical red component, not an alternative locator.
+
+    Mirror its unchanged pixel predicate, then require its already-selected bbox.
+    Packed masks are private, bounded native-coordinate comparison data. The two
+    rail rows exclude the animated hatch interior; no resizing/alignment is used.
+    """
+    if anchor is None:
+        return {}
+    hue, saturation, value = cv2.split(hsv)
+    red = (((hue <= 10) | (hue >= 165)) & (saturation >= 80) & (value >= 80)).astype(np.uint8)
+    _, labels, stats, centroids = cv2.connectedComponentsWithStats(red, connectivity=8)
+    matches = [i for i, (x,y,w,h,_) in enumerate(stats[1:], 1)
+               if (x,y,x+w,y+h) == tuple(anchor)]
+    if len(matches) != 1:
+        return {}
+    i = matches[0]
+    mask = labels == i
+    rails = np.zeros_like(mask)
+    rail_rows = [anchor[1]+1, anchor[3]-2]
+    rails[rail_rows] = mask[rail_rows]
+    ys, xs = np.nonzero(rails)
+    return dict(anchor_component_area=int(stats[i,4]), anchor_centroid=centroids[i].tolist(),
+                anchor_width=anchor[2]-anchor[0], anchor_height=anchor[3]-anchor[1],
+                track_top_edge_y=rail_rows[0], track_bottom_edge_y=rail_rows[1],
+                anchor_rail_centroid=[float(xs.mean()), float(ys.mean())] if len(xs) else None,
+                _mask_bbox=tuple(anchor), _anchor_mask=np.packbits(mask).tobytes(),
+                _anchor_rails=np.packbits(rails).tobytes())
+
+
+def mask_comparison(a, b):
+    if not a or not b or len(a) != len(b):
+        return None
+    a, b = np.unpackbits(np.frombuffer(a,np.uint8)), np.unpackbits(np.frombuffer(b,np.uint8))
+    union = int(np.count_nonzero(a | b))
+    return dict(iou=float(np.count_nonzero(a & b)/union) if union else 0.0,
+                changed_pixels=int(np.count_nonzero(a != b)))
+
+
+def public_row(row):
+    return {k:v for k,v in row.items() if not k.startswith('_')}
+
+
 def measure_sample(crop, frame_id, timestamp, *, canonical_band_height=32, method="baseline"):
     if crop is None or not crop.size:
         raise ValueError("Original ROI could not be decoded")
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     geometry = measure_bar_local_geometry(
-        cv2.cvtColor(crop, cv2.COLOR_BGR2HSV),
+        hsv,
         canonical_band_height=canonical_band_height)
     start = perf_counter()
     edge = discover_right(crop, geometry, structural=method == "structural")
@@ -169,7 +213,9 @@ def measure_sample(crop, frame_id, timestamp, *, canonical_band_height=32, metho
                bar_local_y_top=geometry.anchor[1] if geometry.anchor else None,
                bar_local_y_bottom=geometry.anchor[3] if geometry.anchor else None,
                band_bottom_exclusive=True, divider_x=geometry.divider_x,
+               divider_confidence=geometry.divider_confidence,
                fill_endpoint_x=geometry.fill_endpoint_x, **edge)
+    row.update(anchor_pixels(hsv, geometry.anchor))
     right = edge["fillable_right_x"]
     row["distance_to_right"] = (
         right-geometry.fill_endpoint_x
@@ -188,10 +234,77 @@ def summarize(rows, episode):
                                  stddev=float(np.std(values))) if values else None)
 
 
+def geometry_audit(row, crop, previous, previous_crop):
+    """Adjacent raw-pixel diagnostics, never input to right-edge discovery.
+
+    Translation is integer SSD matching of a divider-centred patch over +/-2
+    pixels, not a whole-image/background registration or a subpixel claim.
+    Missing current right remains unknown, even when a target is retained.
+    """
+    result = dict(anchor_bbox_iou=None, anchor_mask_overlap=None, rail_mask_overlap=None,
+                  centroid_delta=None, divider_patch_translation_px=None,
+                  divider_patch_translation_unique=None, deltas={})
+    a, b = row.get('anchor_bbox'), previous.get('anchor_bbox') if previous else None
+    if not a or not b or previous_crop.shape != crop.shape:
+        return result
+    intersection = max(0,min(a[2],b[2])-max(a[0],b[0]))*max(0,min(a[3],b[3])-max(a[1],b[1]))
+    result['anchor_bbox_iou'] = intersection / (
+        (a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-intersection)
+    result['anchor_mask_overlap'] = mask_comparison(row.get('_anchor_mask'), previous.get('_anchor_mask'))
+    result['rail_mask_overlap'] = mask_comparison(row.get('_anchor_rails'), previous.get('_anchor_rails'))
+    if row.get('anchor_centroid') and previous.get('anchor_centroid'):
+        result['centroid_delta'] = (np.array(row['anchor_centroid'])-previous['anchor_centroid']).tolist()
+    for key in ('anchor_width','anchor_height','divider_x','fillable_right_x',
+                'bar_local_y_top','bar_local_y_bottom','track_top_edge_y','track_bottom_edge_y'):
+        result['deltas'][key] = (row[key]-previous[key]
+                                if row.get(key) is not None and previous.get(key) is not None else None)
+    result['deltas'].update(anchor_left=a[0]-b[0], anchor_top=a[1]-b[1])
+    result['divider_screen_delta'] = result['deltas']['divider_x']
+    result['right_screen_delta'] = result['deltas']['fillable_right_x']
+    d = row.get('divider_x')
+    if d is not None and a[1] >= 2 and a[3]+2 <= crop.shape[0] and 6 <= d < crop.shape[1]-6:
+        x = int(d)
+        template = crop[a[1]:a[3],x-4:x+5].astype(np.float32)
+        search = previous_crop[a[1]-2:a[3]+2,x-6:x+7].astype(np.float32)
+        scores = cv2.matchTemplate(search,template,cv2.TM_SQDIFF)
+        y, x = np.unravel_index(scores.argmin(),scores.shape)
+        result['divider_patch_translation_px'] = [2-int(x),2-int(y)]
+        result['divider_patch_translation_unique'] = int(np.count_nonzero(scores == scores.min())) == 1
+        result['divider_patch_ssd'] = float(scores.min())
+    return result
+
+
+def jitter_distribution(rows):
+    deltas = {}
+    changed = []
+    for row in rows:
+        audit = row.get('geometry_audit', {})
+        for key, value in audit.get('deltas', {}).items():
+            if value is not None:
+                deltas.setdefault(key, []).append(value)
+        if audit.get('deltas', {}).get('anchor_left'):
+            changed.append(dict(episode=row.get('episode'), frame=row['frame_id'],
+                                delta=audit['deltas']['anchor_left']))
+    return dict(kind='jitter_distribution', scope='adjacent_canonical_frames_no_cross_episode_pairs',
+                changed_anchor_frames=changed,
+                signed_deltas={k:dict(count=len(v), **dict(zip(
+                    ('min','median','p95','max'),np.percentile(v,[0,50,95,100]).tolist())))
+                    for k,v in deltas.items()})
+
+
 class EpisodeRightTarget:
     """Bounded OFFLINE two-capture confirmation; never a runtime action latch.
 
-    Tolerance is zero pixels: inspected accepted detections have zero spread.
+    Divider, band, ROI and credible right remain exact. Sep05's 769 adjacent
+    canonical pairs have left/width delta <=1, all other geometry deltas zero.
+    Six left changes occur in episodes 34/35. Fixed rail masks differ by at most
+    two pixels (IoU >=.9959677), including versus the first anchor, while animated
+    interior masks can differ by 28.06% between captures. Therefore accept ONLY
+    that left-edge quantization with fixed-reference rail XOR <=2 and full
+    adjacent mask IoU >=.71 (observed minimum .719413 rounded DOWN to 2 decimals).
+    These are explicit OFFLINE evidence-derived bounds, not Production tuning.
+    Fixed reference bbox/rails never drift. Full centroid is telemetry only:
+    hatch animation moves it by 28.76px without moving the frame.
     A credible conflict or loss/change of geometry invalidates this episode
     permanently. Missing right-edge evidence alone may bridge a gap, provided
     current anchor/divider/ROI/resolution still match. Only a NEW physical
@@ -212,6 +325,26 @@ class EpisodeRightTarget:
         self.invalidated = False
         self.last_frame = None
         self.last_timestamp = None
+        self.reference_rails = None
+        self.previous_mask = None
+
+    def compatible(self, key, row):
+        if self.key is None:
+            return True
+        # All geometry except the red component's left edge is exact.
+        if key[:3] != self.key[:3] or key[4:] != self.key[4:]:
+            return False
+        anchor, reference = key[3], self.key[3]
+        if row.get('_mask_bbox') is not None and tuple(row['_mask_bbox']) != anchor:
+            return False
+        if anchor[1:] != reference[1:] or abs(anchor[0]-reference[0]) > 1:
+            return False
+        rails = mask_comparison(self.reference_rails, row.get('_anchor_rails'))
+        full = mask_comparison(self.previous_mask, row.get('_anchor_mask'))
+        # No pixel support => cannot excuse even a one-pixel bbox change.
+        if rails is None or full is None:
+            return key == self.key
+        return rails['changed_pixels'] <= 2 and rails['iou'] >= .995 and full['iou'] >= .71
 
     def update(self, episode, row):
         if episode != self.episode:
@@ -235,8 +368,11 @@ class EpisodeRightTarget:
                    row["bar_local_y_top"], row["bar_local_y_bottom"])
             if self.key is None or (self.candidate is None and not self.invalidated):
                 self.key = key
-            elif key != self.key and not self.invalidated:
+                self.reference_rails = row.get('_anchor_rails')
+            elif not self.compatible(key, row) and not self.invalidated:
                 event = "geometry_changed"
+        if independent:
+            self.previous_mask = row.get('_anchor_mask')
         right, confidence = row.get("fillable_right_x"), row.get("bar_right_confidence", 0)
         credible = (right is not None and math.isfinite(right) and divider is not None
                     and divider < right < row["roi_dimensions"][0]-1
@@ -339,7 +475,7 @@ def run(archive_path, episodes, references=(), *, method="baseline", summary_onl
                                    canonical_band_height=max(16, round(height*32/1440)), method=method)
         row["reference_path"] = str(path)
         row["roi_origin"] = [left, top]
-        print(json.dumps(row))
+        print(json.dumps(public_row(row)))
         timings.append(cost)
     if not timings:
         raise ValueError("No matching raw evidence samples")
@@ -353,6 +489,7 @@ def run(archive_path, episodes, references=(), *, method="baseline", summary_onl
 def run_archive(archive_path, episodes, *, method="baseline", summary_only=False):
     timings = []
     summaries = []
+    audit_rows = []
     with zipfile.ZipFile(archive_path) as archive:
         session_names = [n for n in archive.namelist() if n.endswith('/session_summary.json')]
         capture = (json.loads(archive.read(session_names[0])).get("capture_diagnostics", {})
@@ -368,6 +505,7 @@ def run_archive(archive_path, episodes, *, method="baseline", summary_only=False
             manifest = json.loads(archive.read(name))
             rows = []
             target = EpisodeRightTarget()
+            previous = previous_crop = None
             for sample in manifest['samples']:
                 raw = archive.read((Path(name).parent/sample['raw_image_filename']).as_posix())
                 crop = cv2.imdecode(np.frombuffer(raw,np.uint8),cv2.IMREAD_COLOR)
@@ -375,14 +513,18 @@ def run_archive(archive_path, episodes, *, method="baseline", summary_only=False
                 row['episode'] = episode
                 row['method'] = method
                 row['resolution'], row['roi_bounds'] = resolution, roi_bounds
+                row['geometry_audit'] = geometry_audit(row, crop, previous, previous_crop)
                 row['episode_target'] = target.update(episode, row)
+                previous, previous_crop = row, crop
                 rows.append(row)
                 timings.append(cost)
                 if not summary_only:
-                    print(json.dumps(row))
+                    print(json.dumps(public_row(row)))
             summary = episode_audit(rows, episode, manifest)
             summaries.append(summary)
+            audit_rows.extend(public_row(row) for row in rows)
             print(json.dumps(summary))
+    print(json.dumps(jitter_distribution(audit_rows)))
     print(json.dumps(dict(kind="availability_summary", method=method, episodes=len(summaries),
                           confirmed_before_near_full=sum(s["confirmed_before_near_full"] is True
                                                          for s in summaries),

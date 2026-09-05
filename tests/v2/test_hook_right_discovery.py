@@ -10,7 +10,8 @@ import pytest
 
 from src.hook_bar_geometry import measure_bar_local_geometry
 from tools.discover_hook_right import (
-    discover_right, measure_sample, summarize, EpisodeRightTarget, episode_audit, run_archive)
+    discover_right, measure_sample, summarize, EpisodeRightTarget, episode_audit, run_archive,
+    geometry_audit, public_row)
 
 
 def raster(endpoint=400, border=504, shift=0):
@@ -295,9 +296,110 @@ def test_all_original_episodes_structural_audit_and_safe_geometry_invalidation(c
     assert sum(r["accepted"] for r in episodes) == 715
     assert all(r["unique_fillable_right_x"] == [503] for r in episodes)
     assert all(r["right_stats"]["range"] == 0 for r in episodes)
-    assert output[-1]["confirmed_before_near_full"] == 9
+    assert output[-1]["confirmed_before_near_full"] == 10
+    assert output[-1]["confirmed_before_first_fill"] == 10
+    assert output[-1]["conflicting_episodes"] == 0
     by_name = {r["episode"]:r for r in episodes}
-    assert by_name["episode_35"]["invalidation_events"][0]["frame"] == 9688
-    assert not by_name["episode_35"]["confirmed_before_near_full"]
+    assert by_name["episode_35"]["invalidation_events"] == []
+    assert by_name["episode_35"]["second_agreeing_frame"] == 9686
+    assert by_name["episode_35"]["first_near_full_frame"] == 9705
+    assert by_name["episode_35"]["confirmed_before_near_full"]
     assert by_name["episode_34"]["confirmed_before_near_full"]
     assert by_name["episode_36"]["confirmed_before_near_full"]
+    distribution = next(r for r in output if r['kind'] == 'jitter_distribution')
+    assert {r['episode'] for r in distribution['changed_anchor_frames']} == {'episode_34','episode_35'}
+    assert len(distribution['changed_anchor_frames']) == 6
+    assert distribution['signed_deltas']['anchor_left'] == dict(count=769,min=-1,median=0,p95=0,max=1)
+    assert distribution['signed_deltas']['divider_x']['max'] == 0
+
+
+def confirmed_target():
+    target = EpisodeRightTarget()
+    target.update('one', observation())
+    assert target.update('one', observation(2))['status'] == 'confirmed'
+    return target
+
+
+def native_observation(image, frame):
+    row = observation(frame)
+    row.update(measure_sample(image,frame,frame*.025,method='structural')[0])
+    return row
+
+
+def test_one_pixel_quantization_with_pixel_support_keeps_fixed_reference_target():
+    target = confirmed_target()
+    image = raster()
+    image[16:41,109] = 0
+    row = native_observation(image,3)
+    assert row['anchor_bbox'] == (110,16,357,41)
+    for f in range(3,20):
+        current = {**row,'frame_id':f,'timestamp':f*.025,'fillable_right_x':None}
+        assert target.update('one',current)['confirmed_x'] == 503
+    assert target.key[3][0] == 109  # No chained 1px drift.
+    image[16:41,110] = 0
+    assert target.update('one',native_observation(image,20))['status'] == 'invalidated'
+
+
+@pytest.mark.parametrize('fault',['translation','divider','height','low_mask','low_rails','missing_pixels'])
+def test_semantic_conflicts_still_invalidate(fault):
+    target = confirmed_target()
+    image = raster()
+    if fault == 'translation':
+        image = raster(border=505,shift=1)
+    elif fault == 'divider':
+        image[16:41,357] = (0,0,255)
+        image[16:41,358] = 255
+    elif fault == 'height':
+        image[41,109:357] = (0,0,255)
+    elif fault in ('low_mask','low_rails'):
+        # Genuine thin connected perimeter retains a bbox only 1px narrower,
+        # but cannot masquerade as high-overlap anchor support.
+        image[16:41,109:357] = 0
+        cv2.rectangle(image,(110,16),(356,40),(0,0,255),1)
+        if fault == 'low_mask':
+            image[[17,39],110:357] = (0,0,255)
+    row = native_observation(image,3)
+    if fault == 'missing_pixels':
+        row = {**public_row(row),'anchor_bbox':(110,16,357,41)}
+    assert target.update('one',row)['status'] == 'invalidated'
+    assert target.update('one',observation(4))['confirmed_x'] is None
+
+
+def test_new_episode_does_not_inherit_jitter_permission_or_confirmation():
+    target = confirmed_target()
+    image = raster(border=505,shift=1)
+    assert target.update('two',native_observation(image,1))['status'] == 'unconfirmed'
+    assert target.update('two',native_observation(image,2))['confirmed_x'] == 504
+
+
+def test_raw_pixel_audit_reports_translation_without_mutation_or_mask_serialization():
+    image = raster()
+    moved = np.zeros_like(image)
+    moved[:,1:] = image[:,:-1]
+    before = moved.copy()
+    row = native_observation(moved,2)
+    audit = geometry_audit(row,moved,native_observation(image,1),image)
+    assert audit['divider_patch_translation_px'] == [1,0]
+    assert audit['divider_patch_translation_unique']
+    assert audit['divider_screen_delta'] == audit['right_screen_delta'] == 1
+    assert np.array_equal(moved,before)
+    assert '_anchor_mask' not in json.loads(json.dumps(public_row(row)))
+
+
+def test_real_9688_mask_boundary_and_9705_target(capsys):
+    archive = Path(__file__).resolve().parents[2] / 'reports/fishing_v2/production_v3/session_20260905_032141.zip'
+    if not archive.exists():
+        pytest.skip('Original local anomaly archive is not distributed in Git')
+    run_archive(archive,[35],method='structural')
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    frames = {r['frame_id']:r for r in rows if r['kind'] == 'frame'}
+    a, b = frames[9687], frames[9688]
+    assert b['anchor_bbox'] == [110,16,357,41]
+    assert a['anchor_component_area'] == 5284 and b['anchor_component_area'] == 5263
+    assert b['geometry_audit']['anchor_mask_overlap']['iou'] == pytest.approx(.9956480605487228)
+    assert b['geometry_audit']['rail_mask_overlap']['changed_pixels'] == 0
+    assert b['geometry_audit']['divider_patch_translation_px'] == [0,0]
+    assert b['fillable_right_x'] is None  # Unknown is NOT an observed unchanged right.
+    assert b['episode_target']['confirmed_x'] == frames[9705]['episode_target']['confirmed_x'] == 503
+    assert frames[9705]['episode_target']['confirmation_frame'] == 9686
+    assert frames[9684]['anchor_bbox'] is None  # No fabricated preappearance geometry.
