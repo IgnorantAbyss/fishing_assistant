@@ -801,6 +801,7 @@ class LiveDetectOnlyRuntime:
                 enabled=self.live_config.press_anomaly_evidence,
                 buffer_frames=self.live_config.press_anomaly_buffer_frames,
                 max_episodes=self.live_config.press_anomaly_max_episodes,
+                frames_per_anomaly=self.live_config.press_anomaly_buffer_frames,
             ),
         )
         self._result_pending_timeout_evidence = (
@@ -4141,6 +4142,12 @@ class LiveDetectOnlyRuntime:
                         timestamp=elapsed,
                         roi_pixels=press_roi_pixels,
                         observation=press,
+                        runtime_state=self.fsm.state.value,
+                        authoritative_progress=self._press_authoritative_progress(
+                            self._press_shadow.episode_index),
+                        frozen_sequence=tuple(self._press_shadow.frozen_sequence),
+                        qualified_detected=bool(qualified_press_for_shadow
+                                                and qualified_press_for_shadow.detected),
                         certificate=(
                             press_completeness
                             if isinstance(press_completeness, Mapping)
@@ -4268,6 +4275,12 @@ class LiveDetectOnlyRuntime:
                         self._press_authoritative_progress(
                             press_episode_index
                         )
+                    )
+                    self._press_anomaly_evidence.service_pending(
+                        episode_index=press_episode_index, timestamp=elapsed,
+                        runtime_state=self.fsm.state.value,
+                        certificate=press_completeness,
+                        authoritative_progress=press_authoritative_progress,
                     )
                     if (
                         panel_disappeared
@@ -6928,6 +6941,14 @@ class LiveDetectOnlyRuntime:
             })
         finally:
             elapsed_total = max(0.0, self.clock() - started)
+            # Flush eligible pre-roll before shadow/lifecycle shutdown clears it.
+            self._press_anomaly_evidence.service_pending(
+                episode_index=self._press_shadow.episode_index,
+                timestamp=elapsed_total, runtime_state=self.fsm.state.value,
+                certificate=None, shutdown=True,
+                authoritative_progress=self._press_authoritative_progress(
+                    self._press_shadow.episode_index),
+            )
             try:
                 self._passive_hook_right.finish('session_shutdown')
             except Exception:
