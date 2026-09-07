@@ -146,19 +146,12 @@ def test_cli_and_launcher_define_bounded_production_defaults() -> None:
     assert defaults[
         defaults.index("--idle-cast-liveness-timeout-seconds") + 1
     ] == "3.0"
-    assert defaults[
-        defaults.index("--press-initial-delay-min-ms") + 1
-    ] == "150"
-    assert defaults[
-        defaults.index("--press-initial-delay-max-ms") + 1
-    ] == "250"
-    assert defaults[
-        defaults.index("--press-inter-key-gap-min-ms") + 1
-    ] == "90"
-    assert defaults[
-        defaults.index("--press-inter-key-gap-max-ms") + 1
-    ] == "170"
-    assert defaults[defaults.index("--press-key-hold-ms") + 1] == "40"
+    # Wrapper must not shadow the authoritative profile with duplicated pacing.
+    assert not any(arg.startswith("--press-") for arg in defaults)
+    assert (args.press_initial_delay_min_ms, args.press_initial_delay_max_ms) == (150, 250)
+    assert (args.press_inter_key_gap_min_ms, args.press_inter_key_gap_max_ms) == (90, 170)
+    assert args.press_key_hold_ms == 40
+    assert args.press_detector_mode == "background-subtraction-live"
     assert defaults[defaults.index("--duration-seconds") + 1] == "0"
     assert defaults[defaults.index("--max-completed-cycles") + 1] == "0"
     assert "--enable-live-press-sequence" in defaults

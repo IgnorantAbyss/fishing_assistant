@@ -589,13 +589,15 @@ def test_v3_panel_disappearance_resets_episode_and_allows_new_sequence() -> None
     assert observation.evidence["press_episode_id"] != first_episode
 
 
-def test_cli_defaults_to_legacy_and_shadow_is_explicit() -> None:
+def test_cli_production_defaults_to_v3_and_shadow_is_explicit() -> None:
     default = parse_args(["--window-title", "test"])
     shadow = parse_args([
         "--window-title", "test",
         "--press-detector-mode", "background-subtraction-shadow",
     ])
-    assert default.press_detector_mode == "legacy"
+    assert default.press_detector_mode == "background-subtraction-live"
+    diagnostic = parse_args(["--window-title", "test", "--runtime-profile", "diagnostic"])
+    assert diagnostic.press_detector_mode == "legacy"
     assert shadow.press_detector_mode == "background-subtraction-shadow"
 
 

@@ -24,11 +24,6 @@ PRODUCTION_DEFAULTS = (
     "--idle-recovery-cast-cooldown-seconds", "0.5",
     "--idle-cast-retry-min-interval-seconds", "3.0",
     "--idle-cast-liveness-timeout-seconds", "3.0",
-    "--press-initial-delay-min-ms", "150",
-    "--press-initial-delay-max-ms", "250",
-    "--press-inter-key-gap-min-ms", "90",
-    "--press-inter-key-gap-max-ms", "170",
-    "--press-key-hold-ms", "40",
     "--no-overlay",
     "--duration-seconds", "0",
     "--max-completed-cycles", "0",
@@ -42,7 +37,8 @@ PRODUCTION_DEFAULTS = (
 
 
 def main(argv: list[str] | None = None) -> int:
-    return run_live_main([*PRODUCTION_DEFAULTS, *(argv or sys.argv[1:])])
+    # PRESS defaults are resolved by the shared runtime profile, not this wrapper.
+    return run_live_main([*PRODUCTION_DEFAULTS, *(sys.argv[1:] if argv is None else argv)])
 
 
 if __name__ == "__main__":

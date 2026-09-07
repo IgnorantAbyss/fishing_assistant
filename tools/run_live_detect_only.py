@@ -187,31 +187,31 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--press-initial-delay-min-ms",
         type=int,
-        default=300,
-        help="Minimum non-blocking delay after PRESS freeze (default: 300)",
+        default=None,
+        help="Minimum non-blocking PRESS delay (profile default: production 150, diagnostic 300)",
     )
     parser.add_argument(
         "--press-initial-delay-max-ms",
         type=int,
-        default=500,
-        help="Maximum non-blocking delay after PRESS freeze (default: 500)",
+        default=None,
+        help="Maximum non-blocking PRESS delay (profile default: production 250, diagnostic 500)",
     )
     parser.add_argument(
         "--press-inter-key-gap-min-ms",
         type=int,
-        default=90,
+        default=None,
         help="Minimum key-up to next key-down gap (default: 90)",
     )
     parser.add_argument(
         "--press-inter-key-gap-max-ms",
         type=int,
-        default=170,
+        default=None,
         help="Maximum key-up to next key-down gap (default: 170)",
     )
     parser.add_argument(
         "--press-key-hold-ms",
         type=int,
-        default=40,
+        default=None,
         help="Key-down hold duration for each PRESS key (default: 40)",
     )
     parser.add_argument(
@@ -233,10 +233,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--press-detector-mode",
         choices=PRESS_DETECTOR_MODES,
-        default="legacy",
+        default=None,
         help=(
             "PRESS recognition mode; shadow compares V3 without changing "
-            "actions, and live is explicit opt-in (default: legacy)"
+            "actions (profile default: production background-subtraction-live, "
+            "diagnostic legacy); actual emission still requires explicit opt-in"
         ),
     )
     parser.add_argument(
@@ -268,6 +269,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "fishing_v2.yaml")
     args = parser.parse_args(argv)
+    press_defaults = LiveDetectOnlyConfig.for_profile(args.runtime_profile)
+    for name in (
+        "press_initial_delay_min_ms", "press_initial_delay_max_ms",
+        "press_inter_key_gap_min_ms", "press_inter_key_gap_max_ms",
+        "press_key_hold_ms", "press_detector_mode",
+    ):
+        if getattr(args, name) is None:
+            setattr(args, name, getattr(press_defaults, name))
     if args.window_title_prefix and not args.process_name:
         parser.error("--window-title-prefix requires --process-name")
     if (

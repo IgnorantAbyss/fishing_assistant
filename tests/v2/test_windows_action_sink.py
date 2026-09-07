@@ -173,8 +173,8 @@ def test_cli_defaults_to_detect_only_with_no_sink() -> None:
     assert args.action_allowlist == ""
     assert args.panic_key == "F12"
     assert args.enable_live_press_sequence is False
-    assert args.press_initial_delay_min_ms == 300
-    assert args.press_initial_delay_max_ms == 500
+    assert args.press_initial_delay_min_ms == 150
+    assert args.press_initial_delay_max_ms == 250
     assert args.press_inter_key_gap_min_ms == 90
     assert args.press_inter_key_gap_max_ms == 170
 

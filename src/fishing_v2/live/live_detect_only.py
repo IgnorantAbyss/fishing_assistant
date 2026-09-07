@@ -242,6 +242,23 @@ class LiveDetectOnlyConfig:
     # public CLI explicitly defaults to Production.
     runtime_profile: str = "diagnostic"
 
+    @classmethod
+    def for_profile(cls, runtime_profile: str) -> "LiveDetectOnlyConfig":
+        """Authoritative entrypoint defaults, not action authorization.
+
+        Direct diagnostic callers keep their historical defaults. Both public
+        entrypoints resolve Production PRESS here before explicit CLI overrides.
+        Recognition/temporal thresholds still belong to their existing owners.
+        """
+        if runtime_profile == "production":
+            return cls(
+                runtime_profile=runtime_profile,
+                press_initial_delay_min_ms=150,
+                press_initial_delay_max_ms=250,
+                press_detector_mode="background-subtraction-live",
+            )
+        return cls(runtime_profile=runtime_profile)
+
     def __post_init__(self) -> None:
         if self.duration_seconds < 0:
             raise ValueError("duration_seconds must be non-negative")
