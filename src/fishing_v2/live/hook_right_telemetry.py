@@ -1,5 +1,5 @@
 """Bounded passive right target, serviced AFTER action dispatch. No I/O."""
-from collections import deque
+from collections import Counter, deque
 from time import perf_counter
 
 from src.hook_right_geometry import EpisodeRightTarget
@@ -15,10 +15,18 @@ class HookRightTelemetry:
         self.total_segments = 0
         self.failure_count = 0
         self.latest = {}
+        self.completed_states = Counter()
+        self.invalidation_reasons = Counter()
+        self.invalidation_confirmed = Counter()
+        self.representatives = {}
+        self.near_full_observed = 0
+        self.near_full_missing = Counter()
+        self.near_full_invalidated_frames = 0
 
     def finish(self, reason):
         if self.active is not None:
             self.active['terminal_reason'] = reason
+            self.completed_states[self.active.get('target_state','unconfirmed')] += 1
             self.segments.append(dict(self.active))
         self.active = None
         self.target = EpisodeRightTarget()
@@ -55,6 +63,10 @@ class HookRightTelemetry:
                                confirmation_timestamp=None,confirmation_frame=None,
                                confirmation_latency_from_START_HOOK=None,
                                confirmed_fillable_right_x=None,invalidation_reason=None,
+                               first_invalidation_reason=None,first_invalidation_frame=None,
+                               first_invalidation_timestamp=None,first_invalidation_deltas=None,
+                               confirmed_before_invalidation=None,confirmed_target_x=None,
+                               current_target_x=None,confirmation_count_before_invalidation=None,
                                first_near_full_frame=None,confirmed_before_near_full=None)
         result = {}
         if observation is not None:
@@ -86,12 +98,41 @@ class HookRightTelemetry:
                           update_cost_ms=update_ms,hook_episode_id=episode_id,
                           segment_index=self.total_segments)
             self.active.update(result)
+            if self.target.invalidated and self.active['first_invalidation_reason'] is None:
+                detail = self.target.first_invalidation
+                reason = self.target.invalidation_reason
+                self.active.update(
+                    first_invalidation_reason=reason,
+                    first_invalidation_frame=observation.frame_index,
+                    first_invalidation_timestamp=observation.timestamp,
+                    first_invalidation_deltas=detail,
+                    confirmed_before_invalidation=(detail['confirmed_before_invalidation'] if detail else None),
+                    confirmed_target_x=(detail['confirmed_target_x'] if detail else None),
+                    current_target_x=row.get('fillable_right_x'),
+                    confirmation_count_before_invalidation=(detail['confirmation_count_before_invalidation'] if detail else None))
+                self.invalidation_reasons[reason] += 1
+                self.invalidation_confirmed[
+                    'confirmed' if detail and detail['confirmed_before_invalidation'] else
+                    'unconfirmed' if detail else 'unknown'] += 1
+                examples = self.representatives.setdefault(reason, [])
+                if len(examples) < 3:
+                    examples.append(dict(segment_index=self.total_segments,
+                                         hook_episode_id=episode_id, details=detail))
             right = snapshot['confirmed_x'] if snapshot['confirmed_x'] is not None else row['fillable_right_x']
             fill, divider = row.get('fill_endpoint_x'), row.get('divider_x')
+            # Missing fields are overlapping per-observation counters. Being
+            # invalidated is context, NOT a prerequisite: current right may work.
+            for value, reason in ((fill,'no_fill_endpoint'), (divider,'no_divider'),
+                                  (right,'no_confirmed_or_current_right')):
+                if value is None:
+                    self.near_full_missing[reason] += 1
+            if self.target.invalidated:
+                self.near_full_invalidated_frames += 1
             if (right is not None and fill is not None and divider is not None
                     and 0 <= right-fill <= .1*(right-divider)
                     and self.active['first_near_full_frame'] is None):
                 self.active['first_near_full_frame'] = observation.frame_index
+                self.near_full_observed += 1
                 self.active['confirmed_before_near_full'] = bool(
                     x is not None and snapshot['confirmation_timestamp'] < observation.timestamp)
             # Public scalar telemetry only; packed masks remain private RAM data.
@@ -116,9 +157,22 @@ class HookRightTelemetry:
             for key,column in [('measurement',values[:,0]),('confirmation',values[:,1]),
                                ('combined',values.sum(axis=1))]:
                 timings[key+'_ms'] = dict(zip(('p50','p95','max'),np.percentile(column,[50,95,100]).tolist()))
+        states = self.completed_states.copy()
+        if self.active is not None:
+            states[self.active.get('target_state','unconfirmed')] += 1
         return dict(total_segments=self.total_segments,retained_segment_cap=self.segments.maxlen,
                     dropped_segments=max(0,self.total_segments-len(self.segments)-(self.active is not None)),
                     segments=list(self.segments)+([dict(self.active)] if self.active else []),
                     failure_count=self.failure_count,cost_sample_count=len(self.costs),
                     cost_sample_cap=self.costs.maxlen,costs=timings,
+                    hook_right_final_state_counts={name:states[name] for name in ('confirmed','invalidated','unconfirmed')},
+                    hook_right_invalidation_reason_counts=dict(self.invalidation_reasons),
+                    hook_right_invalidation_confirmed_before_counts=dict(self.invalidation_confirmed),
+                    hook_right_invalidation_representatives=self.representatives,
+                    hook_right_representatives_per_reason_cap=3,
+                    hook_right_near_full_observed_count=self.near_full_observed,
+                    hook_right_near_full_missing_reason_counts=dict(self.near_full_missing),
+                    hook_right_near_full_target_invalidated_frame_count=self.near_full_invalidated_frames,
+                    aggregate_scope='session_lifetime_segments_including_active',
+                    near_full_missing_count_unit='overlapping_observation_counts_not_episodes',
                     near_full_definition='last_10_percent_of_divider_to_right_span_telemetry_only')

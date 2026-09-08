@@ -209,6 +209,7 @@ class EpisodeRightTarget:
         self.previous_mask = None
         self.observation_count = 0
         self.invalidation_reason = None
+        self.first_invalidation = None
 
     def compatible(self, key, row):
         if self.key is None:
@@ -228,11 +229,99 @@ class EpisodeRightTarget:
             return key == self.key
         return rails['changed_pixels'] <= 2 and rails['iou'] >= .995 and full['iou'] >= .71
 
+    def _record_invalidation(self, event, row, previous_mask):
+        # Diagnostics cannot interrupt the original invalidation/clearing path.
+        self.invalidation_reason = event
+        try:
+            self._invalidation_details(event, row, previous_mask)
+        except Exception:
+            self.invalidation_reason = ('unknown_geometry_change' if event == 'geometry_changed' else event)
+
+    def _invalidation_details(self, event, row, previous_mask):
+        """Diagnostic only, AFTER the unchanged boolean decision. Once/segment.
+
+        Coordinates are native ROI pixels. Rails compare to the fixed reference;
+        the full mask compares to the previous independent capture, NOT the
+        reference anchor. No new track locator or compatibility gate is added.
+        """
+        if self.first_invalidation is not None:
+            return
+        fields = ('roi_dimensions', 'resolution', 'roi_bounds', 'anchor_bbox',
+                  'divider_x', 'bar_local_y_top', 'bar_local_y_bottom')
+        reference = dict(zip(fields, self.key)) if self.key else dict.fromkeys(fields)
+        current = {name: row.get(name) for name in fields}
+        for name in fields[:4]:
+            if current[name] is not None:
+                current[name] = tuple(current[name])
+        reference['fillable_right_x'] = self.candidate
+        current['fillable_right_x'] = row.get('fillable_right_x')
+        current['bar_right_confidence'] = row.get('bar_right_confidence')
+        current['mask_bbox'] = row.get('_mask_bbox')
+        rails = mask_comparison(self.reference_rails, row.get('_anchor_rails'))
+        full = mask_comparison(previous_mask, row.get('_anchor_mask'))
+        a, b = reference['anchor_bbox'], current['anchor_bbox']
+        deltas = {}
+        for name in ('divider_x', 'bar_local_y_top', 'bar_local_y_bottom', 'fillable_right_x'):
+            x, y = reference[name], current[name]
+            deltas[name] = y-x if x is not None and y is not None else None
+        bbox_iou = None
+        if a and b:
+            for i, name in enumerate(('left', 'top', 'right', 'bottom')):
+                deltas['anchor_'+name] = b[i]-a[i]
+            intersection = max(0,min(a[2],b[2])-max(a[0],b[0])) * max(0,min(a[3],b[3])-max(a[1],b[1]))
+            union = (a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-intersection
+            bbox_iou = intersection/union if union else None
+        for values in (reference, current):
+            box = values['anchor_bbox']
+            values['anchor_dimensions'] = [box[2]-box[0],box[3]-box[1]] if box else None
+            right, divider = values['fillable_right_x'], values['divider_x']
+            values['divider_to_right_span'] = right-divider if right is not None and divider is not None else None
+        reason = event
+        if event == 'geometry_changed':
+            # Match the existing short-circuit order, including missing pixel
+            # support's exact-key fallback. Do not infer a physical root cause.
+            reason = 'unknown_geometry_change'
+            for field, label in (
+                ('roi_dimensions','roi_shape_changed'), ('resolution','resolution_changed'),
+                ('roi_bounds','roi_bounds_changed'), ('divider_x','divider_changed'),
+                ('bar_local_y_top','bar_band_changed'), ('bar_local_y_bottom','bar_band_changed')):
+                x, y = reference[field], current[field]
+                if field in fields[:3]:
+                    y = tuple(y or ())
+                if x != y:
+                    reason = label
+                    break
+            else:
+                if row.get('_mask_bbox') is not None and tuple(row['_mask_bbox']) != tuple(b):
+                    reason = 'anchor_bbox_ownership_changed'
+                elif a[1] != b[1]: reason = 'anchor_top_changed'
+                elif a[2] != b[2]: reason = 'anchor_right_changed'
+                elif a[3] != b[3]: reason = 'anchor_bottom_changed'
+                elif abs(a[0]-b[0]) > 1: reason = 'anchor_left_out_of_tolerance'
+                elif rails is None or full is None: reason = 'anchor_pixel_support_unavailable'
+                elif rails['changed_pixels'] > 2 or rails['iou'] < .995: reason = 'fixed_border_mask_changed'
+                elif full['iou'] < .71: reason = 'anchor_mask_iou_low'
+        self.invalidation_reason = reason
+        self.first_invalidation = dict(
+            reason=reason, legacy_event=event, episode_id=self.episode,
+            frame_index=row['frame_id'], timestamp=row['timestamp'],
+            coordinate_space='native_roi_pixels', reference=reference, current=current,
+            deltas=deltas, anchor_bbox_iou=bbox_iou,
+            anchor_mask_iou=full['iou'] if full else None,
+            anchor_mask_comparison_basis='previous_independent_capture',
+            fixed_border_iou=rails['iou'] if rails else None,
+            fixed_border_changed_pixels=rails['changed_pixels'] if rails else None,
+            confirmed_before_invalidation=self.confirmed is not None,
+            confirmed_target_x=self.confirmed, current_target_x=row.get('fillable_right_x'),
+            confirmation_count_before_invalidation=int(self.confirmation_frame is not None),
+            observation_count_before_invalidation=self.observation_count)
+
     def update(self, episode, row):
         if episode != self.episode:
             self._reset()
             self.episode = episode
         event = None
+        previous_mask = self.previous_mask
         frame, timestamp = row["frame_id"], row["timestamp"]
         independent = not (self.last_frame is not None and (
             frame <= self.last_frame or (
@@ -260,7 +349,7 @@ class EpisodeRightTarget:
                     and divider < right < row["roi_dimensions"][0]-1
                     and math.isfinite(confidence) and 0.8 <= confidence <= 1)
         if event:
-            self.invalidation_reason = event
+            self._record_invalidation(event, row, previous_mask)
             self.invalidated = True
             self.confirmed = self.candidate = None
             self.confidence = None
@@ -272,7 +361,7 @@ class EpisodeRightTarget:
             self.observation_count += 1
             if self.candidate is not None and right != self.candidate:
                 event = "conflicting_current_frame_geometry"
-                self.invalidation_reason = event
+                self._record_invalidation(event, row, previous_mask)
                 self.invalidated = True
                 self.confirmed = self.candidate = None
                 self.confidence = None
